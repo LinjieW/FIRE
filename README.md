@@ -12,11 +12,11 @@ history, workstream logs, prompts, or internal audit archive.
 
 The current public candidate is:
 
-`v3.0-prephase2-public-1`
+`v3.0-public-candidate-1`
 
-Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v3.0-prephase2-public-1):
+Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v3.0-public-candidate-1):
 
-`FIRE-Modeling-v3.0-prephase2-public-1-macos-universal2.zip`
+`FIRE-Modeling-v3.0-public-candidate-1-macos-universal2.zip`
 
 The bundle runs on Apple Silicon and Intel Macs. It includes its own Python,
 NumPy, and web UI; no separate Python installation or account is required.
@@ -26,7 +26,7 @@ NumPy, and web UI; no separate Python installation or account is required.
 After downloading, verify the SHA-256 recorded in the Release notes:
 
 ```bash
-shasum -a 256 FIRE-Modeling-v3.0-prephase2-public-1-macos-universal2.zip
+shasum -a 256 FIRE-Modeling-v3.0-public-candidate-1-macos-universal2.zip
 ```
 
 ### First launch
