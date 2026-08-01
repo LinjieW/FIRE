@@ -1,0 +1,41 @@
+[
+  {
+    "name": "absent_both",
+    "envelope": {
+      "format": "fire-localstorage-envelope-v1",
+      "keys": [
+        {"name": "fire_draft", "present": false, "value": null},
+        {"name": "fire_plans_v1", "present": false, "value": null}
+      ],
+      "key_sha256": {"fire_draft": null, "fire_plans_v1": null}
+    },
+    "canonical": "{\"format\":\"fire-localstorage-envelope-v1\",\"key_sha256\":{\"fire_draft\":null,\"fire_plans_v1\":null},\"keys\":[{\"name\":\"fire_draft\",\"present\":false,\"value\":null},{\"name\":\"fire_plans_v1\",\"present\":false,\"value\":null}]}",
+    "envelope_sha256": "5797e1b82878a52db6485e77eb98ea4988f682a499f53e7c394c433da25652fb"
+  },
+  {
+    "name": "empty_draft",
+    "envelope": {
+      "format": "fire-localstorage-envelope-v1",
+      "keys": [
+        {"name": "fire_draft", "present": true, "value": ""},
+        {"name": "fire_plans_v1", "present": false, "value": null}
+      ],
+      "key_sha256": {"fire_draft": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "fire_plans_v1": null}
+    },
+    "canonical": "{\"format\":\"fire-localstorage-envelope-v1\",\"key_sha256\":{\"fire_draft\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"fire_plans_v1\":null},\"keys\":[{\"name\":\"fire_draft\",\"present\":true,\"value\":\"\"},{\"name\":\"fire_plans_v1\",\"present\":false,\"value\":null}]}",
+    "envelope_sha256": "f38f4410f50c2ca09c70f8fccffe73b551b51d0284bde44dcf21b915a86dbf6e"
+  },
+  {
+    "name": "unicode_emoji_nul_and_json_text",
+    "envelope": {
+      "format": "fire-localstorage-envelope-v1",
+      "keys": [
+        {"name": "fire_draft", "present": true, "value": "雪😀\u0000"},
+        {"name": "fire_plans_v1", "present": true, "value": "null"}
+      ],
+      "key_sha256": {"fire_draft": "6e3c23309885822a0db91480efc6caa0f9ac69402b692dc4c29645ac8024e70d", "fire_plans_v1": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"}
+    },
+    "canonical": "{\"format\":\"fire-localstorage-envelope-v1\",\"key_sha256\":{\"fire_draft\":\"6e3c23309885822a0db91480efc6caa0f9ac69402b692dc4c29645ac8024e70d\",\"fire_plans_v1\":\"74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b\"},\"keys\":[{\"name\":\"fire_draft\",\"present\":true,\"value\":\"雪😀\\u0000\"},{\"name\":\"fire_plans_v1\",\"present\":true,\"value\":\"null\"}]}",
+    "envelope_sha256": "05cab4bde98b08d49a736b6eb757fcfb13062e045bd36adb8e23df94333493a7"
+  }
+]
