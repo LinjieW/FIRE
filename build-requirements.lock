@@ -1,0 +1,18 @@
+# Exact build-tool environment for the macOS universal2 release.
+# NumPy is intentionally installed separately from the locally merged
+# universal2 wheel pinned in build-app.sh.
+altgraph==0.17.5
+bottle==0.13.4
+macholib==1.16.4
+packaging==26.2
+proxy_tools==0.1.0
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+pyobjc-core==12.2.1
+pyobjc-framework-Cocoa==12.2.1
+pyobjc-framework-Quartz==12.2.1
+pyobjc-framework-Security==12.2.1
+pyobjc-framework-UniformTypeIdentifiers==12.2.1
+pyobjc-framework-WebKit==12.2.1
+pywebview==6.2.1
+typing_extensions==4.16.0
