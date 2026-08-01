@@ -1,0 +1,11 @@
+# build artifacts & bundles (rebuilt by build-app.sh; identity tracked by manifests)
+.build/
+FIRE Modeling.app/
+
+# worktrees for parallel workstreams (see WORKSTREAMS.md)
+.worktrees/
+
+# system / caches
+.DS_Store
+__pycache__/
+*.pyc
