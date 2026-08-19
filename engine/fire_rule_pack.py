@@ -18,6 +18,8 @@ import copy
 import datetime as _dt
 import hashlib
 import json
+import os
+import sys
 from typing import Any, Mapping
 
 
@@ -27,403 +29,55 @@ RULE_PACK_SCHEMA_VERSION = 1
 # JSON-safe source of truth.  Infinity is represented as ``None`` in the
 # canonical payload and converted only in the tax module's runtime convenience
 # table.  That keeps the content hash strict (allow_nan=False).
-_PACK_PAYLOAD: dict[str, Any] = {
-    "schema_version": RULE_PACK_SCHEMA_VERSION,
-    "delivery": "offline_embedded",
-    "runtime_network_refresh": False,
-    "assembled_on": "2026-08-01",
-    "external_refresh_status": "official_primary_sources_and_explicit_assumptions_verified_2026-08-01",
-    "maintenance_semantics": (
-        "maintenance_due_on is an app review deadline, not legal validity"
-    ),
-    # A machine-readable field/group ledger keeps a component-level receipt
-    # from implying that every value in that component came from one source.
-    # `source_class` is deliberately explicit for product and historical
-    # assumptions that are not current official law.
-    "field_source_ledger": [
-        {
-            "component_id": "us_federal_tax",
-            "field_group": "federal_brackets_deductions_ltcg",
-            "fields": [
-                "ordinary_single", "ordinary_mfj", "std_deduction_single",
-                "std_deduction_mfj", "ltcg_single", "ltcg_mfj",
-            ],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill",
-                "https://www.irs.gov/irb/2025-45_IRB",
-            ],
-            "note": "2026 federal thresholds; Rev. Proc. 2025-32 is published in IRB 2025-45.",
-        },
-        {
-            "component_id": "us_federal_tax",
-            "field_group": "social_security_provisional_income",
-            "fields": ["ss_provisional_single", "ss_provisional_mfj"],
-            "source_class": "official_primary",
-            "sources": ["https://www.irs.gov/publications/p915"],
-            "note": "Nominal statutory thresholds; not CPI-indexed by the runtime.",
-        },
-        {
-            "component_id": "us_federal_tax",
-            "field_group": "rmd_divisors",
-            "fields": ["rmd_divisors"],
-            "source_class": "official_primary",
-            "sources": ["https://www.irs.gov/publications/p590b"],
-            "note": "Uniform Lifetime Table values used by this optional model path.",
-        },
-        {
-            "component_id": "us_federal_tax",
-            "field_group": "early_withdrawal_penalty",
-            "fields": ["early_withdrawal_age", "early_withdrawal_rate"],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.irs.gov/taxtopics/tc558",
-                "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-tax-on-early-distributions",
-            ],
-            "note": "59 1/2 and 10% federal penalty reference; exceptions and state tax are outside this model.",
-        },
-        {
-            "component_id": "medicare_irmaa",
-            "field_group": "irmaa_single_mfj",
-            "fields": ["single", "mfj"],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
-            ],
-            "note": "Part B+D monthly amounts converted to annual per-person tiers; current-year MAGI is a two-year-lookback proxy.",
-        },
-        {
-            "component_id": "contribution_limits",
-            "field_group": "retirement_and_ira_limits",
-            "fields": ["pretax_401k_limit_y1", "roth_ira_limit_y1"],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-401k-and-profit-sharing-plan-contribution-limits",
-                "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-ira-contribution-limits",
-            ],
-            "note": "2026 nominal first-year reference limits; plan values remain user-editable.",
-        },
-        {
-            "component_id": "contribution_limits",
-            "field_group": "hsa_limit",
-            "fields": ["hsa_limit_y1"],
-            "source_class": "official_primary",
-            "sources": ["https://www.irs.gov/irb/2025-21_IRB"],
-            "note": "Rev. Proc. 2025-19; $4,400 is the self-only modeled cap and no family cap is implemented.",
-        },
-        {
-            "component_id": "contribution_limits",
-            "field_group": "limit_growth",
-            "fields": ["irs_limit_growth"],
-            "source_class": "product_assumption",
-            "sources": [],
-            "note": "3% annual growth is a FIRE modeling assumption, not an IRS forecast.",
-        },
-        {
-            "component_id": "aca_marketplace",
-            "field_group": "fpl_and_cliff",
-            "fields": ["fpl_single_y0", "fpl_additional_person_y0", "fpl_threshold"],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.healthcare.gov/glossary/federal-poverty-level-fpl/",
-                "https://www.cms.gov/newsroom/fact-sheets/plan-year-2026-marketplace-plans-prices-fact-sheet",
-            ],
-            "note": "2026 coverage uses the modeled 2025 FPL basis and a 400% cliff.",
-        },
-        {
-            "component_id": "aca_marketplace",
-            "field_group": "default_scenario",
-            "fields": ["default_scenario"],
-            "source_class": "product_assumption",
-            "sources": [],
-            "note": "B_pre_IRA is a product scenario label, not an official policy field.",
-        },
-        {
-            "component_id": "aca_marketplace",
-            "field_group": "aca_pre_ira_cap",
-            "fields": ["cap_pct_pre_ira"],
-            "source_class": "official_primary",
-            "sources": ["https://www.irs.gov/irb/2025-32_IRB"],
-            "note": "Rev. Proc. 2025-25 applicable-percentage reference; runtime retains a flat 9.96% proxy rather than the full piecewise schedule.",
-        },
-        {
-            "component_id": "aca_marketplace",
-            "field_group": "aca_ira_counterfactual",
-            "fields": ["cap_pct_ira"],
-            "source_class": "historical_counterfactual",
-            "sources": [],
-            "note": "8.5% is a 2021-2025 historical IRA-era counterfactual, not a current 2026 official value.",
-        },
-        {
-            "component_id": "ssa_benefit_rules",
-            "field_group": "ssa_claiming_rules",
-            "fields": [
-                "fra_age", "earliest_claim_age", "latest_credit_age",
-                "early_first_36_monthly_pct", "early_after_36_monthly_pct",
-                "delayed_credit_annual_pct",
-            ],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.ssa.gov/benefits/retirement/planner/1960.html",
-                "https://www.ssa.gov/benefits/retirement/planner/applying2.html",
-                "https://www.ssa.gov/benefits/retirement/planner/delayret.html",
-            ],
-            "note": "FRA 67 and the 70%/100%/124% illustration apply to the 1960-and-later cohort; older cohorts and survivor rules differ.",
-        },
-        {
-            "component_id": "ssa_statement_import",
-            "field_group": "ssa_statement_series",
-            "fields": [
-                "awi_through_year", "cola_through_year", "bend1_1979",
-                "bend2_1979", "awi_series", "cola_series",
-            ],
-            "source_class": "official_primary",
-            "sources": [
-                "https://www.ssa.gov/OACT/cola/AWI.html",
-                "https://www.ssa.gov/cola/factsheets/2026.html",
-                "https://www.ssa.gov/oact/COLA/bendpoints.html",
-            ],
-            "note": "AWI through 2024 and COLA determination through 2025, payable January 2026; future AWI is capped, not forecast.",
-        },
-    ],
-    "components": [
-        {
-            "id": "us_federal_tax",
-            "label": "US federal income tax",
-            "source_vintage": "2026",
-            "coverage_year": 2026,
-            "maintenance_due_on": "2026-12-31",
-            "provenance_status": "official_irs_rev_proc_2025_32",
-            "provenance": {
-                "sources": [
-                    "https://www.irs.gov/irb/2025-45_IRB",
-                    "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill",
-                ],
-                "verified_as_of": "2026-08-01",
-                "conversion": "Official 2026 nominal thresholds are stored as real-dollar reference values under Rev. Proc. 2025-32 (published in IRB 2025-45); Social Security provisional-income thresholds remain nominal statutory amounts; open RMD bound uses null in canonical JSON.",
-            },
-            "scope": (
-                "Ordinary brackets, standard deduction, LTCG stacking, "
-                "Social Security provisional-income thresholds, RMD divisors, "
-                "and early-withdrawal penalty."
-            ),
-            "values": {
-                "ordinary_single": [
-                    [0.0, 0.10], [12_400.0, 0.12], [50_400.0, 0.22],
-                    [105_700.0, 0.24], [201_775.0, 0.32],
-                    [256_225.0, 0.35], [640_600.0, 0.37],
-                ],
-                "ordinary_mfj": [
-                    [0.0, 0.10], [24_800.0, 0.12], [100_800.0, 0.22],
-                    [211_400.0, 0.24], [403_550.0, 0.32],
-                    [512_450.0, 0.35], [768_700.0, 0.37],
-                ],
-                "std_deduction_single": 16_100.0,
-                "std_deduction_mfj": 32_200.0,
-                "ltcg_single": [
-                    [0.0, 0.00], [49_450.0, 0.15], [545_500.0, 0.20],
-                ],
-                "ltcg_mfj": [
-                    [0.0, 0.00], [98_900.0, 0.15], [613_700.0, 0.20],
-                ],
-                "ss_provisional_single": [25_000.0, 34_000.0],
-                "ss_provisional_mfj": [32_000.0, 44_000.0],
-                "rmd_divisors": {
-                    "72": 27.4, "73": 26.5, "74": 25.5, "75": 24.6,
-                    "76": 23.7, "77": 22.9, "78": 22.0, "79": 21.1,
-                    "80": 20.2, "81": 19.4, "82": 18.5, "83": 17.7,
-                    "84": 16.8, "85": 16.0, "86": 15.2, "87": 14.4,
-                    "88": 13.7, "89": 12.9, "90": 12.2, "91": 11.5,
-                    "92": 10.8, "93": 10.1, "94": 9.5, "95": 8.9,
-                    "96": 8.4, "97": 7.8, "98": 7.3, "99": 6.8,
-                    "100": 6.4, "101": 6.0, "102": 5.6, "103": 5.2,
-                    "104": 4.9, "105": 4.6, "106": 4.3, "107": 4.1,
-                    "108": 3.9, "109": 3.7, "110": 3.5, "111": 3.4,
-                    "112": 3.3, "113": 3.1, "114": 3.0, "115": 2.9,
-                    "116": 2.8, "117": 2.7, "118": 2.5, "119": 2.3,
-                    "120": 2.0,
-                },
-                "early_withdrawal_age": 59.5,
-                "early_withdrawal_rate": 0.10,
-            },
-        },
-        {
-            "id": "medicare_irmaa",
-            "label": "Medicare IRMAA",
-            "source_vintage": "2026",
-            "coverage_year": 2026,
-            "maintenance_due_on": "2026-12-31",
-            "provenance_status": "official_cms_2026_irmaa",
-            "provenance": {
-                "sources": [
-                    "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
-                ],
-                "verified_as_of": "2026-08-01",
-                "conversion": "CMS monthly Part B and Part D IRMAA surcharges are summed and multiplied by 12 into annual per-person surcharge tiers. The published intermediate thresholds are strict lower bounds for the next tier (an exact threshold remains in the preceding tier); the final $500,000 single/$750,000 MFJ threshold is inclusive for the top tier. The two-year MAGI lookback remains outside this refresh.",
-            },
-            "scope": "Annual Part B and Part D surcharge tiers above the standard premium.",
-            "values": {
-                "single": [
-                    [0.0, 0.0], [109_000.0, 1_148.4],
-                    [137_000.0, 2_884.8], [171_000.0, 4_620.0],
-                    [205_000.0, 6_355.2], [500_000.0, 6_936.0],
-                ],
-                "mfj": [
-                    [0.0, 0.0], [218_000.0, 1_148.4],
-                    [274_000.0, 2_884.8], [342_000.0, 4_620.0],
-                    [410_000.0, 6_355.2], [750_000.0, 6_936.0],
-                ],
-            },
-        },
-        {
-            "id": "contribution_limits",
-            "label": "US contribution limits",
-            "source_vintage": "2026",
-            "coverage_year": 2026,
-            "maintenance_due_on": "2026-12-31",
-            "provenance_status": "official_irs_2026_limits_with_product_growth_assumption",
-            "provenance": {
-                "sources": [
-                    "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-401k-and-profit-sharing-plan-contribution-limits",
-                    "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-ira-contribution-limits",
-                    "https://www.irs.gov/irb/2025-21_IRB",
-                ],
-                "verified_as_of": "2026-08-01",
-                "conversion": "First-year employee limits use 2026 IRS nominal limits; Rev. Proc. 2025-19 supplies the HSA amount; the 3% annual growth remains an explicit FIRE product modeling assumption, not an IRS value; HSA is the existing self-only modeled field and no family cap is modeled.",
-            },
-            "scope": "First-year 401(k), Roth IRA, HSA limits and modeled annual limit growth.",
-            "values": {
-                "irs_limit_growth": 0.030,
-                "pretax_401k_limit_y1": 24_500.0,
-                "roth_ira_limit_y1": 7_500.0,
-                "hsa_limit_y1": 4_400.0,
-            },
-        },
-        {
-            "id": "aca_marketplace",
-            "label": "ACA marketplace",
-            "source_vintage": "2026 coverage / 2025 FPL",
-            "coverage_year": 2026,
-            "series_through": 2025,
-            "maintenance_due_on": "2026-12-31",
-            "provenance_status": "official_healthcare_gov_2025_fpl_cms_2026_coverage",
-            "provenance": {
-                "sources": [
-                    "https://www.healthcare.gov/glossary/federal-poverty-level-fpl/",
-                    "https://www.cms.gov/newsroom/fact-sheets/plan-year-2026-marketplace-plans-prices-fact-sheet",
-                    "https://www.irs.gov/affordable-care-act/individuals-and-families/questions-and-answers-on-the-premium-tax-credit",
-                ],
-                "verified_as_of": "2026-08-01",
-                "conversion": "2026 Marketplace coverage retains the 2025 FPL basis used for the enrollment-year model; Rev. Proc. 2025-25 supplies the applicable-percentage reference. The existing 9.96% value is a flat proxy, not the full IRS piecewise schedule; it generally understates PTC below 300% FPL but can overstate it below 100% FPL because eligibility is not modeled. The 8.5% IRA value is a 2021-2025 historical counterfactual, not a current 2026 official value.",
-            },
-            "scope": "Marketplace FPL basis, 400% cliff, and contribution-rate assumptions.",
-            "values": {
-                "default_scenario": "B_pre_IRA",
-                "fpl_single_y0": 15_650.0,
-                "fpl_additional_person_y0": 5_500.0,
-                "fpl_threshold": 4.0,
-                "cap_pct_ira": 0.085,
-                "cap_pct_pre_ira": 0.0996,
-            },
-        },
-        {
-            "id": "ssa_benefit_rules",
-            "label": "Social Security benefit rules",
-            "source_vintage": "2026 statutory rules",
-            "maintenance_due_on": "2026-12-31",
-            "provenance_status": "official_ssa_rules_verified_2026",
-            "provenance": {
-                "sources": [
-                    "https://www.ssa.gov/cola/factsheets/2026.html",
-                    "https://www.ssa.gov/benefits/retirement/planner/1960.html",
-                    "https://www.ssa.gov/benefits/retirement/planner/applying2.html",
-                    "https://www.ssa.gov/benefits/retirement/planner/delayret.html",
-                ],
-                "verified_as_of": "2026-08-01",
-            "conversion": "This component retains the existing FRA/claiming-age/delayed-credit rule inputs; FRA 67 and the 70%/100%/124% illustration apply to the 1960-and-later birth cohort, not all ages or older cohorts. The 2026 SSA fact sheet's 2.8% COLA belongs to the separate statement-import component and is payable in January 2026.",
-            },
-            "scope": "FRA, claiming-age reduction, and delayed-retirement-credit rules.",
-            "values": {
-                "fra_age": 67,
-                "earliest_claim_age": 62,
-                "latest_credit_age": 70,
-                "early_first_36_monthly_pct": 5.0 / 9.0 / 100.0,
-                "early_after_36_monthly_pct": 5.0 / 12.0 / 100.0,
-                "delayed_credit_annual_pct": 0.08,
-            },
-        },
-        {
-            "id": "ssa_statement_import",
-            "label": "SSA statement import",
-            "source_vintage": "AWI through 2024 / COLA through 2025 (payable January 2026)",
-            "series_through": {"awi": 2024, "cola": 2025},
-            "maintenance_due_on": "2026-12-31",
-            "provenance_status": "official_ssa_series_verified_2026",
-            "provenance": {
-                "sources": [
-                    "https://www.ssa.gov/OACT/cola/AWI.html",
-                    "https://www.ssa.gov/cola/factsheets/2026.html",
-                    "https://www.ssa.gov/oact/COLA/bendpoints.html",
-                ],
-                "verified_as_of": "2026-08-01",
-                "conversion": "AWI remains capped at the latest official published 2024 series; the 2025 determination's 2.8% COLA is payable in January 2026. Future AWI values are not forecast.",
-            },
-            "scope": "Local statement import AWI, COLA, and statutory bend-point derivation.",
-            "values": {
-                "awi_through_year": 2024,
-                "cola_through_year": 2025,
-                "bend1_1979": 180.0,
-                "bend2_1979": 1_085.0,
-                "awi_series": [
-                    [1951, 2799.16], [1952, 2973.32], [1953, 3139.44],
-                    [1954, 3155.64], [1955, 3301.44], [1956, 3532.36],
-                    [1957, 3641.72], [1958, 3673.80], [1959, 3855.80],
-                    [1960, 4007.12], [1961, 4086.76], [1962, 4291.40],
-                    [1963, 4396.64], [1964, 4576.32], [1965, 4658.72],
-                    [1966, 4938.36], [1967, 5213.44], [1968, 5571.76],
-                    [1969, 5893.76], [1970, 6186.24], [1971, 6497.08],
-                    [1972, 7133.80], [1973, 7580.16], [1974, 8030.76],
-                    [1975, 8630.92], [1976, 9226.48], [1977, 9779.44],
-                    [1978, 10556.03], [1979, 11479.46], [1980, 12513.46],
-                    [1981, 13773.10], [1982, 14531.34], [1983, 15239.24],
-                    [1984, 16135.07], [1985, 16822.51], [1986, 17321.82],
-                    [1987, 18426.51], [1988, 19334.04], [1989, 20099.55],
-                    [1990, 21027.98], [1991, 21811.60], [1992, 22935.42],
-                    [1993, 23132.67], [1994, 23753.53], [1995, 24705.66],
-                    [1996, 25913.90], [1997, 27426.00], [1998, 28861.44],
-                    [1999, 30469.84], [2000, 32154.82], [2001, 32921.92],
-                    [2002, 33252.09], [2003, 34064.95], [2004, 35648.55],
-                    [2005, 36952.94], [2006, 38651.41], [2007, 40405.48],
-                    [2008, 41334.97], [2009, 40711.61], [2010, 41673.83],
-                    [2011, 42979.61], [2012, 44321.67], [2013, 44888.16],
-                    [2014, 46481.52], [2015, 48098.63], [2016, 48642.15],
-                    [2017, 50321.89], [2018, 52145.80], [2019, 54099.99],
-                    [2020, 55628.60], [2021, 60575.07], [2022, 63795.13],
-                    [2023, 66621.80], [2024, 69846.57],
-                ],
-                "cola_series": [
-                    [1975, 0.080], [1976, 0.064], [1977, 0.059],
-                    [1978, 0.065], [1979, 0.099], [1980, 0.143],
-                    [1981, 0.112], [1982, 0.074], [1983, 0.035],
-                    [1984, 0.035], [1985, 0.031], [1986, 0.013],
-                    [1987, 0.042], [1988, 0.040], [1989, 0.047],
-                    [1990, 0.054], [1991, 0.037], [1992, 0.030],
-                    [1993, 0.026], [1994, 0.028], [1995, 0.026],
-                    [1996, 0.029], [1997, 0.021], [1998, 0.013],
-                    [1999, 0.025], [2000, 0.035], [2001, 0.026],
-                    [2002, 0.014], [2003, 0.021], [2004, 0.027],
-                    [2005, 0.041], [2006, 0.033], [2007, 0.023],
-                    [2008, 0.058], [2009, 0.000], [2010, 0.000],
-                    [2011, 0.036], [2012, 0.017], [2013, 0.015],
-                    [2014, 0.017], [2015, 0.000], [2016, 0.003],
-                    [2017, 0.020], [2018, 0.028], [2019, 0.016],
-                    [2020, 0.013], [2021, 0.059], [2022, 0.087],
-                    [2023, 0.032], [2024, 0.025], [2025, 0.028],
-                ],
-            },
-        },
-    ],
-}
+#: The pack is DATA, loaded from a declarative file, not a Python literal.
+#:
+#: 4.0's hard rule is that a rule pack carries declarative data and never code.
+#: It shipped as a 400-line dict inside this module, which is code by any
+#: reading -- so the payload moved to `rule_pack_us_offline.json` and the logic
+#: that interprets it stayed here.
+#:
+#: Behaviour-neutral by construction, not by hope: `RULE_PACK_SHA256` is
+#: computed from `_canonical_bytes(payload)`, which is already
+#: `json.dumps(sort_keys=True, separators=(",", ":"))`. The file's own
+#: indentation therefore cannot move the hash -- only the parsed structure can,
+#: and the payload was verified to be pure-JSON expressible (no tuples, no
+#: non-string keys) before it was extracted. `tests/test_rule_pack_payload.py`
+#: pins the shipped hash so a future edit to the data cannot change the pack's
+#: identity silently.
+_PAYLOAD_FILENAME = "rule_pack_us_offline.json"
+
+
+def _payload_path() -> str:
+    """Where the data file is, from source AND from inside the frozen app.
+
+    PyInstaller unpacks bundled data under `sys._MEIPASS`; from a source
+    checkout it sits beside this module. Checked in that order because the
+    frozen case is the one a source-only lookup would fail in -- silently, at
+    the user's first run.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidate = os.path.join(base, _PAYLOAD_FILENAME)
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        _PAYLOAD_FILENAME)
+
+
+def _load_payload() -> dict[str, Any]:
+    path = _payload_path()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except OSError as exc:
+        # Loud. A missing pack means every tax figure in the app is missing;
+        # falling back to anything would be inventing tax law.
+        raise RuntimeError(
+            "rule pack payload not found at %s -- the app cannot run without "
+            "it, and there is no default to fall back on" % path) from exc
+
+
+_PACK_PAYLOAD: dict[str, Any] = _load_payload()
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -468,6 +122,14 @@ US_FEDERAL_RULES = {
     "early_withdrawal_rate": _FEDERAL_VALUES["early_withdrawal_rate"],
 }
 
+#: State income-tax archetypes, keyed by id. TYPES, never states: no row
+#: reproduces a particular state's schedule, and nothing may label one with a
+#: state name.
+US_STATE_ARCHETYPES = {
+    row["id"]: dict(row)
+    for row in _component("us_state_archetypes")["values"]["archetypes"]
+}
+
 _IRMAA_VALUES = _component("medicare_irmaa")["values"]
 
 
@@ -487,6 +149,15 @@ SSA_RULES = {
     **_component("ssa_benefit_rules")["values"],
     **_component("ssa_statement_import")["values"],
 }
+
+#: The 2026 Trustees Report's OASI reserve-depletion projection.
+#:
+#: Kept SEPARATE from `SSA_RULES` on purpose. Those are statutory rules, which
+#: change when Congress acts. These are actuarial PROJECTIONS, which change
+#: every June whether or not anything happened -- a different kind of fact with
+#: a different expiry, and merging them would let a stale projection ride along
+#: under a rule component's freshness.
+SSA_TRUST_FUND = dict(_component("ssa_trust_fund")["values"])
 
 
 def _as_date(value: str | _dt.date) -> _dt.date:

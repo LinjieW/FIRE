@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fire_rule_pack import IRMAA_RULES, US_FEDERAL_RULES
+from fire_rule_pack import IRMAA_RULES, US_FEDERAL_RULES, US_STATE_ARCHETYPES
 
 
 # ---------------------------------------------------------------- parameters
@@ -32,10 +32,25 @@ class TrueTaxParams:
     rmd_enabled: bool = True
     rmd_age: int = 75                     # SECURE 2.0: 75 for those born ≥1960
     irmaa_enabled: bool = True
-    # LTCG share of every taxable-account withdrawal (cost-basis proxy; the
-    # engine does not track lots — disclosed approximation).
+    #: The 3.8% net investment income tax. On by default WITH the true-tax
+    #: engine, like IRMAA: both are ordinary parts of the real federal bill,
+    #: and a "true tax" run that quietly skips one is not a true tax run.
+    #: Turning it off is for isolating its effect, not for planning.
+    niit_enabled: bool = True
+    # OPENING LTCG share of the taxable bucket. Callers that track basis pass a
+    # measured `gain_fraction` per year to `solve_retirement_year` and use this
+    # only to seed the starting basis; callers that do not keep the old flat
+    # behaviour, where it applies to every withdrawal regardless of holding
+    # period. Lot-level basis stays out of scope by identity-level rule.
     taxable_gain_fraction: float = 0.5
     state_rate: float = 0.0               # flat state tax on ordinary + LTCG
+    #: Optional archetype id from `US_STATE_ARCHETYPES`. `None` keeps the flat
+    #: `state_rate` above and is bit-identical to every run before archetypes
+    #: existed. Set, it REPLACES that rate with a shape: separate ordinary and
+    #: LTCG rates, whether Social Security is taxed, and how much retirement
+    #: income is exempt -- the three things a single flat rate cannot express
+    #: and that decide most of the "should I move states" question.
+    state_archetype: Optional[str] = None
 
 
 # ------------------------------------------------------- 2026 tables (real $)
@@ -48,6 +63,36 @@ STD_DED_MFJ = US_FEDERAL_RULES["std_deduction_mfj"]
 LTCG_SINGLE = list(US_FEDERAL_RULES["ltcg_single"])
 LTCG_MFJ = list(US_FEDERAL_RULES["ltcg_mfj"])
 # SS provisional-income thresholds — NOMINAL by statute (never indexed).
+# --- NIIT (26 U.S.C. 1411) --------------------------------------------------
+# Deliberately NOT in `rule_pack_us_offline.json`, unlike every other tax
+# constant in this module. Two reasons, and the second is the load-bearing one:
+#
+#   * The pack exists for values that need ANNUAL MAINTENANCE -- brackets,
+#     standard deductions, IRMAA tiers -- and carries `source_vintage` and
+#     `maintenance_due_on` for exactly that. These three have not moved since
+#     2013 and will not move without an act of Congress. They have no vintage.
+#   * Changing the pack changes `RULE_PACK_ID` and therefore the run identity,
+#     and an already-archived snapshot then refuses to replay. That refusal is
+#     CORRECT and decided behaviour, not damage -- ROADMAP 4.0 keeps
+#     "a pack update must change runtime/data identity" in force and says so
+#     explicitly -- but it is still a cost, and a constant that has not moved
+#     since 2013 should not make anyone pay it.
+#
+# Sources: https://www.irs.gov/taxtopics/tc559
+#          https://www.law.cornell.edu/uscode/text/26/1411
+NIIT_RATE = 0.038
+#: Statutory NIIT thresholds, in NOMINAL dollars, deliberately NOT multiplied
+#: by `cpi` anywhere below.
+#:
+#: Every other threshold in this module is stated in today's dollars and scaled
+#: by `cpi` because the statute indexes it. 26 U.S.C. 1411 does not: these two
+#: numbers were fixed in 2013 and have never moved. Over a 50-year horizon that
+#: is the difference between a tax a few high earners pay and one almost every
+#: modelled household eventually pays, so scaling them "for consistency" would
+#: silently delete a real and growing cost. It is a tax increase written as an
+#: absence of maintenance, and the model has to show it.
+NIIT_THRESHOLD_SINGLE = 200_000
+NIIT_THRESHOLD_MFJ = 250_000
 SS_T1_SINGLE, SS_T2_SINGLE = US_FEDERAL_RULES["ss_provisional_single"]
 SS_T1_MFJ, SS_T2_MFJ = US_FEDERAL_RULES["ss_provisional_mfj"]
 # IRS Uniform Lifetime Table (divisors), ages 72..120+.
@@ -129,12 +174,43 @@ def irmaa_annual_surcharge_real(magi_real: float, mfj: bool, persons: int) -> fl
     return tiers[0][1] * persons
 
 
+def dividend_drag_rate_real(dividend_real: float, qualified_fraction: float,
+                            ordinary_taxable_real: float, mfj: bool) -> float:
+    """Effective tax rate on one year of distributions, from real brackets.
+
+    Built entirely out of `ltcg_tax_real` and `ordinary_tax_real` rather than
+    new tables: qualified distributions stack on top of ordinary income exactly
+    as capital gains do, and the non-qualified remainder IS ordinary income, so
+    it goes underneath and lifts the base the qualified share stacks on.
+
+    Returns a RATE, not a cash amount, because the caller charges the drag as a
+    return haircut. The ruling that shaped this slice kept the haircut form --
+    modelling distributions as cash received would move the engine's
+    cash-conservation identity, which is a far larger change than the one
+    authorised.
+
+    The rate is 0 whenever the year's income leaves the qualified share in the
+    0% LTCG bracket, which is the case a single hardcoded drag could not
+    express and which is common for early retirees living on basis.
+    """
+    if dividend_real <= 0:
+        return 0.0
+    qualified = dividend_real * max(0.0, min(1.0, qualified_fraction))
+    ordinary = dividend_real - qualified
+    base = max(0.0, ordinary_taxable_real)
+    ordinary_tax = (ordinary_tax_real(base + ordinary, mfj)
+                    - ordinary_tax_real(base, mfj))
+    qualified_tax = ltcg_tax_real(qualified, base + ordinary, mfj)
+    return (ordinary_tax + qualified_tax) / dividend_real
+
+
 # --------------------------------------------------------------- year solver
 def solve_retirement_year(accounts, need_after_tax_nominal: float,
                           ss_gross_nominal: float, conversions_nominal: float,
                           roth_locked: float, age: float, cpi: float,
                           p: TrueTaxParams,
-                          rmd_balance_prior_year_end: float = None) -> dict:
+                          rmd_balance_prior_year_end: float = None,
+                          gain_fraction: float = None) -> dict:
     """Withdraw (taxable → pretax → HSA → unlocked Roth) so that after REAL
     taxes the year's need is met. Fixed-point on the tax bill (≤8 iters).
 
@@ -143,9 +219,21 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     RMD excess (forced draw beyond spending+tax) is deposited back to taxable.
     Returns dict(accounts, tax_total, penalty, ss_taxable, magi_agi_nominal,
                  magi_aca_nominal, delivered, deposit_back, gross_wd, flow_err,
-                 shortfall).
+                 shortfall, taxable_wd, gain_fraction_used).
+
+    `taxable_wd` and `gain_fraction_used` exist so a basis-tracking caller can
+    close the loop without re-deriving the taxable draw from balance
+    differences -- `out.taxable` already nets `deposit_back` back in, so the
+    difference is not the withdrawal and reconstructing it outside would be a
+    second implementation of this function's ordering rule.
     """
     mfj = p.filing_jointly
+    # `gain_fraction` is the caller's MEASURED (value - basis) / value for this
+    # year. `p.taxable_gain_fraction` remains the fallback for callers that do
+    # not track basis, and is what seeds the basis at retirement -- so it is
+    # not a dead knob, it is the opening balance of a quantity that now moves.
+    gain_frac = (p.taxable_gain_fraction if gain_fraction is None
+                 else max(0.0, min(1.0, float(gain_fraction))))
     std_ded_nom = (STD_DED_MFJ if mfj else STD_DED_SINGLE) * cpi
     bal_tax, bal_pre = accounts.taxable, accounts.pretax_401k
     bal_hsa, bal_roth = accounts.hsa, max(0.0, accounts.roth_ira - roth_locked)
@@ -171,7 +259,7 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
         rem -= w_roth
 
         ordinary_nom = w_pre + conversions_nominal
-        ltcg_nom = w_tax * p.taxable_gain_fraction
+        ltcg_nom = w_tax * gain_frac
         ss_taxable = ss_taxable_amount(ss_gross_nominal,
                                        ordinary_nom + ltcg_nom, mfj)
         ordinary_before_ded_nom = ordinary_nom + ss_taxable
@@ -183,8 +271,40 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
         fed = (ordinary_tax_real(taxable_ord_nom / cpi, mfj)
                + ltcg_tax_real(taxable_ltcg_nom / cpi,
                                taxable_ord_nom / cpi, mfj)) * cpi
+        # NIIT: 3.8% of the LESSER of net investment income and the amount by
+        # which MAGI clears the threshold. Both halves matter and they are why
+        # this interacts with everything else in here:
+        #
+        #   * Net investment income is the realised capital gain. A pretax
+        #     withdrawal or a Roth conversion is NOT investment income and is
+        #     never taxed by this directly --
+        #   * -- but it does lift MAGI, which can drag investment income the
+        #     household did have over the line. So a conversion can raise this
+        #     bill without being taxed by it, which is exactly the interaction
+        #     a flat-rate approximation cannot show.
+        niit_nom = 0.0
+        if p.niit_enabled:
+            magi_niit_nom = ordinary_nom + ltcg_nom + ss_taxable
+            threshold_nom = NIIT_THRESHOLD_MFJ if mfj else NIIT_THRESHOLD_SINGLE
+            over_threshold_nom = max(0.0, magi_niit_nom - threshold_nom)
+            niit_nom = NIIT_RATE * min(ltcg_nom, over_threshold_nom)
+        fed += niit_nom
         penalty = (EARLY_WD_RATE * w_pre) if age < EARLY_WD_AGE else 0.0
-        state = p.state_rate * (ordinary_nom + ltcg_nom)
+        # State tax. The flat rate is the default and stays exactly as it
+        # was; an archetype replaces it with a shape rather than adding to it.
+        if p.state_archetype:
+            arch = US_STATE_ARCHETYPES[p.state_archetype]
+            exempt_nom = float(arch["retirement_exempt_real"]) * cpi
+            ordinary_after_exempt = max(0.0, ordinary_nom - exempt_nom)
+            state = (float(arch["ordinary_rate"]) * ordinary_after_exempt
+                     + float(arch["ltcg_rate"]) * ltcg_nom)
+            if arch["taxes_social_security"]:
+                # The state taxes the federally taxable portion. Whether a
+                # state taxes benefits at all is the archetype's business; how
+                # much of the benefit is taxable is federal, already computed.
+                state += float(arch["ordinary_rate"]) * ss_taxable
+        else:
+            state = p.state_rate * (ordinary_nom + ltcg_nom)
         tax_total = fed + state + penalty
         if abs(tax_total - tax_guess) < 1.0:
             tax_guess = tax_total
@@ -207,6 +327,9 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     flow_err = abs((gross + ss_gross_nominal)
                    - (delivered + tax_guess + deposit_back)) if shortfall <= 1.0 else 0.0
     return dict(accounts=out, tax_total=tax_guess, penalty=penalty,
+                taxable_wd=w_tax, gain_fraction_used=gain_frac,
+                ordinary_taxable_real=taxable_ord_nom / cpi,
+                niit_nominal=niit_nom,
                 ss_taxable=ss_taxable, magi_agi_nominal=magi_agi,
                 magi_aca_nominal=ordinary_nom + ltcg_nom + ss_gross_nominal,
                 delivered=delivered, deposit_back=deposit_back,

@@ -24,8 +24,18 @@
   // empty-state strings, switchable by the app's language toggle (audit P2-4)
   let MSG = { empty: "\u65e0\u6570\u636e", sparse: "\u6837\u672c\u4e0d\u8db3" };
   function setLang(l) {
-    MSG = l === "zh" ? { empty: "\u65e0\u6570\u636e", sparse: "\u6837\u672c\u4e0d\u8db3" }
-                     : { empty: "No data", sparse: "Insufficient sample" };
+    // Tooltip labels live in `MSG` with everything else rather than behind a
+    // second language variable. The first version of the hover work invented
+    // a `LANG` that this file has never had -- the same shape as the
+    // `fmtMoney` that rendered "fmtMoney is not defined" in a shipped panel.
+    MSG = l === "zh"
+      ? { empty: "\u65e0\u6570\u636e", sparse: "\u6837\u672c\u4e0d\u8db3",
+          age: "\u5e74\u9f84 ", paths: "\u8def\u5f84\u6570",
+          share: "\u5360\u6bd4", low: "\u4f4e\u7aef", high: "\u9ad8\u7aef",
+          swing: "\u6446\u5e45", base: "\u57fa\u51c6" }
+      : { empty: "No data", sparse: "Insufficient sample",
+          age: "Age ", paths: "Paths", share: "Share",
+          low: "Low", high: "High", swing: "Swing", base: "Base" };
   }
 
   // ---------- formatting ----------
@@ -85,6 +95,37 @@
       const xv = (evt.clientX - rc.left) * (W / rc.width);
       if (xv < m.l || xv > W - m.r) { tip.style.display = "none"; return; }
       const d = xToData(xv);
+      if (!d) { tip.style.display = "none"; return; }
+      tip.innerHTML = `<div class="ct-t">${d.title}</div>` +
+        d.rows.map(r => `<div class="ct-r"><span class="ct-sw" style="background:${r[2] || "transparent"}"></span>${r[0]}<b>${r[1]}</b></div>`).join("");
+      tip.style.display = "block";
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      let x = evt.clientX + 14, y = evt.clientY + 12;
+      if (x + tw > window.innerWidth - 8) x = evt.clientX - tw - 14;
+      if (y + th > window.innerHeight - 8) y = evt.clientY - th - 12;
+      tip.style.left = x + "px"; tip.style.top = y + "px";
+    };
+    const leave = () => { tip.style.display = "none"; };
+    svg.addEventListener("pointermove", move);
+    svg.addEventListener("pointerleave", leave);
+    svg._tipOff = () => {
+      svg.removeEventListener("pointermove", move);
+      svg.removeEventListener("pointerleave", leave);
+      tip.style.display = "none";
+    };
+  }
+  // The y-axis sibling of `attachHover`, for charts whose rows stack
+  // vertically. Tornado is one: forcing it through the x-scanner would
+  // report whichever row happened to share an x-range with the pointer,
+  // which is worse than no tooltip because it is confidently wrong.
+  function attachHoverY(svg, H, m, yToData) {
+    const tip = tipEl();
+    const move = evt => {
+      if (evt.buttons) { tip.style.display = "none"; return; }
+      const rc = svg.getBoundingClientRect();
+      const yv = (evt.clientY - rc.top) * (H / rc.height);
+      if (yv < m.t || yv > H - m.b) { tip.style.display = "none"; return; }
+      const d = yToData(yv);
       if (!d) { tip.style.display = "none"; return; }
       tip.innerHTML = `<div class="ct-t">${d.title}</div>` +
         d.rows.map(r => `<div class="ct-r"><span class="ct-sw" style="background:${r[2] || "transparent"}"></span>${r[0]}<b>${r[1]}</b></div>`).join("");
@@ -589,6 +630,18 @@
       svg.appendChild(el("line", { x1: x, y1: m.t, x2: x, y2: H - m.b, stroke: cc, "stroke-width": k === "p50" ? 1.6 : 1, "stroke-dasharray": k === "p50" ? "" : "3 3" }));
     });
     svg.appendChild(el("line", { x1: m.l, y1: H - m.b, x2: W - m.r, y2: H - m.b, stroke: AXIS, "stroke-width": 1 }));
+    const total = counts.reduce((a, b) => a + b, 0) || 1;
+    attachHover(svg, W, m, xv => {
+      const i = Math.floor((xv - m.l) / bw);
+      if (i < 0 || i >= n) return null;
+      return {
+        title: MSG.age + ages[i],
+        rows: [
+          [MSG.paths, counts[i].toLocaleString(), col],
+          [MSG.share, pct(counts[i] / total, 1)],
+        ],
+      };
+    });
   }
 
   // ---------- TORNADO (diverging bars from a center) ----------
@@ -636,6 +689,24 @@
         });
       });
     }
+    // Row-based, so the y-scanner. Feeding tornado through the x-scanner
+    // would report whichever row shares an x-range with the pointer -- a
+    // tooltip that is confidently about the wrong lever, which is worse than
+    // having none.
+    attachHoverY(svg, H, m, yv => {
+      const i = Math.floor((yv - m.t) / rowH);
+      if (i < 0 || i >= rows.length) return null;
+      const r = rows[i];
+      return {
+        title: r.label,
+        rows: [
+          [MSG.low, money(r.lo), PAL.home.band2],
+          [MSG.high, money(r.hi), PAL.home.band],
+          [MSG.swing, money(Math.abs(r.hi - r.lo))],
+          [MSG.base, money(center), ACCENT],
+        ],
+      };
+    });
   }
 
   // ---------- LINES (generic multi-series; optional dual axis + cursor) ----------

@@ -39,6 +39,10 @@
     <h1 class="welcome-h1" data-i18n="welcome.title">FIRE 分析</h1>
     <div class="sub-en" data-i18n="welcome.subtitle">A staged, quantitative roadmap to financial independence.</div>
     <p class="lead" data-i18n="welcome.lead">分步录入你的情况，选择运算精度，看进度条跑真实的蒙特卡洛，然后分页阅读结果与结论。默认预填一份去身份的示例，所有数字都可改成你自己的。</p>
+    <div class="panel hidden" id="standingPanel" style="margin:18px 0 6px;text-align:left">
+      <div class="panel-title sm" data-i18n="stand.title">你现在在哪</div>
+      <div id="standingBody"></div>
+    </div>
     <div class="welcome-actions">
       <button class="btn-run lg" id="startFresh" data-i18n="welcome.start">开始分析</button>
       <button class="btn-ghost lg" id="startExample" data-i18n="welcome.example">载入示例并直接看结果</button>
@@ -416,6 +420,7 @@
         <div class="compute-row"><button class="btn-run sm" id="stratRun" data-i18n="strat.run">▶ 对比五种策略（约 60–90 秒）</button><span class="hint" id="stratHint"></span></div>
         <table class="cmp-table" id="stratTable" style="margin-top:12px"></table>
         <p class="cap" id="stratCap"></p>
+        <div id="stratSpread"></div>
       </div>
       <div class="panel">
         <div class="panel-title sm" data-i18n="hz.title">住房 · 租 vs 买 <span class="tag" data-i18n="hz.tag">按揭真算 + 蒙特卡洛对比</span></div>
@@ -474,11 +479,166 @@
       </div>
     </div>
 
+    <div class="rpage" id="rp-review">
+      <div class="sec-head"><span class="sec-num">R</span><h2 class="sec-title" data-i18n="rev.title">年度复核</h2></div>
+      <p class="sec-kicker" data-i18n="rev.kicker">把过去一年真实发生的事填进去，看看实际和当初的预测差在哪里——差多少来自市场，多少来自你自己的行为。填完两分钟，读完三分钟。</p>
+      <div class="callout hidden" id="revStatus" role="status"></div>
+      <div class="panel" id="revFormPanel">
+        <div class="panel-title sm" data-i18n="rev.form.title">这一年发生了什么</div>
+        <div id="revImportNotice"></div>
+        <div id="revForm"></div>
+        <div class="compute-row" style="margin-top:14px">
+          <button class="btn-ghost sm" id="revImportBtn" data-i18n="rev.import">从券商流水导入…</button>
+          <input type="file" id="revImportFile" accept=".csv,text/csv" style="display:none">
+          <button class="btn-ghost sm" id="revSpendBtn" data-i18n="rev.spend.import">从记账软件导入年度支出…</button>
+          <input type="file" id="revSpendFile" accept=".csv,text/csv" style="display:none">
+          <button class="btn-ghost sm" id="revSubmit" data-i18n="rev.submit">解释这个差距 →</button>
+          <span class="cap" id="revFormNote"></span>
+        </div>
+      </div>
+      <div class="panel hidden" id="revMemoPanel">
+        <div class="panel-title sm" data-i18n="rev.memo.title">这次复核的结论</div>
+        <div id="revMemo"></div>
+      </div>
+      <div class="panel hidden" id="revResultPanel">
+        <div class="panel-title sm" data-i18n="rev.result.title">差距从哪来</div>
+        <div class="verdict" id="revVerdict"></div>
+        <div id="revWaterfall"></div>
+        <div id="revCounterfactual"></div>
+        <p class="cap" id="revDisclosure"></p>
+      </div>
+      <div class="panel hidden" id="revDriftPanel">
+        <div class="panel-title sm" data-i18n="rev.drift.title">计划本身漂移了多少</div>
+        <div id="revDrift"></div>
+      </div>
+      <div class="panel hidden" id="revRebaselinePanel">
+        <div class="panel-title sm" data-i18n="rev.rebase.title">要不要以今天为新起点</div>
+        <div id="revRebaseline"></div>
+      </div>
+      <div class="panel hidden" id="revHistoryPanel">
+        <div class="panel-title sm" data-i18n="rev.history.title">往年复核</div>
+        <div id="revHistory"></div>
+      </div>
+    </div>
+
+    <div class="rpage" id="rp-decide">
+      <div class="sec-head"><span class="sec-num">D</span><h2 class="sec-title" data-i18n="dec.title">决策</h2></div>
+      <p class="sec-kicker" data-i18n="dec.kicker">问一个具体的决定，用同一套假设在三条轴上各跑一遍——不同种子、不同收益模型、不同不利假设。只有方向在所有真正看到这个改动的点上都不变，才叫稳健。</p>
+      <div class="callout hidden" id="decStatus" role="status"></div>
+
+      <div class="panel" id="decSetupPanel">
+        <div class="panel-title sm" data-i18n="dec.setup.title">你要决定什么</div>
+        <div id="decQuestion"></div>
+        <div id="decAlternatives"></div>
+        <div id="decCoverage"></div>
+        <div class="compute-row" style="margin-top:14px">
+          <button class="btn-ghost sm" id="decPlan" data-i18n="dec.plan">先算要花多少 →</button>
+          <button class="btn-ghost sm hidden" id="decRun" data-i18n="dec.run">开始</button>
+          <button class="btn-ghost sm hidden" id="decCancel" data-i18n="dec.cancel">取消</button>
+          <span class="cap" id="decHint"></span>
+        </div>
+      </div>
+
+      <div class="panel" id="decReviewPanel">
+        <div class="panel-title sm" data-i18n="dec.review.title">到期复核：当年的决定，和它底下变过的东西</div>
+        <div class="row">
+          <button class="btn-ghost sm" id="decReviewRun" data-i18n="dec.review.run">看已归档的决定</button>
+          <span class="cap" id="decReviewHint"></span>
+        </div>
+        <div id="decReviewOut"></div>
+      </div>
+
+      <div class="panel hidden" id="decCostPanel">
+        <div class="panel-title sm" data-i18n="dec.cost.title">这次要跑多少</div>
+        <div id="decCost"></div>
+      </div>
+
+      <div class="panel hidden" id="decVerdictPanel">
+        <div class="panel-title sm" data-i18n="dec.verdict.title">结论</div>
+        <div class="verdict" id="decVerdict"></div>
+        <div id="decGainCost"></div>
+        <div id="decRegret"></div>
+        <div id="decDownside"></div>
+      </div>
+
+      <div class="panel hidden" id="decAxesPanel">
+        <div class="panel-title sm" data-i18n="dec.axes.title">三条轴上各自看到了什么</div>
+        <div id="decAxes"></div>
+      </div>
+
+      <div class="panel hidden" id="decSensPanel">
+        <div class="panel-title sm" data-i18n="dec.sens.title">哪些假设最要命，什么条件下会反转</div>
+        <div id="decSensitive"></div>
+        <div id="decReversal"></div>
+      </div>
+
+      <div class="panel hidden" id="decContextPanel">
+        <div class="panel-title sm" data-i18n="dec.context.title">附带的实验室结果（不作为结论依据）</div>
+        <div id="decContext"></div>
+      </div>
+
+      <div class="panel" id="annPanel">
+        <div class="panel-title sm" data-i18n="ann.title">年金 / TIPS：多花多少的许可</div>
+        <div id="annSetup"></div>
+        <div class="compute-row" style="margin-top:14px">
+          <!-- Starts disabled. The confirmation gate lives in renderAnnSetup,
+               which does not run until the Decide page is opened; without
+               this the button is live from first paint and the "these are my
+               own quotes" tick can be skipped entirely. Found by loading the
+               real page, not by reading the source. -->
+          <button class="btn-ghost sm" id="annPlan" data-i18n="ann.plan" disabled>先算要花多少 →</button>
+          <button class="btn-ghost sm hidden" id="annRun" data-i18n="ann.run">开始</button>
+          <button class="btn-ghost sm hidden" id="annCancel" data-i18n="ann.cancel">取消</button>
+          <span class="cap" id="annHint"></span>
+        </div>
+        <div id="annCost"></div>
+        <div id="annResult"></div>
+      </div>
+
+      <div class="panel hidden" id="decChoicePanel">
+        <div class="panel-title sm" data-i18n="dec.choice.title">你的决定</div>
+        <div id="decChoice"></div>
+        <div id="decArchive" style="margin-top:14px"></div>
+      </div>
+    </div>
+
     <div class="rpage" id="rp-concl">
       <div class="sec-head"><span class="sec-num">VI</span><h2 class="sec-title" data-i18n="concl.title">结论</h2></div>
       <p class="sec-kicker" data-i18n="concl.kicker">以下每条都由你这次跑出的数字生成，随输入改变。计算越多板块（敏感性/SWR/搬迁），结论越完整。</p>
       <div class="callout hidden" id="rulePackConclusionStatus" role="status"></div>
       <div id="conclusions"></div>
+      <div class="panel" style="margin-top:18px" id="bequestPanel">
+        <div class="panel-title sm" data-i18n="beq.title">这个计划靠继承吗</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="beq.kicker">把计划原样跑一遍，再用同一个种子跑一遍「遗产没到账」，只差这一件事。看的是中位消费而不是成功率——护栏会靠砍消费吸收损失，所以成功率可能一动不动而生活水平掉一截。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="beqRun" data-i18n="beq.run">▶ 检查是否依赖继承</button>
+        </div>
+        <div id="beqOut" style="margin-top:12px"></div>
+      </div>
+      <div class="panel" style="margin-top:18px" id="fundedPanel">
+        <div class="panel-title sm" data-i18n="fr.title">第二把尺子：你已经有的，够不够你欠的</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="fr.kicker">这一页里没有抽样。把你的地板支出和可自由支配支出各自折现成一个现值，把组合、已建模的收入流与社保也折现成现值，然后相除。它问的是「如果你今天就停止储蓄，手上的够不够」——所以未来的缴款不算在资产里，那是蒙特卡洛回答的另一个问题。折现率和地板都由你填，两个都不填就不算，也不替你猜。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="frRun" data-i18n="fr.run">▶ 算 funded ratio</button>
+        </div>
+        <div id="frOut" style="margin-top:12px"></div>
+      </div>
+      <div class="panel" style="margin-top:18px" id="rothSchedPanel">
+        <div class="panel-title sm" data-i18n="rsch.title">哪几年转，转多少</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="rsch.kicker">搜的是逐年的转换计划（从哪一岁到哪一岁、每年转多少），不是单一年度额度——真实的 Roth 梯本来就不是平的，同样的钱早转和晚转差很多。这里不替你选：每个方案的成功率与税后终值都列出来，标星的是没有被任何其他方案全面压过的那些。选哪个是你的偏好，不是这个工具的。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="rschRun" data-i18n="rsch.run">▶ 搜索转换计划</button>
+        </div>
+        <div id="rschOut" style="margin-top:12px"></div>
+      </div>
+      <div class="panel" style="margin-top:18px" id="assetLocPanel">
+        <div class="panel-title sm" data-i18n="aloc.title">同样的钱，换个账户装</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="aloc.kicker">把同一份组合按三种典型摆法各跑一遍，用同一个种子、同一批路径——所以差额只可能来自分派怎么被课税，不可能是市场噪音。只算税这一半：本引擎每年抽一个混合收益率发给所有账户，因此它算不出「把高收益资产放进 Roth」本身值多少，结论不要当成资产摆放的全部。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="alocRun" data-i18n="aloc.run">▶ 比较三种摆法</button>
+        </div>
+        <div id="alocOut" style="margin-top:12px"></div>
+      </div>
       <div class="panel" style="margin-top:18px">
         <div class="panel-title sm" data-i18n="concl.method">方法与诚实度</div>
         <div class="readout-grid">
@@ -494,9 +654,14 @@
           <div class="panel-title sm" style="margin-top:20px" data-i18n="lim.title">模型未捕捉 / 近似处理的（局限声明）</div>
           <p class="panel-note" style="margin:6px 0 10px" data-i18n="lim.intro">以下是本模型明确<b>不</b>建模或做了简化近似的项。它们对一个可信的核心结论通常不是必需，但会影响精确数字——请据此解读，不要把点估计当成承诺。</p>
           <div id="robustOut"></div>
+          <div id="estateLine"></div>
+          <div id="outcomeLayers"></div>
+          <div id="regimeConditional"></div>
+          <div id="limPersonal"></div>
         <ul class="lim" id="limitations"></ul>
         </div>
         <div class="compute-row" style="margin-top:16px">
+          <button class="btn-ghost" id="dlBriefing" data-i18n="concl.briefing">导出简报包（给外部 AI）</button>
           <button class="btn-ghost" id="dlReport" data-i18n="concl.report">打开完整 HTML 报告</button>
           <button class="btn-ghost" id="dlJson" data-i18n="concl.json">下载结果 JSON</button>
           <button class="btn-ghost" id="printBtn" data-i18n="concl.print">打印 / 存 PDF</button>

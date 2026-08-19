@@ -188,3 +188,286 @@ def parse_broker_csv(text: str) -> dict:
     out_accounts.sort(key=lambda a: -a["total"])
     return {"accounts": out_accounts, "suggestion": suggestion,
             "warnings": warnings}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 · transaction exports for the annual review.
+#
+# A different parser from `parse_broker_csv` above, and deliberately so: that
+# one reads a POSITIONS export (what you hold) to seed starting balances; this
+# reads a TRANSACTIONS export (what moved, and when) to seed a check-in's flow
+# lines. They share the privacy posture and the "never silently guess" rule and
+# nothing else.
+#
+# The mapping below is the whole risk surface. A word that means two different
+# things -- "transfer", which is a contribution from outside and an internal
+# move between your own accounts, or "distribution", which is a fund payout and
+# a retirement withdrawal -- must not be resolved by guessing. Those land in
+# `unmapped` for the user to classify, because a wrong category does not look
+# wrong: it produces a plausible waterfall attributing the user's own behaviour
+# to the wrong line.
+# ---------------------------------------------------------------------------
+
+_DATE_COLS = ("trade date", "settlement date", "run date", "date", "posted",
+              "activity date", "transaction date")
+_ACTION_COLS = ("action", "activity", "transaction type", "type",
+                "description", "transaction", "memo")
+_AMOUNT_COLS = ("amount", "net amount", "total amount", "transaction amount",
+                "credit", "debit", "cash flow")
+
+# ---------------------------------------------------------------------------
+# How a needle is matched, and why it is not a plain substring.
+#
+# Real exports put the SECURITY NAME in the same field as the action:
+# "DIVIDEND RECEIVED ISHARES RUSSELL 2000 ETF". A bare substring search finds
+# "sell" inside "ru-SELL" and "buy" inside "BEST BUY", so the first version of
+# this file silently discarded every row naming a Russell fund, Best Buy, or
+# Intercontinental Exchange ("exchange in"). Two independent reviewers found
+# the same class of defect from different angles.
+#
+# So: a single-word needle must match at the START of the action, where the
+# verb actually is; a multi-word needle may match anywhere, because two words
+# in sequence are not something a security name produces by accident.
+# ---------------------------------------------------------------------------
+
+def _matches(text: str, needle: str) -> bool:
+    if " " in needle:
+        return re.search(r"\b" + re.escape(needle), text) is not None
+    return text.startswith(needle)
+
+
+#: Rows that move nothing across the portfolio boundary.
+#:
+#: Trades are obvious. Less obvious, and the reason this list is longer than it
+#: looks: a dividend, interest payment or fund capital-gain distribution paid
+#: INTO the same account is portfolio return, not an external flow -- it is
+#: already inside the closing value. Booking one as an inflow makes Modified
+#: Dietz subtract it from the numerator, so the market line shrinks and the
+#: income line grows by exactly the same amount. The total still reconciles and
+#: the residual does not move, which is precisely why it would never be caught
+#: by looking at the result. Money the user actually takes OUT shows up as its
+#: own withdrawal row.
+_INTERNAL = (
+    "you bought", "you sold", "bought", "sold", "buy", "sell",
+    "reinvest", "reinvestment", "exchange in", "exchange out",
+    "merger", "split", "name change", "redemption", "purchase",
+    "dividend received", "qualified dividend", "ordinary dividend",
+    "dividend", "capital gain", "interest earned", "interest income",
+    "interest received",
+)
+
+#: Unambiguous phrases resolved BEFORE the ambiguity gate below.
+#:
+#: "REQUIRED MINIMUM DISTRIBUTION" is the least ambiguous string a retirement
+#: export contains, and the bare word "distribution" in the ambiguity list was
+#: swallowing it -- along with "LONG-TERM CAPITAL GAINS DISTRIBUTION" -- so two
+#: rules written for exactly those cases were unreachable.
+_RESOLVED_FIRST = (
+    ("required minimum distribution", "spending"),
+    ("required minimum", "spending"),
+    ("capital gains distribution", ""),
+    ("capital gain distribution", ""),
+    ("dividend distribution", ""),
+)
+
+#: Words the user has to resolve, each with the reason, because "we could not
+#: tell" is only useful if it says what the two readings were.
+_AMBIGUOUS = (
+    ("rollover", "a rollover moves money between your own accounts (no net "
+                 "flow) or brings it in from an outside plan (a contribution)"),
+    ("transfer", "a transfer can be new money arriving from a bank or an "
+                 "internal move between accounts you already own"),
+    ("distribution", "a distribution can be a fund paying out (which stays "
+                     "inside the portfolio) or you taking money out"),
+    ("journal", "a journal entry is an internal bookkeeping move whose real "
+                "meaning depends on both sides"),
+    ("conversion", "a Roth conversion moves money between your own accounts "
+                   "and is not a contribution or a withdrawal"),
+    ("recharacter", "a recharacterization re-labels a prior contribution "
+                    "rather than adding money"),
+)
+
+#: Action words -> ledger category, first match wins in this order.
+#:
+#: Tax rules precede everything that mentions a dividend: brokers title a
+#: withholding row after the payment it was taken from ("NRA TAX WITHHELD ON
+#: DIVIDEND"), and resolving that to income books a cost as a gain.
+_ACTION_RULES = (
+    ("foreign tax", "tax"),
+    ("tax withheld", "tax"),
+    ("withholding", "tax"),
+    ("federal tax", "tax"),
+    ("state tax", "tax"),
+    ("nra tax", "tax"),
+    ("employee contribution", "net_contribution"),
+    ("employer contribution", "net_contribution"),
+    ("employee deferral", "net_contribution"),
+    ("elective deferral", "net_contribution"),
+    ("employer match", "net_contribution"),
+    ("safe harbor match", "net_contribution"),
+    ("safe harbor", "net_contribution"),
+    ("profit sharing", "net_contribution"),
+    ("payroll contribution", "net_contribution"),
+    ("payroll deduction", "net_contribution"),
+    ("contribution", "net_contribution"),
+    # Interest the broker CHARGES is a cost. The bare word alone cannot tell
+    # the two apart, and the earned side is internal return anyway, so only the
+    # cost side has a rule.
+    ("margin interest", "fee"),
+    ("interest charged", "fee"),
+    ("interest expense", "fee"),
+    ("interest paid", "fee"),
+    ("advisory fee", "fee"),
+    ("management fee", "fee"),
+    ("account fee", "fee"),
+    ("service fee", "fee"),
+    ("maintenance fee", "fee"),
+    ("expense ratio", "fee"),
+    ("commission", "fee"),
+    ("fee", "fee"),
+    ("rmd", "spending"),
+    ("cash withdrawal", "spending"),
+    ("withdrawal", "spending"),
+    ("check paid", "spending"),
+    ("bill payment", "spending"),
+)
+
+MAX_TRANSACTION_ROWS = 20_000
+
+
+def _parse_date(text: str):
+    """`YYYY-MM-DD` from the handful of shapes brokers actually emit, or None."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    raw = raw.split(" ")[0].split("T")[0]
+    patterns = (
+        (r"^(\d{4})-(\d{2})-(\d{2})$", (1, 2, 3)),
+        (r"^(\d{1,2})/(\d{1,2})/(\d{4})$", (3, 1, 2)),
+        (r"^(\d{4})/(\d{1,2})/(\d{1,2})$", (1, 2, 3)),
+    )
+    for pattern, (y, m, d) in patterns:
+        hit = re.match(pattern, raw)
+        if hit:
+            year, month, day = hit.group(y), hit.group(m), hit.group(d)
+            try:
+                if not (1 <= int(month) <= 12 and 1 <= int(day) <= 31):
+                    return None
+            except ValueError:
+                return None
+            return "%s-%02d-%02d" % (year, int(month), int(day))
+    return None
+
+
+def classify_transaction(action: str):
+    """`(category, reason)`.
+
+    `category` is a category name, `""` for a row that is not an external cash
+    flow at all, or `None` when the user must decide.
+
+    Order matters and is the whole design: internal rows first (a trade or a
+    reinvestment is not a flow no matter what else the string says), then the
+    phrases that are unambiguous despite containing an ambiguous word, then the
+    ambiguity gate, then the general mapping. Getting this order wrong does not
+    produce an error -- it produces a waterfall that reconciles and blames the
+    wrong thing.
+    """
+    text = _norm(action)
+    if not text:
+        return None, "no action or description column value"
+    for word in _INTERNAL:
+        if _matches(text, word):
+            return "", ("not a flow into or out of the portfolio -- a trade, "
+                        "a reinvestment, or a payment that stayed in the "
+                        "account and is already in its closing value")
+    for phrase, category in _RESOLVED_FIRST:
+        if _matches(text, phrase):
+            if category:
+                return category, ""
+            return "", ("a fund distribution paid into the account, which is "
+                        "portfolio return rather than an external flow")
+    for word, reason in _AMBIGUOUS:
+        if _matches(text, word):
+            return None, reason
+    for word, category in _ACTION_RULES:
+        if _matches(text, word):
+            return category, ""
+    return None, "no rule matches this action"
+
+
+def parse_transactions_csv(text: str) -> dict:
+    """Transactions export -> proposed check-in flow lines.
+
+    Proposed, never recorded. The ledger is append-only with immutability
+    triggers, so a mis-parsed import cannot be taken back; the user confirms
+    what this returns and the existing record endpoint does the writing.
+
+    PRIVACY: same posture as the positions parser -- this runs in the local
+    server process and nothing leaves the machine. It does return per-row
+    dates, amounts and the action text, because the user cannot check a
+    classification they cannot see; none of it is logged or stored.
+    """
+    if not text or len(text) > 5_000_000:
+        return {"error": "empty or oversized file"}
+    try:
+        rows = list(csv.reader(
+            io.StringIO(text.replace("\r\n", "\n").replace("\r", "\n")),
+            strict=True))
+    except csv.Error:
+        return {"error": "malformed CSV"}
+    if len(rows) > MAX_TRANSACTION_ROWS:
+        return {"error": "more than %d rows" % MAX_TRANSACTION_ROWS}
+
+    header = None
+    di = ai = mi = -1
+    lines, unmapped, skipped = [], [], 0
+    warnings = []
+    for row in rows:
+        if not row or not any(str(cell).strip() for cell in row):
+            header = None
+            continue
+        if header is None:
+            if _find_col(row, _DATE_COLS) >= 0 and _find_col(row, _AMOUNT_COLS) >= 0:
+                header = row
+                di = _find_col(row, _DATE_COLS)
+                ai = _find_col(row, _ACTION_COLS)
+                mi = _find_col(row, _AMOUNT_COLS)
+            continue
+        if di >= len(row) or mi >= len(row):
+            continue
+        when = _parse_date(row[di])
+        amount = _money(row[mi])
+        if when is None or amount is None or amount == 0:
+            continue
+        action = row[ai] if 0 <= ai < len(row) else ""
+        category, reason = classify_transaction(action)
+        record = {"occurred_at": when + "T12:00:00+00:00",
+                  "amount": amount, "action": _safe_label(str(action))}
+        if category == "":
+            skipped += 1
+        elif category is None:
+            unmapped.append({**record, "reason": reason})
+        else:
+            lines.append({**record, "category": category})
+
+    if header is None:
+        return {"error": "no table with a date column and an amount column"}
+    if not lines and not unmapped:
+        return {"error": "no dated cash-flow rows found"}
+    if unmapped:
+        warnings.append("%d row(s) need a category before they can be used"
+                        % len(unmapped))
+    if skipped:
+        warnings.append("%d row(s) were trades or transfers inside the "
+                        "portfolio and move nothing in or out" % skipped)
+    dates = sorted(line["occurred_at"][:10] for line in lines + unmapped)
+    return {"lines": lines, "unmapped": unmapped,
+            "skipped_not_a_flow": skipped, "warnings": warnings,
+            "period": {"first": dates[0], "last": dates[-1]} if dates else None,
+            "categories": list(_CATEGORIES_FOR_UI)}
+
+
+#: Kept beside the rules so the UI's picker cannot drift from what the seam
+#: accepts; `tests/test_review_panel.py` pins that against `attribution`.
+_CATEGORIES_FOR_UI = ("net_contribution", "income", "spending", "tax", "fee",
+                      "life_event")

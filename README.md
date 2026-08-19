@@ -12,11 +12,11 @@ history, workstream logs, prompts, or internal audit archive.
 
 The current public candidate is:
 
-`v3.0-public-candidate-1`
+`v7.0-public-candidate-1`
 
-Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v3.0-public-candidate-1):
+Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v7.0-public-candidate-1):
 
-`FIRE-Modeling-v3.0-public-candidate-1-macos-universal2.zip`
+`FIRE-Modeling-v7.0-public-candidate-1-macos-universal2.zip`
 
 The bundle runs on Apple Silicon and Intel Macs. It includes its own Python,
 NumPy, and web UI; no separate Python installation or account is required.
@@ -26,7 +26,7 @@ NumPy, and web UI; no separate Python installation or account is required.
 After downloading, verify the SHA-256 recorded in the Release notes:
 
 ```bash
-shasum -a 256 FIRE-Modeling-v3.0-public-candidate-1-macos-universal2.zip
+shasum -a 256 FIRE-Modeling-v7.0-public-candidate-1-macos-universal2.zip
 ```
 
 ### First launch
@@ -61,6 +61,29 @@ for confirmation. Then double-clicking works normally.
   source data on the machine while feeding the scenario model.
 - **Transparent assumptions.** The UI includes limitations and provenance for
   tax, healthcare, Social Security, housing, and return assumptions.
+- **Honest tails, switched off by default.** Several modules exist to puncture
+  optimistic defaults, and every one of them ships OFF so an existing plan
+  reproduces exactly: lumpy spending that does not arrive on a smooth line, a
+  Social Security trust-fund depletion path drawn from the Trustees Report's
+  own alternatives, a stochastic house price with sale discount and downsizing,
+  a career with permanent and transitory wage shocks, and a dial for how much
+  of a triggered guardrail cut you would actually make.
+- **A written account of what moves together.** Nineteen sampling modules are
+  listed with their stance: three model a correlation, four are deliberately
+  independent, and twelve are independent only in the model -- whether they
+  should be correlated has not been examined, and the app says so rather than
+  implying a finding.
+- **Formal decision studies.** Compare a decision against adverse assumption
+  packs across seeds and return models, and get a packet that states the
+  precision tier it can carry rather than a single confident answer.
+- **Your data outlives the app.** `tools/recover_without_app.py` reads the
+  archive with nothing but the Python standard library, so a plan can be
+  recovered without this application existing at all.
+- **The zero-request promise is checkable.** `tools/verify_zero_requests.py`
+  watches the installed bundle's sockets from outside the process and reports
+  every address it held.
+- **A help page you can browse.** Every field explanation is reachable by topic
+  rather than only by hovering the control it belongs to.
 
 ## What this release is (and is not)
 
@@ -124,11 +147,11 @@ FIRE Modeling 是一个离线运行的 macOS 桌面应用，用蒙特卡洛分�
 
 ### 下载
 
-当前公开候选版本是 `v3.0-public-candidate-1`。请从
-[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v3.0-public-candidate-1)
+当前公开候选版本是 `v7.0-public-candidate-1`。请从
+[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v7.0-public-candidate-1)
 下载通用 universal2 App：
 
-`FIRE-Modeling-v3.0-public-candidate-1-macos-universal2.zip`
+`FIRE-Modeling-v7.0-public-candidate-1-macos-universal2.zip`
 
 同一个包支持 Apple Silicon 和 Intel Mac；App 已内置 Python、NumPy 和网页界面，
 不需要另装 Python，也不需要账号。
@@ -138,7 +161,7 @@ FIRE Modeling 是一个离线运行的 macOS 桌面应用，用蒙特卡洛分�
 下载后，按照 Release 说明中的 SHA-256 校验值执行：
 
 ```bash
-shasum -a 256 FIRE-Modeling-v3.0-public-candidate-1-macos-universal2.zip
+shasum -a 256 FIRE-Modeling-v7.0-public-candidate-1-macos-universal2.zip
 ```
 
 ### 首次启动
@@ -160,6 +183,20 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 - **本地连续性。** 计划、版本、草稿、运行快照和时间线保存在本机，不提供云同步。
 - **本地数据导入。** 可选的券商 CSV 和 SSA XML 导入路径不会把源数据上传到云端。
 - **假设透明。** 界面提供税务、医疗、社保、住房和收益率假设的限制与来源说明。
+- **诚实的尾部，且默认全部关闭。** 有几个模块专门用来戳破乐观的默认值，
+  而它们**一律默认关闭**，所以已有的计划升级后逐位复现：块状支出（真实支出不是一条平线）、
+  社保信托基金枯竭（用 Trustees Report 自己的三套方案）、随机房价与卖房折价/换小房、
+  带持久与暂时冲击的职业路径，以及「护栏触发后你实际砍得下去多少」这个拨盘。
+- **把「什么和什么一起动」写成账。** 19 个随机模块逐条列出立场：3 条建模了相关性、
+  4 条刻意独立、**12 条只是「模型里独立」—— 是否本该相关，本项目没有检验过**，
+  App 直说这一点，而不是把它当成一个结论。
+- **正式决策研究。** 拿一个决定去对多套不利假设、多个随机种子与收益模型做对比，
+  产出的 packet 会声明它能承载到哪一档精度，而不是给你一个自信的单一答案。
+- **你的数据比这个 App 活得久。** `tools/recover_without_app.py` 只用 Python 标准库
+  读取档案，**不需要这个应用还存在**就能把计划取回来。
+- **「零请求」承诺可以自己验。** `tools/verify_zero_requests.py` 从进程外部观察
+  已安装 bundle 的套接字，列出它握过的每一个地址。
+- **可浏览的帮助页。** 每个字段的说明都能按主题找到，而不是只能悬停在对应控件上看。
 
 ### 这次发布是什么（以及不是什么）
 

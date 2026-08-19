@@ -56,6 +56,18 @@ SUPPORTED_PRECISIONS = frozenset((*PRECISION_PATHS, "test"))
 DETERMINISTIC_RESULT_KEYS = ("home", "relocation", "dist")
 RESULT_REQUIRED_KEYS = ("meta", "home", "dist")
 
+#: The states an archived decision may be in, for the v10 CHECK constraints.
+#:
+#: Spelled here rather than imported from `decision_packet` on purpose: this
+#: module is the storage floor and nothing product-shaped should be underneath
+#: it. The cost of that choice is that the two lists could drift, so
+#: `tests.test_decision_archive` asserts they are the same set -- which is a
+#: test that goes red on the drift, not a comment hoping nobody causes it.
+#: WHICH transitions are legal stays in `decision_packet._TRANSITIONS` and is
+#: not repeated here; the schema enforces only that the history is a chain and
+#: that `superseded` is final.
+DECISION_STATES = ("open", "chosen", "declined", "deferred", "superseded")
+
 
 class PersistenceError(RuntimeError):
     """Raised when a persistence contract cannot be satisfied."""
@@ -740,11 +752,14 @@ def _readonly_schema_preflight(conn: sqlite3.Connection) -> None:
     except sqlite3.Error as exc:
         raise PersistenceError("timeline database schema is unreadable") from exc
     current = versions[-1] if versions else 0
-    if current in (7, 8):
+    if current in (7, 8, 9, 10):
         expected_versions = list(range(1, current + 1))
-        complete = (PersistenceStore._schema_v7_complete(conn)
-                    if current == 7
-                    else PersistenceStore._schema_v8_complete(conn))
+        complete = {
+            7: PersistenceStore._schema_v7_complete,
+            8: PersistenceStore._schema_v8_complete,
+            9: PersistenceStore._schema_v9_complete,
+            10: PersistenceStore._schema_v10_complete,
+        }[current](conn)
         if (versions != expected_versions or user_version != current
                 or not complete):
             raise PersistenceError(
@@ -1916,6 +1931,376 @@ class PersistenceStore:
             """,
         ]
 
+    @staticmethod
+    def _v9_table_statements() -> list[str]:
+        """Phase 2's CheckIn ledger: a header and an immutable raw ledger.
+
+        `flow_line_v2` is deliberately absent. §2 of the attribution protocol
+        says the union join and aggregation "are recomputed on read", so the
+        derived rows are a function of these tables rather than a third table
+        that could drift out of agreement with them.
+        """
+        return [
+            """
+            CREATE TABLE checkins (
+              checkin_id TEXT PRIMARY KEY,
+              plan_id TEXT NOT NULL REFERENCES plans(id),
+              plan_version_id TEXT NOT NULL REFERENCES plan_versions(id),
+              forecast_period_start TEXT NOT NULL,
+              forecast_period_end TEXT NOT NULL,
+              portfolio_currency TEXT NOT NULL,
+              portfolio_currency_exponent INTEGER NOT NULL
+                  CHECK (portfolio_currency_exponent BETWEEN 0 AND 6),
+              portfolio_timezone TEXT NOT NULL,
+              opening_value_minor INTEGER NOT NULL,
+              closing_value_minor INTEGER NOT NULL,
+              starting_state_hash TEXT NOT NULL CHECK (length(starting_state_hash)=64),
+              household_scope_hash TEXT NOT NULL CHECK (length(household_scope_hash)=64),
+              model_vintage TEXT NOT NULL,
+              observation_state TEXT NOT NULL
+                  CHECK (observation_state IN
+                         ('observed','estimated','unknown','unavailable','declined')),
+              source_kind TEXT NOT NULL,
+              source_sha256 TEXT CHECK (source_sha256 IS NULL
+                                        OR length(source_sha256)=64),
+              created_at TEXT NOT NULL,
+              supersedes_checkin_id TEXT REFERENCES checkins(checkin_id),
+              CHECK (forecast_period_end > forecast_period_start)
+            )
+            """,
+            """
+            CREATE TABLE transaction_line_v2 (
+              transaction_id TEXT PRIMARY KEY,
+              checkin_id TEXT NOT NULL REFERENCES checkins(checkin_id),
+              side TEXT NOT NULL CHECK (side IN ('actual','expected')),
+              category TEXT NOT NULL
+                  CHECK (category IN ('net_contribution','income','spending',
+                                      'tax','fee','life_event')),
+              source_or_schedule_id TEXT NOT NULL,
+              source_event_id TEXT,
+              component_leg_id TEXT,
+              period_start TEXT NOT NULL,
+              period_end TEXT NOT NULL,
+              timing_bucket TEXT NOT NULL
+                  CHECK (timing_bucket IN ('exact','local_noon','unknown')),
+              amount_portfolio_minor INTEGER NOT NULL,
+              source_currency TEXT,
+              source_amount_minor INTEGER,
+              source_currency_exponent INTEGER,
+              fx_numerator INTEGER CHECK (fx_numerator IS NULL OR fx_numerator > 0),
+              fx_denominator INTEGER CHECK (fx_denominator IS NULL OR fx_denominator > 0),
+              fx_vintage TEXT,
+              occurred_at TEXT,
+              source_timezone TEXT,
+              date_only_value TEXT,
+              timing_state TEXT NOT NULL
+                  CHECK (timing_state IN ('exact','estimated_local_noon','unknown')),
+              observation_state TEXT NOT NULL
+                  CHECK (observation_state IN
+                         ('observed','estimated','unknown','unavailable','declined')),
+              is_internal_transfer INTEGER NOT NULL DEFAULT 0
+                  CHECK (is_internal_transfer IN (0,1)),
+              transfer_group_id TEXT,
+              absence_proof_id TEXT,
+              source_pointer TEXT,
+              source_sha256 TEXT CHECK (source_sha256 IS NULL
+                                        OR length(source_sha256)=64),
+              supersedes_transaction_id TEXT
+                  REFERENCES transaction_line_v2(transaction_id),
+              created_at TEXT NOT NULL,
+              -- §3: a flow with a weight needs an instant; only `unknown`
+              -- timing may omit it.
+              CHECK (timing_state = 'unknown' OR occurred_at IS NOT NULL),
+              -- §2: an internal transfer is paired, so it must name its group.
+              CHECK (is_internal_transfer = 0 OR transfer_group_id IS NOT NULL),
+              -- §2: FX is an exact rational or absent entirely.
+              CHECK ((fx_numerator IS NULL) = (fx_denominator IS NULL))
+            )
+            """,
+            "CREATE INDEX transaction_line_v2_by_checkin "
+            "ON transaction_line_v2(checkin_id, side)",
+            # The grain, as an index rather than a unique constraint: several
+            # raw rows legitimately share it (that is what a correction is).
+            "CREATE INDEX transaction_line_v2_grain ON transaction_line_v2("
+            "checkin_id, side, category, source_or_schedule_id, source_event_id, "
+            "component_leg_id, period_start, period_end, timing_bucket)",
+        ]
+
+    @staticmethod
+    def _v9_trigger_statements() -> list[str]:
+        """Raw ledger rows are immutable, and a CheckIn is append-only.
+
+        §2 calls `transaction_line_v2` "one immutable row per source
+        transaction leg and correction tip". A correction is a new row that
+        supersedes an old one; it is never an UPDATE of the old one.
+        """
+        return [
+            """
+            CREATE TRIGGER transaction_line_v2_no_update
+            BEFORE UPDATE ON transaction_line_v2
+            BEGIN SELECT RAISE(ABORT,'raw ledger rows are immutable; a correction is a new row'); END
+            """,
+            """
+            CREATE TRIGGER transaction_line_v2_no_delete
+            BEFORE DELETE ON transaction_line_v2
+            BEGIN SELECT RAISE(ABORT,'raw ledger rows are immutable; superseded rows are retained'); END
+            """,
+            """
+            CREATE TRIGGER transaction_line_v2_duplicate
+            BEFORE INSERT ON transaction_line_v2
+            WHEN EXISTS (SELECT 1 FROM transaction_line_v2
+                         WHERE transaction_id = NEW.transaction_id)
+            BEGIN SELECT RAISE(ABORT,'duplicate raw ledger transaction id'); END
+            """,
+            """
+            CREATE TRIGGER transaction_line_v2_supersede_same_checkin
+            BEFORE INSERT ON transaction_line_v2
+            WHEN NEW.supersedes_transaction_id IS NOT NULL AND NOT EXISTS (
+                 SELECT 1 FROM transaction_line_v2
+                 WHERE transaction_id = NEW.supersedes_transaction_id
+                   AND checkin_id = NEW.checkin_id AND side = NEW.side)
+            BEGIN SELECT RAISE(ABORT,'a correction must supersede a row in the same checkin side'); END
+            """,
+            """
+            CREATE TRIGGER checkins_no_update
+            BEFORE UPDATE ON checkins
+            BEGIN SELECT RAISE(ABORT,'a CheckIn is immutable; supersede it instead'); END
+            """,
+            """
+            CREATE TRIGGER checkins_no_delete
+            BEFORE DELETE ON checkins
+            BEGIN SELECT RAISE(ABORT,'a CheckIn is immutable; superseded CheckIns are retained'); END
+            """,
+            """
+            CREATE TRIGGER checkins_duplicate
+            BEFORE INSERT ON checkins
+            WHEN EXISTS (SELECT 1 FROM checkins WHERE checkin_id = NEW.checkin_id)
+            BEGIN SELECT RAISE(ABORT,'duplicate checkin id'); END
+            """,
+        ]
+
+    @staticmethod
+    def _v10_table_statements() -> list[str]:
+        """Phase 4's decision record: an immutable packet and its state ledger.
+
+        ROADMAP 4.0 Phase 4 opened with "the review view has nothing to
+        review": a DecisionPacket only ever lived in `app.py`'s in-memory job
+        table, and `set_choice_state` moved a dict that died with the process.
+        The user ruled on 2026-08-14 that packets land in the archive, choice
+        state included. This is that landing.
+
+        Two tables rather than one, for the reason `_v9_table_statements`
+        gives about `flow_line_v2`: the current state is a FUNCTION of the
+        transitions, so it is recomputed on read instead of being a column
+        that can disagree with the history beside it. A record that can say
+        `chosen` while its own history says otherwise is not a record.
+
+        The body is stored WITHOUT `choice_state` -- that field is the ledger
+        below, and holding it in both places is the same drift by another
+        route. `body_sha256` is over what is stored, so an archived packet can
+        be re-verified rather than trusted.
+
+        The precision CHECK repeats `decision_packet.build_packet`'s refusal
+        on purpose. Every packet today comes from that function, but the
+        archive is the durable side and should not be able to hold a Robust
+        claim computed at a precision that cannot carry one, whatever writes
+        it.
+        """
+        states = "', '".join(DECISION_STATES)
+        return [
+            f"""
+            CREATE TABLE decision_packets (
+              packet_id TEXT PRIMARY KEY,
+              plan_id TEXT NOT NULL REFERENCES plans(id),
+              plan_version_id TEXT NOT NULL REFERENCES plan_versions(id),
+              question_id TEXT NOT NULL,
+              question TEXT NOT NULL,
+              packet_format TEXT NOT NULL,
+              engine_version TEXT NOT NULL,
+              precision TEXT NOT NULL CHECK (precision IN ('standard','official')),
+              paths INTEGER NOT NULL CHECK (paths > 0),
+              seed INTEGER NOT NULL,
+              true_tax INTEGER NOT NULL CHECK (true_tax IN (0,1)),
+              review_months INTEGER NOT NULL CHECK (review_months > 0),
+              body_json TEXT NOT NULL,
+              body_sha256 TEXT NOT NULL CHECK (length(body_sha256)=64),
+              created_at TEXT NOT NULL
+            )
+            """,
+            f"""
+            CREATE TABLE decision_packet_events (
+              event_id TEXT PRIMARY KEY,
+              packet_id TEXT NOT NULL REFERENCES decision_packets(packet_id),
+              seq INTEGER NOT NULL CHECK (seq > 0),
+              from_state TEXT NOT NULL CHECK (from_state IN ('{states}')),
+              to_state TEXT NOT NULL CHECK (to_state IN ('{states}')),
+              reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+              at TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE (packet_id, seq),
+              -- A transition to the state it is already in records nothing.
+              CHECK (from_state <> to_state)
+            )
+            """,
+            "CREATE INDEX decision_packets_by_plan "
+            "ON decision_packets(plan_id, created_at)",
+            "CREATE INDEX decision_packet_events_by_packet "
+            "ON decision_packet_events(packet_id, seq)",
+        ]
+
+    @staticmethod
+    def _v10_trigger_statements() -> list[str]:
+        """A decision record cannot be rewritten, and its history cannot be forged.
+
+        The sequence guard is the one worth reading. Python's `_TRANSITIONS`
+        decides which moves are LEGAL; this decides that the history is a
+        chain -- an appended event must start from the state the packet is
+        actually in, and must take the next sequence number. Without it a
+        writer that skipped the seam could append `open -> chosen` to a packet
+        already declined, and every reader downstream would believe it.
+
+        `superseded` is final here as well as in Python, because that is the
+        one transition rule whose whole purpose is that the record cannot be
+        walked back later.
+        """
+        return [
+            """
+            CREATE TRIGGER decision_packets_no_update
+            BEFORE UPDATE ON decision_packets
+            BEGIN SELECT RAISE(ABORT,'an archived decision packet is immutable; a new decision is a new packet'); END
+            """,
+            """
+            CREATE TRIGGER decision_packets_no_delete
+            BEFORE DELETE ON decision_packets
+            BEGIN SELECT RAISE(ABORT,'archived decision packets are retained; supersede instead'); END
+            """,
+            """
+            CREATE TRIGGER decision_packets_duplicate
+            BEFORE INSERT ON decision_packets
+            WHEN EXISTS (SELECT 1 FROM decision_packets WHERE packet_id = NEW.packet_id)
+            BEGIN SELECT RAISE(ABORT,'duplicate decision packet id'); END
+            """,
+            """
+            CREATE TRIGGER decision_packet_events_no_update
+            BEFORE UPDATE ON decision_packet_events
+            BEGIN SELECT RAISE(ABORT,'a decision transition is immutable; changing your mind is a new transition'); END
+            """,
+            """
+            CREATE TRIGGER decision_packet_events_no_delete
+            BEFORE DELETE ON decision_packet_events
+            BEGIN SELECT RAISE(ABORT,'decision transitions are append-only'); END
+            """,
+            """
+            CREATE TRIGGER decision_packet_events_duplicate
+            BEFORE INSERT ON decision_packet_events
+            WHEN EXISTS (SELECT 1 FROM decision_packet_events WHERE event_id = NEW.event_id)
+            BEGIN SELECT RAISE(ABORT,'duplicate decision transition id'); END
+            """,
+            """
+            CREATE TRIGGER decision_packet_events_sequence
+            BEFORE INSERT ON decision_packet_events
+            WHEN NEW.from_state IS NOT COALESCE(
+                   (SELECT to_state FROM decision_packet_events
+                     WHERE packet_id = NEW.packet_id
+                     ORDER BY seq DESC LIMIT 1), 'open')
+              OR NEW.seq IS NOT (SELECT COUNT(*) + 1 FROM decision_packet_events
+                                  WHERE packet_id = NEW.packet_id)
+            BEGIN SELECT RAISE(ABORT,'decision transition does not continue this packet''s history'); END
+            """,
+            """
+            CREATE TRIGGER decision_packet_events_terminal
+            BEFORE INSERT ON decision_packet_events
+            WHEN EXISTS (SELECT 1 FROM decision_packet_events
+                         WHERE packet_id = NEW.packet_id AND to_state = 'superseded')
+            BEGIN SELECT RAISE(ABORT,'a superseded decision is final'); END
+            """,
+        ]
+
+    @classmethod
+    def _schema_v10_complete(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._schema_v9_complete(conn):
+            return False
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"decision_packets", "decision_packet_events"}.issubset(tables):
+            return False
+        triggers = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        return {
+            "decision_packets_no_update",
+            "decision_packets_no_delete",
+            "decision_packets_duplicate",
+            "decision_packet_events_no_update",
+            "decision_packet_events_no_delete",
+            "decision_packet_events_duplicate",
+            "decision_packet_events_sequence",
+            "decision_packet_events_terminal",
+        }.issubset(triggers)
+
+    @classmethod
+    def install_v10_schema(cls, conn: sqlite3.Connection, *,
+                           app_release_id: str) -> None:
+        """Add the Phase 4 decision record without rewriting v9 ledger tables."""
+        if cls._schema_v10_complete(conn):
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 10:
+                raise PersistenceError("v10 archive user_version mismatch")
+            return
+        if (int(conn.execute("PRAGMA user_version").fetchone()[0]) != 9
+                or not cls._schema_v9_complete(conn)):
+            raise PersistenceError("v9 archive is incomplete before v10 migration")
+        cls._validate_state_rows(conn)
+        for statement in cls._v10_table_statements():
+            conn.execute(statement)
+        for statement in cls._v10_trigger_statements():
+            conn.execute(statement)
+        now = utc_now()
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at, app_release_id) "
+            "VALUES (10, ?, ?)", (now, app_release_id))
+        conn.execute("PRAGMA user_version = 10")
+
+    @classmethod
+    def _schema_v9_complete(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._schema_v8_complete(conn):
+            return False
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"checkins", "transaction_line_v2"}.issubset(tables):
+            return False
+        triggers = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        return {
+            "transaction_line_v2_no_update",
+            "transaction_line_v2_no_delete",
+            "transaction_line_v2_duplicate",
+            "transaction_line_v2_supersede_same_checkin",
+            "checkins_no_update",
+            "checkins_no_delete",
+            "checkins_duplicate",
+        }.issubset(triggers)
+
+    @classmethod
+    def install_v9_schema(cls, conn: sqlite3.Connection, *,
+                          app_release_id: str) -> None:
+        """Add the Phase 2 CheckIn ledger without rewriting v8 business tables."""
+        if cls._schema_v9_complete(conn):
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 9:
+                raise PersistenceError("v9 archive user_version mismatch")
+            return
+        if (int(conn.execute("PRAGMA user_version").fetchone()[0]) != 8
+                or not cls._schema_v8_complete(conn)):
+            raise PersistenceError("v8 archive is incomplete before v9 migration")
+        cls._validate_state_rows(conn)
+        for statement in cls._v9_table_statements():
+            conn.execute(statement)
+        for statement in cls._v9_trigger_statements():
+            conn.execute(statement)
+        now = utc_now()
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at, app_release_id) "
+            "VALUES (9, ?, ?)", (now, app_release_id))
+        conn.execute("PRAGMA user_version = 9")
+
     @classmethod
     def _schema_v8_complete(cls, conn: sqlite3.Connection) -> bool:
         if not cls._schema_v7_complete(conn):
@@ -2463,16 +2848,25 @@ class PersistenceStore:
             versions = [int(row[0]) for row in rows]
             current = versions[-1] if versions else 0
             user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if current in (7, 8):
+            if current in (7, 8, 9, 10):
                 # A post-cutover archive carries the formal migration's
-                # additive v7/v8 schema.  It is accepted and served as it
-                # stands, never migrated back down: this store owns the v1-v6
-                # lineage, and the formal projection owns everything above it.
+                # additive v7/v8 schema, from Phase 2 the v9 CheckIn ledger,
+                # and from Phase 4 the v10 decision record.  It is accepted
+                # and served as it stands, never migrated back down: this
+                # store owns the v1-v6 lineage, and the formal projection owns
+                # everything above it.
                 # v7 was already accepted here; v8 was not, which meant a
                 # completed cutover produced an archive the app refused to
-                # open (M5 in PHASE_0_EXIT_CONTRACT.md).
-                complete = (self._schema_v7_complete(conn) if current == 7
-                            else self._schema_v8_complete(conn))
+                # open (M5 in PHASE_0_EXIT_CONTRACT.md). v9 and v10 are added
+                # to both this guard and the module-level one for the same
+                # reason -- accepting a version in one place and not the other
+                # is exactly how that defect happened.
+                complete = {
+                    7: self._schema_v7_complete,
+                    8: self._schema_v8_complete,
+                    9: self._schema_v9_complete,
+                    10: self._schema_v10_complete,
+                }[current](conn)
                 if (versions != list(range(1, current + 1))
                         or user_version != current or not complete):
                     raise PersistenceError(
@@ -3173,6 +3567,26 @@ class PersistenceStore:
         self._receipt_tokens.pop(attempt_id, None)
         return snapshot_id
 
+    def current_engine_build_id(self, engine_version: str, *,
+                                source_root: str,
+                                metadata: Optional[dict] = None) -> str:
+        """The build identity this runtime would record for a run started now.
+
+        Deliberately a thin wrapper over the same two calls
+        `_insert_engine_build` makes, so build identity keeps exactly one
+        definition. Unlike `runtime_build_id_for_attempt` this verifies
+        nothing against an archived row: the caller wants to know whether the
+        build has *moved*, and refusing when it has would answer the question
+        by raising it.
+        """
+        if not source_root:
+            raise PersistenceError("build identity requires source_root")
+        environment, manifest = build_environment(
+            source_root, {"app_release_id": self.app_release_id,
+                          **(metadata or {})})
+        return make_engine_build_id(engine_version, PROTOCOL_VERSION,
+                                    environment, manifest)
+
     def runtime_build_id_for_attempt(self, context: dict, *,
                                      source_root: str,
                                      metadata: Optional[dict] = None) -> str:
@@ -3372,13 +3786,35 @@ def replay_snapshot(store: PersistenceStore, snapshot_id: str,
     if runner_version is not None and runner_version != protocol["engine"]:
         raise PersistenceError(
             f"replay runner engine mismatch: {runner_version!r} != {protocol['engine']!r}")
-    result = runner(snapshot["resolved_input"], int(protocol["paths"]),
-                    int(protocol["seed"]), int(protocol["dist_paths"]))
+    # Replay the layout the snapshot RECORDED, not the one today's threshold
+    # would pick.
+    #
+    # `_run_chunked_stats` gives chunk i the seed `seed + i`, so the chunk
+    # layout decides the numbers: the same (n, seed) run sequentially and
+    # chunked produce different results, correctly. Measured on a marginal
+    # plan at 20,000 paths -- 0.955450 sequential against 0.955900 chunked,
+    # different deterministic digests.
+    #
+    # Before this, the layout came from `MP_THRESHOLD` at replay time, so
+    # moving that constant made every archived snapshot fail to replay. The
+    # mode is an input now, which is what lets the threshold change at all.
+    #
+    # A runner that does not accept it is called the old way rather than
+    # refused: `replay_snapshot` takes any callable, several tests pass
+    # deliberately-tampered ones, and breaking those would be this change
+    # deciding what a runner is allowed to be.
+    mode = protocol["execution_mode"]
+    try:
+        result = runner(snapshot["resolved_input"], int(protocol["paths"]),
+                        int(protocol["seed"]), int(protocol["dist_paths"]),
+                        execution_mode=mode)
+    except TypeError:
+        result = runner(snapshot["resolved_input"], int(protocol["paths"]),
+                        int(protocol["seed"]), int(protocol["dist_paths"]))
     actual_mode = result.get("mode", "sequential") if isinstance(result, dict) else None
-    if actual_mode != protocol["execution_mode"]:
+    if actual_mode != mode:
         raise PersistenceError(
-            f"replay execution mode mismatch: {actual_mode!r} != "
-            f"{protocol['execution_mode']!r}")
+            f"replay execution mode mismatch: {actual_mode!r} != {mode!r}")
     actual_hash = deterministic_result_sha256(result)
     if actual_hash != snapshot["deterministic_result_sha256"]:
         raise PersistenceError(

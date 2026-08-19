@@ -70,24 +70,133 @@ class State:
 # ============================================================
 # ACCOUNT STACK
 # ============================================================
-@dataclass
+#: The account fields the United States ships with. Kept as an explicit tuple
+#: rather than derived at import time: the engine must not depend on the
+#: server package to define its own data shape, and a country pack adds its
+#: accounts through `AccountStack.hold()` rather than by editing this.
+US_STACK_FIELDS = ("pretax_401k", "roth_ira", "hsa", "taxable")
+
+
 class AccountStack:
-    pretax_401k: float = 0
-    roth_ira: float = 0
-    hsa: float = 0
-    taxable: float = 0
+    """Balances by account, with the four US ones as named attributes.
+
+    Roadmap 7.0 Phase 2b (idea-bank S8). This used to be a four-field
+    dataclass whose `total` added those four names. A fifth account could be
+    attached and was then **silently excluded from net worth** -- the failure
+    class this project treats as worst, because the arithmetic still looks
+    complete.
+
+    So balances live in a mapping and the four US names are properties over
+    it. That keeps all 491 existing references working unchanged, which is
+    what makes this phase's bit-identity gate achievable at all, while `total`
+    sums what is actually held rather than what somebody typed out in 2026.
+
+    **An unknown account is refused, not absorbed.** `stack.uk_isa = 1` raises
+    rather than creating a balance nothing sums; a country pack declares its
+    accounts through `hold()`. Absorbing it silently is how the old shape
+    failed, and a generalisation that reproduces the original defect in a
+    roomier container has generalised nothing.
+    """
+
+    __slots__ = ("_balances",)
+
+    def __init__(self, pretax_401k: float = 0, roth_ira: float = 0,
+                 hsa: float = 0, taxable: float = 0, **extra):
+        object.__setattr__(self, "_balances", {
+            "pretax_401k": pretax_401k, "roth_ira": roth_ira,
+            "hsa": hsa, "taxable": taxable,
+        })
+        for key, value in extra.items():
+            self._balances[key] = value
+
+    # -- the four US names, as properties over the mapping -------------------
+    @property
+    def pretax_401k(self) -> float:
+        return self._balances["pretax_401k"]
+
+    @pretax_401k.setter
+    def pretax_401k(self, value) -> None:
+        self._balances["pretax_401k"] = value
+
+    @property
+    def roth_ira(self) -> float:
+        return self._balances["roth_ira"]
+
+    @roth_ira.setter
+    def roth_ira(self, value) -> None:
+        self._balances["roth_ira"] = value
+
+    @property
+    def hsa(self) -> float:
+        return self._balances["hsa"]
+
+    @hsa.setter
+    def hsa(self, value) -> None:
+        self._balances["hsa"] = value
+
+    @property
+    def taxable(self) -> float:
+        return self._balances["taxable"]
+
+    @taxable.setter
+    def taxable(self, value) -> None:
+        self._balances["taxable"] = value
+
+    # -- the general surface -------------------------------------------------
+    def hold(self, key: str, amount: float = 0.0) -> None:
+        """Start tracking an account this stack does not yet know about."""
+        self._balances.setdefault(str(key), amount)
+
+    def balances(self) -> dict:
+        return dict(self._balances)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in US_STACK_FIELDS:
+            object.__getattribute__(self, "_balances")[name] = value
+            return
+        if name == "_balances":
+            object.__setattr__(self, name, value)
+            return
+        raise AttributeError(
+            "%r is not an account this stack holds. Use hold(%r) first -- "
+            "attaching it silently would leave it out of `total`, which is "
+            "the defect this class was rewritten to remove." % (name, name))
 
     @property
     def total(self) -> float:
-        return self.pretax_401k + self.roth_ira + self.hsa + self.taxable
+        """Every balance held, not four names written down in 2026."""
+        return sum(self._balances.values())
+
+    def __eq__(self, other) -> bool:
+        return (isinstance(other, AccountStack)
+                and self._balances == other._balances)
+
+    def __repr__(self) -> str:                                # pragma: no cover
+        return "AccountStack(%s)" % ", ".join(
+            "%s=%r" % item for item in sorted(self._balances.items()))
+
+    def replace(self, **changes) -> "AccountStack":
+        """A `dataclasses.replace` equivalent, because callers use that.
+
+        `engine_adapter` calls `dataclasses.replace(init, taxable=...)` to fold
+        other liquid assets in. That call site names the FIELD but not the
+        class, so no search for "AccountStack" finds it -- the second
+        reflective helper this phase reached without touching its name. Both
+        are now handled at the shape rather than at each call site.
+        """
+        clone = self.copy()
+        for key, value in changes.items():
+            if key not in clone._balances:
+                raise AttributeError(
+                    "%r is not an account this stack holds" % (key,))
+            clone._balances[key] = value
+        return clone
 
     def copy(self) -> "AccountStack":
-        return AccountStack(
-            pretax_401k=self.pretax_401k,
-            roth_ira=self.roth_ira,
-            hsa=self.hsa,
-            taxable=self.taxable,
-        )
+        clone = AccountStack()
+        object.__getattribute__(clone, "_balances").clear()
+        object.__getattribute__(clone, "_balances").update(self._balances)
+        return clone
 
     def fmt(self) -> str:
         return (f"401k=${self.pretax_401k/1000:.0f}K  "
@@ -140,7 +249,59 @@ class ContributionStream:
 @dataclass
 class TaxParams:
     """US tax regime (DC resident)."""
-    drag_taxable: float = 0.0025
+    # The annual tax drag on the taxable bucket, as a return haircut. It is
+    # DERIVED from the three dividend fields below unless this is set, in which
+    # case the given number is used verbatim.
+    #
+    # `None` here does not mean "unmeasured" -- it means "not overridden".
+    # `__post_init__` below turns it into a number at construction, so no
+    # consumer ever sees `None`. It exists as an override because a saved plan
+    # stores its whole config, so every plan saved before the derivation landed
+    # carries an explicit 0.0025 and must keep reproducing exactly.
+    drag_taxable: Optional[float] = None
+    #: Set during construction when `drag_taxable` was supplied rather than
+    #: derived. Internal bookkeeping, deliberately kept out of
+    #: `default_config()` (see `_gd(..., drop=...)`): it is not an input, it
+    #: it records HOW the drag arrived, and the engine needs that to know
+    #: whether it may price the drag from brackets instead.
+    drag_taxable_explicit: bool = False
+
+    # --- what the drag is made of (Phase 3) ---
+    # It used to be one hardcoded 0.0025, which is a yield times a tax rate
+    # with both halves hidden. Separating them is the whole point: a retiree in
+    # the 0% LTCG bracket and a high earner holding the same fund do not pay
+    # the same drag, and neither could say so before.
+    #: Annual distribution yield of the taxable holdings.
+    dividend_yield: float = 0.017
+    #: Share of that yield taxed at qualified/LTCG rates; the rest is treated
+    #: as ordinary (interest, non-qualified distributions) and taxed at
+    #: `withdrawal_tax_traditional`.
+    dividend_qualified_fraction: float = 0.90
+    #: The qualified/LTCG rate applied to the qualified share on the flat path.
+    #: When the true-tax engine is on it derives the rate from real brackets
+    #: instead.
+    dividend_tax_rate: float = 0.15
+
+    def __post_init__(self):
+        """Resolve the drag here rather than in the adapter.
+
+        Every consumer in this lineage -- v8, v9.1, v9.6, v9.8 -- writes
+        `1 + r_eff - tax_us.drag_taxable` straight into a return, so a `None`
+        that survives construction is a TypeError somewhere far away. It was:
+        a preview path that builds `TaxParams()` directly, bypassing the
+        server's mapper, died with "unsupported operand type(s) for -: 'float'
+        and 'NoneType'". Resolving at construction means the mapper is a
+        convenience rather than a precondition, and no vendored engine file
+        has to learn about dividends.
+        """
+        if self.drag_taxable is None:
+            qualified = float(self.dividend_qualified_fraction)
+            rate = (qualified * float(self.dividend_tax_rate)
+                    + (1.0 - qualified) * float(self.withdrawal_tax_traditional))
+            self.drag_taxable = float(self.dividend_yield) * rate
+        else:
+            self.drag_taxable = float(self.drag_taxable)
+            self.drag_taxable_explicit = True
 
     # US WD tax rates (DC + federal)
     withdrawal_tax_taxable: float = 0.04

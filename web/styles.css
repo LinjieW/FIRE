@@ -725,6 +725,14 @@ svg rect[role="slider"]:focus-visible{outline:2px solid var(--tint);outline-offs
 .recap-row .rk{font-family:var(--font-text);font-size:12.5px;color:var(--label-2)}
 .recap-row .rv{font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--label);font-variant-numeric:tabular-nums;text-align:right}
 .recap-note{font-family:var(--font-text);font-size:11px;color:var(--label-3);line-height:1.6;margin-top:14px}
+/* The tier in words. A three-tier scale carried by hue alone is unreadable
+   to a colourblind user -- an accuracy problem, not an aesthetic one. */
+.concl-card .concl-tone{font-family:var(--font-text);font-size:10px;
+font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+color:var(--label-secondary);margin-bottom:4px}
+.verdict .v-tier{font-family:var(--font-text);font-size:11px;font-weight:700;
+letter-spacing:.08em;text-transform:uppercase;color:var(--label-secondary);
+margin-bottom:8px}
 .verdict .v-main{font-family:var(--font-display);font-size:clamp(20px,2.6vw,26px);font-weight:600;letter-spacing:-.015em;line-height:1.4;color:var(--label);text-wrap:pretty}
 .verdict .v-main::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--good);margin-right:12px;vertical-align:.08em}
 .verdict.warn .v-main::before{background:var(--warn)}
@@ -852,3 +860,63 @@ svg rect[role="slider"]:focus-visible{outline:2px solid var(--tint);outline-offs
   a{color:inherit!important;text-decoration:none!important}
   .ondemand.stale .chart{opacity:1!important}
 }
+
+/* ---- annual review (Phase 2) -------------------------------------------
+   The waterfall is a table, not an SVG, for one reason that is not stylistic:
+   a component the protocol reports as `unknown` must not render as a
+   zero-length bar. A zero-length bar reads as "nothing happened here" when it
+   means "we do not know", and §4 forbids showing an incomplete component as a
+   number. In a table the word can simply sit where the bar would be. */
+.rev-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:var(--space-3) var(--space-4);margin:4px 0 14px}
+.rev-field{display:flex;flex-direction:column;gap:5px;font-family:var(--font-text);font-size:12.5px;color:var(--label-2)}
+.rev-in{font-family:var(--font-num);font-size:14px;color:var(--label);background:var(--bg-inset);
+  border:1px solid var(--separator);border-radius:var(--radius-s);padding:8px 10px;width:100%}
+.rev-in:focus{outline:none;border-color:var(--tint);background:var(--bg-elevated)}
+.rev-table td,.rev-table th{vertical-align:middle}
+.rev-table .rev-cat{text-align:left;font-family:var(--font-text);color:var(--label);white-space:nowrap}
+.rev-table .rev-val{white-space:nowrap;min-width:96px}
+.rev-barcell{position:relative;width:55%;min-width:140px;height:22px;padding:0 12px!important}
+.rev-axis{position:absolute;left:50%;top:3px;bottom:3px;width:1px;background:var(--separator)}
+.rev-bar{position:absolute;top:6px;height:10px;border-radius:var(--radius-xs);display:block}
+.rev-bar.rev-left{right:50%;background:var(--bad)}
+.rev-bar.rev-right{left:50%;background:var(--good)}
+.rev-unknown{position:absolute;left:50%;top:2px;transform:translateX(-50%);
+  font-family:var(--font-text);font-size:11px;color:var(--label-3);letter-spacing:.02em}
+.rev-row-unknown .rev-val{color:var(--label-3)}
+#revStatus.bad{background:color-mix(in srgb,var(--bad) 12%,var(--bg-inset));color:var(--label)}
+@media (max-width:640px){.rev-barcell{display:none}}
+
+/* Phase 4 · the guardrail light. Three states plus "not enough history",
+   which is a fourth appearance deliberately: a green light on no evidence is
+   the most consequential place to make a reassuring-zero mistake. */
+.g-light { display:flex; flex-direction:column; gap:2px; padding:10px 12px;
+           border-radius:8px; margin-bottom:12px; border-left:3px solid; }
+.g-light b { font-size:14px; }
+.g-light .cap { font-size:11.5px; color:var(--ink-tertiary); }
+.g-ok      { border-color:var(--ok, #2e7d52);   background:color-mix(in srgb, var(--ok, #2e7d52) 7%, transparent); }
+.g-watch   { border-color:var(--warn, #b07d1a); background:color-mix(in srgb, var(--warn, #b07d1a) 8%, transparent); }
+.g-act     { border-color:var(--bad, #b3261e);  background:color-mix(in srgb, var(--bad, #b3261e) 8%, transparent); }
+.g-unknown { border-color:var(--ink-tertiary);  background:color-mix(in srgb, var(--ink-tertiary) 6%, transparent); }
+
+/* Roadmap 7.0 side slice: the help page's topic index. The 202 field
+   explanations already existed and were reachable only by hovering the exact
+   control they belong to; these style the entrance they now have. */
+.help-topic{border:1px solid var(--rule);border-radius:8px;margin:8px 0;
+  background:var(--surface,#fff)}
+.help-topic>summary{cursor:pointer;padding:11px 14px;font-size:14px;list-style:none}
+.help-topic>summary::-webkit-details-marker{display:none}
+.help-topic>summary::before{content:"\25B8  ";color:var(--ink-tertiary)}
+.help-topic[open]>summary::before{content:"\25BE  "}
+.help-blurb{padding:0 14px 6px;color:var(--ink-tertiary);font-size:12.5px;
+  line-height:1.7;margin:0}
+.help-entry{padding:9px 14px;border-top:1px solid var(--rule)}
+.help-entry-t{font-size:12.5px;font-weight:600;margin-bottom:3px}
+.help-entry-b{font-size:12px;color:var(--ink-secondary);line-height:1.75}
+.help-index{margin-bottom:18px}
+
+/* Grouped limitations on the conclusions page. The disclaimer and any
+   unfiled disclosure sit outside the groups and never collapse. */
+.lim-groups{margin-bottom:10px}
+.lim-groups .help-topic>summary{padding:9px 13px;font-size:13px}
+.lim-groups ul.lim{padding:2px 13px 10px;margin:0}
+.lim-always{margin-top:4px}

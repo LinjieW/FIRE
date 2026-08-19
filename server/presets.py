@@ -1,10 +1,10 @@
 """presets.py — starting configs served to the UI, all in the v9.8 grouped
-schema (see engine_v98.default_config). Every value is de-identified and fully
+schema (see engine_adapter.default_config). Every value is de-identified and fully
 editable in the form; these are only starting points.
 """
 import copy
 
-import engine_v98 as ENG
+import engine_adapter as ENG
 
 
 def _baseline() -> dict:

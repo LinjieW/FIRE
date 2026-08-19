@@ -43,7 +43,7 @@ ARCHIVE_SCHEMA_VERSION = 6
 # live archive is v8 the moment a cutover completes, so a backup taken after one
 # is a v8 backup, and refusing it left a cut-over install with no way to take a
 # package at all.
-SUPPORTED_SOURCE_SCHEMA_VERSIONS = ("6", "7", "8")
+SUPPORTED_SOURCE_SCHEMA_VERSIONS = ("6", "7", "8", "9", "10")
 ABSENT_LOGICAL_SHA256 = (
     "98d9795836406c36f08d4ebe3ef610815eb8786d86cd500b6249d9f3c8b91a42")
 EMPTY_TARGET_HASH = (
@@ -676,10 +676,15 @@ def validate_archive_connection(conn: sqlite3.Connection) -> dict:
         PERSISTENCE.PersistenceStore._validate_state_rows(conn)
         _validate_run_status_cardinality(conn)
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version in (7, 8):
+        # `>=` rather than the exact versions these were written against. A v9
+        # or v10 archive carries every v7/v8 table, so pinning the equality
+        # silently switched BOTH validations off for exactly the archives that
+        # had the most in them -- the evidence surface and the M2 lineage went
+        # unchecked from the day the check-in ledger shipped.
+        if version >= 7:
             _validate_v7_evidence(
-                conn, include_archive_resolution=(version == 8))
-        if version == 8:
+                conn, include_archive_resolution=(version >= 8))
+        if version >= 8:
             _validate_v8_lineage(conn)
         return {"schema_version": version, "database_state": "present"}
     except (PERSISTENCE.PersistenceError, sqlite3.Error, RecoveryError) as exc:
@@ -3762,33 +3767,95 @@ def _package_target_schema_version(source_schema_version: str) -> int:
     target is v7, which is what every existing v6/v7 package vector records.  A
     v8 source targets v8: its archive already carries the M2 lineage tables and
     the post-cutover read model, and staging it at v7 would drop both while
-    still reporting a successful restore.
+    still reporting a successful restore.  The same reasoning carries v9 (the
+    CheckIn ledger) and v10 (the decision record) to themselves.
     """
     if source_schema_version not in SUPPORTED_SOURCE_SCHEMA_VERSIONS:
         raise RecoveryError("manifest source schema is unsupported")
     return max(int(source_schema_version), TARGET_SCHEMA_VERSION)
 
 
+#: Each additive archive schema above v7, with the version it must find first
+#: and the installer that adds it.  One list rather than a chain of ifs: v9 was
+#: added to the archive and NOT to this path, so from the day the check-in
+#: ledger shipped, a user who recorded a check-in could no longer back up --
+#: `prepare_backup` refused with "manifest source schema is unsupported" and
+#: the recovery contract was simply gone for them.  Measured, not deduced, on
+#: 2026-08-15.  A table makes the next schema's omission a one-line change
+#: instead of a thing to remember.
+_ADDITIVE_STAGE_STEPS = (
+    (7, "install_v8_schema", "M2"),
+    (8, "install_v9_schema", "the check-in ledger"),
+    (9, "install_v10_schema", "the decision record"),
+)
+
+#: Highest archive schema a restore stage can be brought to.
+MAX_STAGE_SCHEMA_VERSION = 10
+
+
 def _migrate_stage_to_target(path: Path, target_schema_version: int) -> None:
     """Bring a restore stage up to the schema its package committed to.
 
-    Both steps are the same additive installers the formal migration uses, so a
+    Every step is the same additive installer the formal migration uses, so a
     restored archive is schema-identical to one the app produced itself.  The
-    only new rule is the refusal: a stage already newer than its declared target
-    is never opened, because the only way to make it match would be to discard
-    the surface the newer schema added.
+    only extra rule is the refusal: a stage already newer than its declared
+    target is never opened, because the only way to make it match would be to
+    discard the surface the newer schema added.
     """
-    if target_schema_version not in (7, 8):
+    if not (TARGET_SCHEMA_VERSION <= target_schema_version
+            <= MAX_STAGE_SCHEMA_VERSION):
         raise RecoveryError("restore target schema is unsupported")
     version = int(_archive_schema_version(path))
     if version > target_schema_version:
         raise RecoveryError("restore package would down-migrate the archive")
-    if target_schema_version == 7:
-        _migrate_stage_to_v7(path)
-        return
     if version < 7:
         _migrate_stage_to_v7(path)
-    _migrate_stage_to_v8(path)
+        version = int(_archive_schema_version(path))
+    for expected_before, installer, label in _ADDITIVE_STAGE_STEPS:
+        # Both halves matter. The first skips schemas beyond what this package
+        # committed to; the second skips ones the stage already carries -- a
+        # v9 stage must not be handed to the v8 installer, which would refuse
+        # it and abort a restore that had nothing wrong with it.
+        if target_schema_version > expected_before and version <= expected_before:
+            _migrate_stage_additive(path, expected_before, installer, label)
+            version = int(_archive_schema_version(path))
+
+
+def _migrate_stage_additive(path: Path, expected_before: int,
+                            installer: str, label: str) -> None:
+    """Install one additive schema in a disposable stage, or refuse.
+
+    The stage is validated before the migration and again after the commit, and
+    a stage that is neither at `expected_before` nor already at the version
+    being installed is refused rather than repaired -- the same discipline the
+    v7 and v8 steps had when each was written out longhand.
+    """
+    target = expected_before + 1
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("BEGIN IMMEDIATE")
+        user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if user_version == expected_before:
+            validate_archive_connection(conn)
+            getattr(PERSISTENCE.PersistenceStore, installer)(
+                conn, app_release_id="fire-modeling-3.0")
+        elif user_version != target:
+            raise RecoveryError(
+                "staged archive schema is unsupported for %s" % label)
+        conn.commit()
+        check = conn.execute("PRAGMA quick_check").fetchall()
+        if len(check) != 1 or str(check[0][0]).lower() != "ok":
+            raise RecoveryError(
+                "staged archive quick_check failed after v%d" % target)
+        validate_archive_connection(conn)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    _checkpoint_delete_journal(path)
 
 
 def _migrate_stage_to_v7(path: Path) -> None:
@@ -3822,30 +3889,12 @@ def _migrate_stage_to_v7(path: Path) -> None:
 
 
 def _migrate_stage_to_v8(path: Path) -> None:
-    """Install the additive M2 lineage schema in a disposable stage."""
-    conn = sqlite3.connect(str(path), isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("BEGIN IMMEDIATE")
-        user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if user_version == 7:
-            validate_archive_connection(conn)
-            PERSISTENCE.PersistenceStore.install_v8_schema(
-                conn, app_release_id="fire-modeling-3.0")
-        elif user_version != 8:
-            raise RecoveryError("staged archive schema is unsupported for M2")
-        conn.commit()
-        check = conn.execute("PRAGMA quick_check").fetchall()
-        if len(check) != 1 or str(check[0][0]).lower() != "ok":
-            raise RecoveryError("staged archive quick_check failed after v8")
-        validate_archive_connection(conn)
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    _checkpoint_delete_journal(path)
+    """Install the additive M2 lineage schema in a disposable stage.
+
+    Kept as a name because `formal_migration` calls it directly; the body is
+    the shared additive step so v8, v9 and v10 cannot drift apart.
+    """
+    _migrate_stage_additive(path, 7, "install_v8_schema", "M2")
 
 
 def _archive_schema_version(path: Path) -> str:

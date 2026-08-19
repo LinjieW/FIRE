@@ -74,6 +74,11 @@ def _safe_fragment(value: str) -> str:
 _RULE_PACK_COMPONENT_IDS = frozenset({
     "us_federal_tax", "medicare_irmaa", "contribution_limits",
     "aca_marketplace", "ssa_benefit_rules", "ssa_statement_import",
+    # Adding a component to the pack without adding it here makes every
+    # receipt fail closed and every report say "rule vintage unrecorded",
+    # which is the validator working -- it is a fixed set on purpose.
+    "us_state_archetypes",
+    "ssa_trust_fund",
 })
 _RULE_PACK_STATUSES = frozenset({"current", "stale", "review_required"})
 _RULE_PACK_COMPONENT_STATUSES = _RULE_PACK_STATUSES | {"not_used_at_run"}
@@ -96,6 +101,16 @@ _RULE_PACK_SOURCE_BY_COMPONENT = {
         "matches_pack_value", "user_or_legacy_override",
     }),
     "us_federal_tax": _RULE_PACK_SOURCES,
+    # Archetypes are read straight from the pack or not read at all: there is
+    # no user-supplied value for them to match or override, unlike the
+    # contribution limits or the ACA basis.
+    "us_state_archetypes": frozenset({"pack"}),
+    # Trustees Report projections are read from the pack or not read at all.
+    # There is deliberately no user-supplied depletion year to match or
+    # override: a plan that could edit the actuary's number would be able to
+    # produce a federal projection nobody published, wearing the pack's
+    # vintage.
+    "ssa_trust_fund": frozenset({"pack"}),
 }
 _RULE_PACK_EVALUATION_BASIS = "config_applicability_not_path_instrumentation"
 
@@ -249,7 +264,24 @@ TXT = {
         ab="方案 A/B 对比", metric="指标", honesty="方法与诚实度",
         inv="现金流对账", inv_note="到账的结构化收入年份按实际现金精确对账；无到账的成功年份保留每年不超过 $1 的历史提取容差（每次运行抽样 ≤400 条路径）",
         proto="运行协议", se="成功率抽样标准误",
-        se_note="仅反映蒙特卡洛抽样，不含输入假设本身的不确定性",
+        ci="成功率 95% 区间（精确）",
+        gr="护栏：触发时具体要调多少",
+        gr_none="这份计划没有设置护栏。",
+        gr_note="空白表示这个动作不是支出调整，<b>不是「不用花钱」</b>。五个动作里有三个改的是「什么时候退休」或「做什么工作」，给它们编一个美元数就是发明。",
+        meth="方法论附录",
+        meth_body=("<p><b>这份报告里的数字是怎么来的。</b>"
+                   "%(paths)s 条模拟路径，随机种子 %(seed)s，引擎 %(engine)s，执行模式 %(mode)s。"
+                   "同样的输入加同样的种子会得到逐位相同的结果 —— 这是可复算性，不是准确性。</p>"
+                   "<p><b>成功率是什么。</b>它是在上述假设下存活下来的路径比例，"
+                   "<b>不是关于现实世界的概率</b>。三分支口径：到达 FI 且全程偿付、"
+                   "或在退休前身故，都算成功；「没花完就去世」与「钱够花」是两个不同的问题。</p>"
+                   "<p><b>区间是什么。</b>上面的 95% 区间用 Clopper-Pearson 精确法算，"
+                   "只反映蒙特卡洛抽样。它不包含收益率、通胀、税制这些假设本身的不确定性 —— "
+                   "那部分不在任何区间里，而是在下面的局限清单里。</p>"
+                   "<p><b>这份文件不构成建议。</b>它是一次在明确假设下的测算。"
+                   "涉及税务、遗产、保险的具体决定请咨询专业人士。</p>"),
+        ci_none="这次运行没有给出区间——不是「区间为零」",
+        se_note="仅反映蒙特卡洛抽样，不含输入假设本身的不确定性。跑更多路径会让它变窄，但不会让任何一条假设更真。",
         concl="结论（由本次运行的数字生成）", lim="模型未捕捉 / 近似处理（局限声明）",
         footer="本报告为个人财务建模输出，属教育性质的情景分析，不构成投资、税务或法律建议。数字随输入而变；请以自身真实数据核对假设。",
         gen="生成于", engine="引擎", paths_w="路径", scen_w="情景",
@@ -268,7 +300,33 @@ TXT = {
         inv="Cash-accounting check",
         inv_note="Actual structured-income receipt years reconcile to delivered cash; successful no-receipt years retain at most $1/year of historical withdrawal tolerance (≤400 sampled paths/run)",
         proto="Protocol", se="Success-rate sampling SE",
-        se_note="Monte Carlo sampling only — not uncertainty in the assumptions themselves",
+        ci="Success rate, exact 95% interval",
+        gr="Guardrails: what a trigger actually costs",
+        gr_none="This plan has no guardrails configured.",
+        gr_note="A blank amount means the action is not a spending adjustment, <b>not that it is free</b>. Three of the five actions change when you retire or what work you do; putting a dollar figure on those would be inventing one.",
+        meth="Methodology appendix",
+        meth_body=("<p><b>How the numbers above were produced.</b> "
+                   "%(paths)s simulated paths, seed %(seed)s, engine %(engine)s, "
+                   "execution %(mode)s. The same inputs with the same seed "
+                   "reproduce these figures bit for bit — that is "
+                   "reproducibility, not accuracy.</p>"
+                   "<p><b>What the success rate is.</b> The fraction of paths "
+                   "that survived under the assumptions above. It is <b>not a "
+                   "probability about the world</b>. Three-branch definition: "
+                   "reaching FI and staying solvent, or dying before "
+                   "retirement, both count as success — and dying with money "
+                   "left is a different question from the money lasting.</p>"
+                   "<p><b>What the interval is.</b> The 95% interval above is "
+                   "exact (Clopper-Pearson) and reflects Monte Carlo sampling "
+                   "only. It does not contain uncertainty in the return, "
+                   "inflation or tax assumptions — that is not in any "
+                   "interval, it is in the limitations below.</p>"
+                   "<p><b>This document is not advice.</b> It is one "
+                   "calculation under stated assumptions. For decisions "
+                   "involving tax, estates or insurance, consult a "
+                   "professional.</p>"),
+        ci_none="this run reported no interval — which is not an interval of zero",
+        se_note="Monte Carlo sampling only — not uncertainty in the assumptions themselves. More paths narrow it and make no assumption truer.",
         concl="Conclusions (generated from this run)", lim="What the model does not capture (limitations)",
         footer="Personal financial modeling output — educational scenario analysis, not investment, tax, or legal advice. Numbers follow inputs; verify assumptions against your own data.",
         gen="Generated", engine="engine", paths_w="paths", scen_w="scenario(s)",
@@ -473,7 +531,26 @@ def build(results: dict, extra: dict = None) -> str:
     rule_pack = _rule_pack_block(meta, lang)
     n = int(pr.get("paths") or home.get("n_paths") or 0) or 1
     ls = home["lifetime_success"]
-    se_pp = math.sqrt(max(ls * (1 - ls), 1e-12) / n) * 100
+    # The interval from `meta.sampling_error`, exact, not a third copy of
+    # `sqrt(p(1-p)/n)` computed here.
+    #
+    # That formula was in this file, in the page, and nowhere else agreed
+    # upon. It gives ONE standard error -- about 68% -- under a label a reader
+    # takes for a confidence interval, so the honest 95% width was roughly
+    # double what this report printed. And the normal approximation is worst
+    # exactly where these plans live: near 1.0 it can reach above 100%, which
+    # is not a probability. This document is the one that goes to a spouse or
+    # an accountant, so an understated interval matters here most of all.
+    ci = ((meta.get("sampling_error") or {}).get("home") or {})
+    if ci.get("applicable"):
+        interval_pp = ci["half_width_pp"]
+        interval_label = T["ci"]
+    else:
+        # No invented fallback. A report that cannot state its interval says
+        # so; recomputing the approximation here to fill the box would put
+        # back the number this change exists to remove.
+        interval_pp = None
+        interval_label = T["ci"]
 
     verdict = ""
     if extra.get("verdict_html"):
@@ -520,6 +597,43 @@ def build(results: dict, extra: dict = None) -> str:
             for c in extra["conclusions"])
         concl = f"<h2>{T['concl']}</h2>{cards}"
 
+    # Guardrails, in dollars where dollars are the right unit. ROADMAP asks
+    # for "trigger it and cut $400 a month" because a percentage is a policy
+    # and a dollar figure is something a reader can picture.
+    guard = ""
+    rows = (extra.get("guardrail_dollars") or {}).get("policies") or []
+    if rows:
+        cells = "".join(
+            "<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+                _safe_fragment(str(row.get("action") or "")),
+                (("%s/mo" % _dollar(row["amount_monthly"]))
+                 if row.get("priced") else "—"),
+                _safe_fragment(str(row.get("basis")
+                                   or row.get("why_not_priced") or "")))
+            for row in rows)
+        guard = ("<h2>%s</h2><table><thead><tr><th>%s</th><th>%s</th>"
+                 "<th>%s</th></tr></thead><tbody>%s</tbody></table>"
+                 "<p class='note'>%s</p>"
+                 % (T["gr"], T["metric"], T["se"], T["basis"], cells,
+                    T["gr_note"]))
+
+    # ROADMAP: the report carries a methodology appendix. Everything in it is
+    # a fact about how the number above was produced, so a reader who was not
+    # in the room can tell what kind of claim they are holding.
+    # `.replace`, not `%`-formatting: the body contains literal percent signs
+    # ("the 95% interval"), and `%`-formatting turns those into format
+    # specifiers. The first version raised `not enough arguments for format
+    # string` from inside report generation -- a crash in the one document
+    # meant to be handed to somebody else.
+    meth_body = T["meth_body"]
+    for token, value in (("%(paths)s", "{:,}".format(n)),
+                         ("%(seed)s", str(pr.get("seed", "—"))),
+                         ("%(engine)s", str(pr.get("engine", "—"))),
+                         ("%(mode)s", str(pr.get("mode", "sequential")))):
+        meth_body = meth_body.replace(token, value)
+    methodology = "<h2>%s</h2><div class='note'>%s</div>" % (T["meth"],
+                                                             meth_body)
+
     lim = ""
     if extra.get("limitations"):
         lis = "".join(f"<li>{_safe_fragment(x)}</li>"
@@ -531,7 +645,7 @@ def build(results: dict, extra: dict = None) -> str:
 <div class="hon">
  <div><div class="k">{T['inv']}</div><div class="v">{home.get('invariant_max_rel_error', 0):.2e}</div><div class="s">{T['inv_note']}</div></div>
  <div><div class="k">{T['proto']}</div><div class="v" style="font-size:12px">{n:,} {T['paths_w']} · seed {pr.get('seed', '—')} · {pr.get('mode', 'sequential')}</div><div class="s">{T['engine']} {pr.get('engine', 'v9.8-rc')} · {pr.get('elapsed_s', '—')}s</div></div>
- <div><div class="k">{T['se']}</div><div class="v">±{se_pp:.2f}pp</div><div class="s">{T['se_note']}</div></div>
+ <div><div class="k">{interval_label}</div><div class="v">{('±%.2fpp' % interval_pp) if interval_pp is not None else '—'}</div><div class="s">{T['se_note'] if interval_pp is not None else T['ci_none']}</div></div>
 </div>"""
 
     return Template("""<!DOCTYPE html>
@@ -548,7 +662,9 @@ $pcts
 $ab
 $honesty
 $concl
+$guard
 $lim
+$methodology
 <div class="footer">$footer</div>
 </div></body></html>""").substitute(
         lang=lang, css=CSS, name=escape(str(meta.get("name", "FIRE"))), doc=T["doc"],
@@ -556,5 +672,7 @@ $lim
         npaths=f"{n:,}", paths_w=T["paths_w"],
         nscen=2 if reloc else 1, scen_w=T["scen_w"],
         rule_pack=rule_pack, verdict=verdict, scen=scen, ms=ms, pcts=pcts, ab=ab,
-        honesty=honesty, concl=concl, lim=lim, footer=T["footer"],
+        honesty=honesty, concl=concl, guard=guard, lim=lim,
+        methodology=methodology,
+        footer=T["footer"],
     )
