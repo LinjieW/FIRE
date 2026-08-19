@@ -225,15 +225,150 @@ class MedicalParams:
     aca_start_age: int = 35    # earliest age for ACA bridge (post-FIRE)
     medicare_age: int = 65     # Part A automatic, Part B opt-in
 
+    # 4.0 E6: opt in to rebuilding the US medical basket every retirement
+    # year.  Missing/False is the complete legacy path and consumes no new
+    # randomness; the adapter validates the enabled contract before a job.
+    annual_trajectory_enabled: bool = False
+
+    # 4.0 E6 third slice: the SECOND ACA quote, for the same county, plan and
+    # covered household as `premium_aca`, priced at the last pre-Medicare age.
+    # Its only job is to carry the age effect, which `cpi_delta_premium` does
+    # not: a 3:1 federally rated bridge roughly doubles in real terms between
+    # 50 and 64, and anchoring one quote flat across that span understates the
+    # most expensive stretch of an early retirement.
+    #
+    # `None` is the whole point of the type: it means the user never priced a
+    # second age, which is NOT the same as pricing it and finding no age
+    # effect.  A zero here would be the fake-zero this project keeps paying
+    # for, so the adapter refuses one by name rather than reading it as free
+    # coverage.  Absent => `aca_age_rating_factor` returns `None` and the
+    # premium keeps its pre-curve behaviour bit for bit.
+    premium_aca_age_end: Optional[float] = None
+
+    # 4.0 E6 fourth slice: the plan holder's share of the household medical
+    # basket, 0..1. Everything above stays an annual HOUSEHOLD TOTAL -- those
+    # fields are already defined that way to the user and one of them carries
+    # a confirmation checkbox, so redefining them per-person would invalidate
+    # an input the user has already agreed to while leaving it on screen
+    # looking unchanged. One ratio splits them instead.
+    #
+    # `None` means the household was never split. That is why the flat
+    # household basket remains the entire behaviour when it is absent -- not
+    # because a 50/50 split was assumed, and not because anyone measured the
+    # two halves and found them equal.
+    household_share_primary: Optional[float] = None
+
+    # 4.0 E6 fifth slice: one person's end-of-life medical spending, in today's
+    # dollars, charged ONCE PER DEATH (user ruling R3). A couple therefore
+    # produces two of them: counting only the last would drop the terminal care
+    # of whichever spouse dies first, and that bill lands precisely when the
+    # survivor still has decades of portfolio ahead of them.
+    #
+    # `None` means the user never supplied a figure. It is not zero, and the
+    # distinction is load-bearing twice over: an unpriced peak leaves the run
+    # exactly as it was, while a path that simply never died inside the horizon
+    # has a MEASURED zero peaks -- mortality ran and produced none. The engine
+    # reports those two as `None` and `0` respectively.
+    #
+    # Its real precondition is `mortality.enabled`, not the annual trajectory:
+    # with no death sampling this can never fire, and a control that cannot
+    # fire is indistinguishable from a working one. The adapter refuses that
+    # combination by name.
+    eol_peak_real: Optional[float] = None
+
 
 DEFAULT_MEDICAL = MedicalParams()
+
+
+@dataclass(frozen=True)
+class MedicalHousehold:
+    """Who this year's US medical basket is actually being bought for.
+
+    Runtime state rather than configuration: it is assembled per simulated
+    year from the household parameters and from who is still alive, so it is
+    deliberately NOT a config field and never reaches the attribution
+    inventory. `None` in place of one of these is the single-person path,
+    which is every caller that existed before this slice.
+    """
+    share_primary: float
+    spouse_age_offset: int
+    primary_alive: bool
+    spouse_alive: bool
+
+    def living_members(self, primary_age: int) -> tuple:
+        """``(age, share)`` for each member still alive.
+
+        An empty tuple is a real answer, not a missing one: with nobody left
+        alive nobody is buying coverage, and the basket is genuinely zero
+        rather than unmeasured.
+        """
+        members = []
+        if self.primary_alive:
+            members.append((primary_age, self.share_primary))
+        if self.spouse_alive:
+            members.append((primary_age + self.spouse_age_offset,
+                            1.0 - self.share_primary))
+        return tuple(members)
+
+
+def aca_age_rating_factor(year_in_simulation: int,
+                          age: int,
+                          med: MedicalParams) -> Optional[float]:
+    """The pure age effect between the user's two ACA quotes, or ``None``.
+
+    Both quotes are today's prices for the same county, plan and covered
+    household at two different ages, so their RATIO carries no inflation at
+    all.  That is what makes this composable: the factor multiplies the CPI
+    and `cpi_delta_premium` growth already applied downstream instead of
+    duplicating either of them.
+
+    The two anchor ages are not new inputs, because both already exist and
+    inventing a third way to say them is how two fields start disagreeing:
+
+      * the near anchor is ``year_in_simulation == 0``, which is what
+        `premium_aca` has always meant -- the quote at the plan's start age,
+        in today's dollars;
+      * the far anchor is ``medicare_age - 1``, the last year the bridge is
+        still being bought.  It follows the configured Medicare age rather
+        than a hard-coded 65, so a plan that sets 67 does not silently price
+        its last two bridge years off a 64-year-old's quote.
+
+    Shape: geometric, one fixed percentage a year (user ruling, 2026-08-13).
+    The federal default age curve is itself close to geometric across the
+    50-64 stretch that dominates an early-retirement bridge, so this is the
+    closest approximation available WITHOUT shipping that table -- and not
+    shipping it is the standing ruling, not an oversight.
+
+    Outside the two ages the user actually priced the factor is held flat
+    rather than extrapolated.  A curve past its own anchors is a number
+    nobody quoted, and this project's rule is that an unmeasured quantity
+    says so instead of producing a plausible one.
+    """
+    end = getattr(med, "premium_aca_age_end", None)
+    if end is None or not getattr(med, "annual_trajectory_enabled", False):
+        # No second quote, or the trajectory the curve rides on is off. Not a
+        # flat curve -- an unmeasured one. The adapter refuses the second of
+        # these combinations by name; reaching here means an internal caller.
+        return None
+    anchor_age = age - year_in_simulation
+    span = (med.medicare_age - 1) - anchor_age
+    if span <= 0 or med.premium_aca <= 0:
+        # Degenerate: the two quotes would be the same age, or there is no
+        # near anchor to take a ratio against. Refused at the HTTP boundary
+        # with a named field; this branch keeps internal fixtures honest
+        # rather than dividing by zero or inventing a factor.
+        return None
+    progress = min(1.0, max(0.0, (age - anchor_age) / span))
+    return (float(end) / float(med.premium_aca)) ** progress
 
 
 def compute_medical_components(year_in_simulation: int,
                                 age: int,
                                 in_retirement: bool,
                                 med: MedicalParams,
-                                cpi_cumulative: float) -> dict:
+                                cpi_cumulative: float,
+                                household: Optional[MedicalHousehold] = None,
+                                ) -> dict:
     """
     Given cumulative inflation factor (general CPI), compute the four expense
     components in nominal $ at this year.
@@ -242,6 +377,15 @@ def compute_medical_components(year_in_simulation: int,
     multiplying their Y0 nominal by (cpi_cumulative * (1 + delta)^year).
     This is exact when CPI compounds (slight bias on geometric vs arithmetic
     in the delta but tolerable).
+
+    `household` is the 4.0 E6 per-person path and defaults to `None`, which is
+    the single-anchor behaviour every caller before that slice relies on.
+    When supplied, the medical figures above are read as HOUSEHOLD TOTALS and
+    split across the members still alive: each buys their own stage of cover
+    at their own age, and the survivor keeps only their own share. The
+    non-medical figure is deliberately left whole -- the withdrawal rule and
+    the household's survivor spending fraction already govern it downstream,
+    and scaling it here as well would take that reduction twice.
     """
     delta_year_routine = (1 + med.cpi_delta_routine) ** year_in_simulation
     delta_year_premium = (1 + med.cpi_delta_premium) ** year_in_simulation
@@ -251,16 +395,64 @@ def compute_medical_components(year_in_simulation: int,
     routine = med.routine_y0 * cpi_cumulative * delta_year_routine
     oop = med.oop_y0 * cpi_cumulative * delta_year_oop
 
-    # Premium varies by life stage
-    if not in_retirement:
-        premium_base = med.premium_working
-    elif age >= med.medicare_age:
-        premium_base = med.premium_medicare
-    elif age >= med.aca_start_age:
-        premium_base = med.premium_aca
+    # ONE age factor for the whole household, and this is the design point
+    # rather than a shortcut. The user's quotes are HOUSEHOLD quotes, so they
+    # already price every member at their real age: the split ratio is where
+    # the age difference between two people lives, and the curve only carries
+    # the years that pass. Giving each member their own progress fraction
+    # across their own remaining span is the plausible-looking alternative,
+    # and it would put two people in one household on two different annual
+    # rates while double-counting the gap the ratio already holds.
+    #
+    # A first draft did give each member their own clamped span. A mutation
+    # that deleted the clamp survived, which is how it was found: this branch
+    # only runs while a member is BELOW the Medicare age, and therefore below
+    # the far quote by construction, so no input could ever reach the clamp.
+    # Removing it also put `aca_age_rating_factor` back on the engine's own
+    # path -- the draft had left the previous slice's tested function called
+    # by nothing but its tests.
+    age_factor = aca_age_rating_factor(year_in_simulation, age, med)
+
+    def member_premium_base(member_age: int) -> tuple:
+        """`(anchor in year-0 dollars, is this an ACA bridge premium)`.
+
+        The age effect rides on the ACA stage only, and deliberately on
+        nothing else. `premium_working` is employer-subsidized, so the
+        employee's share is not age-rated; Medicare Part B/D is priced by
+        income (IRMAA, already modelled separately) rather than by age.
+        Applying a bridge curve to either would invent an age effect where
+        the real one is absent.
+        """
+        if not in_retirement:
+            return med.premium_working, False
+        if member_age >= med.medicare_age:
+            return med.premium_medicare, False
+        # Below `aca_start_age` too: retired under 35 (early FIRE) still buys
+        # on the exchange, which is why that edge shares this branch.
+        base = med.premium_aca
+        if age_factor is not None:
+            base = base * age_factor
+        return base, True
+
+    if household is None:
+        premium_base, is_aca = member_premium_base(age)
+        aca_base = premium_base if is_aca else 0.0
     else:
-        # Edge case: retired but under 35 (early FIRE) — ACA still applies
-        premium_base = med.premium_aca
+        members = household.living_members(age)
+        # A living share of 0 is measured, not missing: nobody is left to
+        # cover. `routine`/`oop` follow the same share as the premiums so a
+        # survivor is not left paying two people's out-of-pocket costs, which
+        # is one of the two gaps this path exists to close.
+        living_share = sum(share for _, share in members)
+        routine *= living_share
+        oop *= living_share
+        premium_base = 0.0
+        aca_base = 0.0
+        for member_age, share in members:
+            base, is_aca = member_premium_base(member_age)
+            premium_base += share * base
+            if is_aca:
+                aca_base += share * base
 
     premium = premium_base * cpi_cumulative * delta_year_premium
 
@@ -269,6 +461,13 @@ def compute_medical_components(year_in_simulation: int,
         'routine': routine,
         'premium_full': premium,    # before ACA subsidy applied
         'oop': oop,
+        # The part of `premium_full` that is an exchange premium. Equal to
+        # `premium_full` on every single-anchor pre-Medicare year, so it
+        # changes nothing there -- but once one member is on Medicare while
+        # another is still on the bridge, the ACA subsidy has to be computed
+        # against THIS rather than against the whole basket, or the cap can
+        # spill a marketplace subsidy onto a Medicare premium.
+        'premium_aca_portion': aca_base * cpi_cumulative * delta_year_premium,
     }
 
 
@@ -435,6 +634,24 @@ class GuytonKlingerRule(WithdrawalRule):
     adjustment_pct: float = 0.10
     inflation_freeze_enabled: bool = True
 
+    #: How much of a triggered CUT actually happens. Roadmap 5.0 Phase 4
+    #: (idea-bank A14): every withdrawal rule in this field assumes a
+    #: guardrail breach produces the full nominal cut, and 4.0's own spending
+    #: fan measured what that assumption buys -- gk, vpw and abw all report
+    #: 100% success while spending varies 7.8x between good decades and bad.
+    #: The model assumes people cut that hard. This is the dial that says
+    #: they might not.
+    #:
+    #: 1.0 is the historical behaviour and the DEFAULT, so an unset plan is
+    #: bit-identical to every plan run before this existed. Below 1.0, the
+    #: unrealised part of the cut stays in the withdrawal and shows up as
+    #: risk, which is the point.
+    #:
+    #: Raises are NOT damped. Failing to take a raise you are entitled to is
+    #: a different behaviour with a different literature, and modelling both
+    #: with one number would be asserting they are the same.
+    cut_realisation: float = 1.0
+
     def compute_target_withdrawal(self, year_in_retirement, age,
                                    portfolio_nominal, inflation_this_year,
                                    cpi_cumulative, state):
@@ -465,7 +682,11 @@ class GuytonKlingerRule(WithdrawalRule):
         # Capital Preservation / Prosperity Rules
         current_implied_swr = tentative / max(portfolio_nominal, 1.0)
         if current_implied_swr > initial_swr * (1 + self.upper_guardrail):
-            tentative *= (1 - self.adjustment_pct)
+            # The cut, times how much of it actually happens. At the default
+            # of 1.0 this is exactly `tentative * (1 - adjustment_pct)` --
+            # the arithmetic, and the float, are unchanged for every existing
+            # plan.
+            tentative *= (1 - self.adjustment_pct * self.cut_realisation)
             triggers += 1
         elif current_implied_swr < initial_swr * (1 - self.lower_guardrail):
             tentative *= (1 + self.adjustment_pct)

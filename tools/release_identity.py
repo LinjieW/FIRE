@@ -67,6 +67,21 @@ ROOT_FILES: dict[str, str] = {
     "README.md": "documentation",
     "ROADMAP_3.0.md": "documentation",
     "ROADMAP_4.0.md": "documentation",
+    "ROADMAP_5.0.md": "documentation",
+    "ROADMAP_6.0.md": "documentation",
+    "ROADMAP_7.0.md": "documentation",
+    # The naming migration contract. Documentation: it constrains what a
+    # rename may touch (and, as importantly, what it may not -- the
+    # historical records) and ships nothing into the bundle.
+    "NAMING_MIGRATION_CONTRACT.md": "documentation",
+    # The dependency charter. Documentation: it records when a
+    # dependency must be revisited and by what objective criterion,
+    # and ships nothing into the bundle.
+    "DEPENDENCY_CHARTER.md": "documentation",
+    # The annual pack-curation workflow. Documentation, not runtime: it
+    # constrains what a person does once a year, and ships nothing into
+    # the bundle.
+    "PACK_OPERATIONS.md": "documentation",
     "WORKSTREAMS.md": "documentation",
     ".gitignore": "repository_contract",
     "build-app.sh": "build_contract",
@@ -113,6 +128,28 @@ RUNTIME_TOOL_FILES = {
 # bundled-JS changes do that.
 RELEASE_ONLY_TOOL_FILES = {
     "tools/promote.py": "release_orchestrator",
+    # Reads the build's artefacts to author release notes and ships nothing
+    # into the bundle, so it is release-only rather than part of the runtime
+    # identity. Classified here because the manifest builder refuses an
+    # unclassified file under tools/ outright -- which is how adding this one
+    # turned the gate red rather than silently widening what "the runtime" is.
+    "tools/release_notes.py": "release_notes_generator",
+    # Watches an installed bundle's sockets from outside the process and
+    # reports every address it held. Release-only: it verifies a bundle, it is
+    # not shipped inside one. Registered here deliberately rather than after
+    # the gate caught it -- twice today a new file under a classified tree
+    # turned the gate red because I added it and did not say so.
+    "tools/verify_zero_requests.py": "zero_request_verifier",
+    # The no-app recovery recipe. Release-only evidence: it verifies that an
+    # archive outlives the bundle, and it is deliberately runnable WITHOUT the
+    # bundle -- so it must never become part of the runtime identity.
+    "tools/recover_without_app.py": "data_escape_hatch",
+    # Prints where the project is by reading git, the installed bundle's own
+    # identity file and the test tree. It ships nothing and is read by nobody
+    # at runtime -- it exists because every prose state paragraph in this
+    # repository has gone stale at least once, and one of them told the other
+    # owner the project was at Phase 0 eleven days after Phase 0 shipped.
+    "tools/project_status.py": "session_status_reporter",
 }
 
 # When each hand-run observation in `build_package`'s `test_evidence` block was
@@ -170,6 +207,27 @@ EXCLUDED_TOP_LEVEL: dict[str, str] = {
     "HANDOFF_CLAUDE_PHASE0_REPAIR_2026-07-25.md": "session handoff instructions, not application source",
     "HANDOFF_GPT_2026-07-25.md": "session handoff instructions, not application source",
     "WORKSTREAM_LOG.md": "operational log, not application source",
+    # Both landed in the governance commits 492575c and 20dd2a3 without being
+    # classified either way, so this gate had been failing on the real tree ever
+    # since — exactly the "sixteen entries had accumulated" failure the comment
+    # above describes, recurring. Excluded rather than measured, matching the
+    # handoff and log entries they sit beside: the baton and the release
+    # procedure are how the work is coordinated, not what the app is built from.
+    "COLLABORATION_HANDOFF.md": "relay baton and handoff protocol, not application source",
+    "OPEN_ITEMS.md": "the single register of open items, replacing four "
+                     "scattered places a handoff had to reconstruct them from",
+    "PROCESS.md": "the definition of done: what a slice must satisfy before it "
+                  "is finished, including which documents must be updated. "
+                  "Read at the start of every session by both owners",
+    "CLAUDE.md": "session entry point for Claude, auto-loaded; a signpost to "
+                 "PROCESS.md / LESSONS.md / the baton, not a knowledge base",
+    "LESSONS.md": "the mistake book: failure patterns indexed by what you are "
+                  "about to do, read by both owners before writing code. "
+                  "Documentation, not application source",
+    "CODEX_HANDOFF_2026-08-12.md": "one-off handoff package for the next "
+                                   "owner, written against the baton's §6 "
+                                   "template. Not a baton and not source",
+    "RELEASE_PLAYBOOK.md": "internal release procedure, not application source",
     "IDEA_BANK.md": "forward idea material outside this release scope",
     "IDEA_BANK_PLAYBOOK.md": "forward idea material outside this release scope",
     "IDEA_ARCHIVE_2026-07": "forward idea material outside this release scope",
@@ -309,14 +367,14 @@ DATA_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "engine.v98_defaults_and_rules",
-        "source_files": ["server/engine_v98.py"],
+        "source_files": ["server/engine_adapter.py"],
         "symbol": "ENGINE_VERSION, default_config, adapter defaults",
         "scope": "The v9.8 runtime's default configuration and adapter rules that connect the web payload to the engine.",
         "vintage": "Code-reviewed 2026-07; individual parameters may have older documented vintages",
         "units": "Mixed model units; see the config schema and per-field disclosures",
         "provenance": "Product code and its inline calibration notes",
         "transformations": "Server-side additive defaults are applied before the engine run; this manifest records the container hash, not a field-level reimplementation.",
-        "applies_to": ["server.engine_v98", "server.persistence.replay"],
+        "applies_to": ["server.engine_adapter", "server.persistence.replay"],
         "status": "runtime_rule_set",
         "limitation": "This is an inventory of embedded assumptions, not proof that every parameter is current, externally audited, or appropriate for a particular household.",
     },

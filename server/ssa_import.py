@@ -69,7 +69,11 @@ def parse_ssa_xml(text: str) -> dict:
     except ET.ParseError:
         return {"error": "not valid XML"}
 
-    earnings, birth_year = {}, None
+    # Counted, not just skipped. A statement with three unparseable rows used
+    # to come back reporting fewer earnings years with no way to tell that from
+    # a career that genuinely had fewer -- and missing years lower the benefit,
+    # so the plan reads worse for a reason the user cannot see.
+    earnings, birth_year, skipped = {}, None, 0
     for el in root.iter():
         name = _local(el.tag)
         if name == "earnings":
@@ -83,6 +87,7 @@ def parse_ssa_xml(text: str) -> dict:
                 try:
                     y, v = int(yr), float(str(fica).replace(",", ""))
                 except ValueError:
+                    skipped += 1
                     continue
                 if (math.isfinite(v) and 1900 <= y <= 2200
                         and 0 <= v <= 1_000_000_000):
@@ -94,7 +99,8 @@ def parse_ssa_xml(text: str) -> dict:
     if not earnings:
         return {"error": "no earnings records found — download the XML "
                          "statement from ssa.gov and retry"}
-    return {"earnings": earnings, "birth_year": birth_year}
+    return {"earnings": earnings, "birth_year": birth_year,
+            "rows_skipped": skipped}
 
 
 def bend_points(eligibility_year: int) -> tuple:
@@ -197,4 +203,8 @@ def import_statement(text: str, birth_year_fallback: int = None,
         return {"error": "statement contains invalid numeric values"}
     out["birth_year"] = birth_year
     out["rule_pack"] = rule_pack_for_ssa_import(as_of=evaluated_on)
+    # Carried through so the page can say it. A dropped row lowers the benefit,
+    # and "35 years counted" cannot be told apart from "38 years, three of them
+    # unreadable" unless the loss is reported alongside the result.
+    out["rows_skipped"] = p.get("rows_skipped", 0)
     return out

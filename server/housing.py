@@ -115,18 +115,53 @@ def _purchase_context(cfg: dict):
     return h, p_age, price_at_buy, tuple(sched)
 
 
-def _carrying_cost_real(h: dict, age: int, start_age: int) -> float:
-    """Real tax/maintenance/insurance cost for one post-purchase year."""
+def _carrying_cost_real(h: dict, age: int, start_age: int,
+                        downsize: dict = None) -> float:
+    """Real tax/maintenance/insurance cost for one post-purchase year.
+
+    Roadmap 6.0 Phase 4 added `downsize`. Before that this function read one
+    price out of one housing block and could not express two houses, which was
+    measured before the phase was written rather than discovered during it: a
+    plan that moves to a smaller place keeps paying the big house's tax and
+    maintenance forever, which is a silent overstatement of cost for exactly
+    the users most likely to downsize.
+
+    `downsize` is None for every plan that has not asked, and then this
+    computes what it always computed.
+    """
     years_from_start = int(age) - int(start_age)
     hv = float(h["price"]) * (1 + float(h["appreciation_real"])) ** years_from_start
+    if downsize and int(age) >= int(downsize["age"]):
+        # After the move the carrying base is the NEW home, appreciating from
+        # the move rather than from the plan's start: it was bought then.
+        years_since_move = int(age) - int(downsize["age"])
+        hv = (float(downsize["price"])
+              * (1 + float(h["appreciation_real"])) ** years_since_move)
     return (hv * (float(h["tax_pct"]) + float(h["maint_pct"]))
             + float(h["insurance_annual"]))
+
+
+def downsize_spec(cfg: dict):
+    """The move, or None. Read from `other_assets`, never a second input box.
+
+    Phase 3 established the rule the hard way: a home value typed in two
+    places can disagree, and this repository has paid for one-fact-in-two-lists
+    three times in a day. So the age comes from the sale the user already
+    configured, and the new home's price is the one new number the move needs.
+    """
+    oa = cfg.get("other_assets") or {}
+    if not isinstance(oa, dict) or not oa.get("downsize_enabled"):
+        return None
+    price = float(oa.get("downsize_new_price_real") or 0.0)
+    if price <= 0:
+        return None
+    return {"age": int(oa.get("sell_home_age", 65)), "price": price}
 
 
 def compile_housing_mortgage(cfg: dict):
     """Compile only the internal mortgage schedule for realized-CPI MC.
 
-    The returned mapping is an adapter payload; ``server.engine_v98`` turns it
+    The returned mapping is an adapter payload; ``server.engine_adapter`` turns it
     into a frozen/picklable engine spec. It is deliberately not part of the
     user's JSON/config or any public endpoint response. The carrying rows travel
     with the mortgage so the engine can merge the two housing-owned positive
@@ -138,8 +173,9 @@ def compile_housing_mortgage(cfg: dict):
     st = cfg.get("state") or {}
     start_age = int(st.get("start_age", 30))
     horizon = int(st.get("accum_years", 25)) + int(st.get("retire_horizon", 40))
+    _down = downsize_spec(cfg)
     carrying = tuple(
-        (age, _carrying_cost_real(h, age, start_age))
+        (age, _carrying_cost_real(h, age, start_age, _down))
         for age in range(max(start_age + 1, int(p_age) + 1),
                          start_age + horizon + 1)
     )
@@ -183,7 +219,8 @@ def compile_housing_events(cfg: dict, *, include_mortgage: bool = True,
             ev.append((age, price_at_buy * (float(h["down_pct"])
                                             + float(h["closing_pct"]))))
         else:
-            carry = _carrying_cost_real(h, age, start_age)
+            carry = _carrying_cost_real(h, age, start_age,
+                                        downsize_spec(cfg))
             k = age - p_age                              # years since purchase
             mortgage = 0.0
             if include_mortgage and k <= len(sched):

@@ -214,6 +214,14 @@ def execute_roth_conversion(
       - desired annual amount (inflation-indexed via IRS growth)
       - available pretax_401k
       - 4× available taxable (heuristic to keep buffer for living expenses)
+
+    Two numbers here are HEURISTICS, not calibrated policy -- ruled 2026-08-16
+    after the question sat open since the optimizer audit. The 4× buffer and
+    the flat `federal_tax_rate` on the conversion were both picked to be
+    reasonable, not derived from anything, and neither has been checked
+    against what a real conversion costs. They are disclosed as such on the
+    panel. Changing them is allowed and does not need a ruling; what is not
+    allowed is presenting them as though they were measured.
     """
     if not params.enabled:
         return accounts, seasoning_queue, 0.0

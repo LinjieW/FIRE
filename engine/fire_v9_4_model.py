@@ -98,12 +98,31 @@ EARLY_WD_PENALTY_AGE = US_FEDERAL_RULES["early_withdrawal_age"]
 EARLY_WD_PENALTY_RATE = US_FEDERAL_RULES["early_withdrawal_rate"]
 
 
+def _schema_order(withdrawal_order=None):
+    """The declared account types, in the order this plan draws them.
+
+    Imported lazily so the engine keeps no import-time dependency on the
+    server package -- the engine is the part with no third-party surface but
+    numpy, and Phase 2 does not spend that.
+    """
+    import os
+    import sys
+    server = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "server")
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    import account_schema as SCHEMA
+    return [SCHEMA.BY_KEY[key]
+            for key in SCHEMA.resolve_order(withdrawal_order)]
+
+
 def withdraw_with_seasoning_v94(
     accounts: AccountStack,
     needed_after_tax: float,
     tax,
     roth_locked_amount: float,
     current_age: float,
+    withdrawal_order: "Optional[list]" = None,
 ) -> tuple[AccountStack, float, float]:
     """
     v9.4 patched withdrawal. Adds 10% IRS early withdrawal penalty when
@@ -115,44 +134,51 @@ def withdraw_with_seasoning_v94(
     remaining = needed_after_tax
     total_penalty = 0.0
 
-    # Taxable
-    if remaining > 0 and accounts.taxable > 0:
-        rate = tax.withdrawal_tax_taxable
-        gross_needed = remaining / max(1 - rate, 0.001)
-        gross_take = min(gross_needed, accounts.taxable)
-        accounts.taxable -= gross_take
-        remaining -= gross_take * (1 - rate)
+    # Roadmap 7.0 Phase 2: the order and the per-account rules come from the
+    # declaration in `server/account_schema.py` rather than from four blocks
+    # written out by hand. The six dimensions all live here, which is why this
+    # function was chosen as the first thing to read the schema: if a
+    # declaration can drive this, it can drive the engine.
+    #
+    # `withdrawal_order` absent means the declared default, which is the order
+    # this function has used across four engine generations. That is what
+    # keeps this change bit-identical for every existing plan.
+    for account in _schema_order(withdrawal_order):
+        if remaining <= 0:
+            break
+        balance = getattr(accounts, account.field, 0.0)
+        if balance <= 0:
+            continue
 
-    # Pre-tax 401k — apply early withdrawal penalty if pre-59.5
-    if remaining > 0 and accounts.pretax_401k > 0:
-        base_rate = tax.withdrawal_tax_traditional
-        if current_age < EARLY_WD_PENALTY_AGE:
-            effective_rate = base_rate + EARLY_WD_PENALTY_RATE
+        # Seasoning: money that exists but cannot be touched yet. Subtracted
+        # from what is reachable rather than from the balance, because the
+        # locked part is still the owner's -- it is access that is limited.
+        if account.seasoned:
+            balance = max(0.0, balance - roth_locked_amount)
+            if balance <= 0:
+                continue
+
+        rate = 0.0
+        if account.withdrawal_rate is not None:
+            rate = getattr(tax, account.withdrawal_rate, 0.0)
+        penalised = (account.early_penalty_age is not None
+                     and current_age < account.early_penalty_age)
+        if penalised:
+            rate += account.early_penalty_rate
+
+        if rate:
+            gross_take = min(remaining / max(1 - rate, 0.001), balance)
         else:
-            effective_rate = base_rate
-        gross_needed = remaining / max(1 - effective_rate, 0.001)
-        gross_take = min(gross_needed, accounts.pretax_401k)
-        accounts.pretax_401k -= gross_take
-        net_received = gross_take * (1 - effective_rate)
-        remaining -= net_received
-        # Track the penalty portion separately for diagnostics
-        if current_age < EARLY_WD_PENALTY_AGE:
-            total_penalty += gross_take * EARLY_WD_PENALTY_RATE
-
-    # HSA
-    if remaining > 0 and accounts.hsa > 0:
-        rate = tax.withdrawal_tax_hsa
-        gross_take = min(remaining / max(1 - rate, 0.001), accounts.hsa)
-        accounts.hsa -= gross_take
+            # No rate at all: the gross amount IS the net one. Kept as a
+            # separate branch rather than folded into the arithmetic above,
+            # because `1 - 0.0` is a multiplication the engine never performed
+            # on this path and identity here is the whole gate.
+            gross_take = min(remaining, balance)
+        setattr(accounts, account.field,
+                getattr(accounts, account.field) - gross_take)
         remaining -= gross_take * (1 - rate)
-
-    # Roth (only unlocked portion)
-    if remaining > 0:
-        accessible_roth = max(0.0, accounts.roth_ira - roth_locked_amount)
-        if accessible_roth > 0:
-            gross_take = min(remaining, accessible_roth)
-            accounts.roth_ira -= gross_take
-            remaining -= gross_take
+        if penalised:
+            total_penalty += gross_take * account.early_penalty_rate
 
     actual = needed_after_tax - max(remaining, 0.0)
     return accounts, actual, total_penalty

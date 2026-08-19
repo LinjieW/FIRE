@@ -209,13 +209,14 @@ run_build_arch "$VENV/bin/pyinstaller" --noconfirm --clean --windowed \
   --osx-bundle-identifier com.local.fire-modeling \
   --distpath "$CANDIDATE_DIST" --workpath "$BUILD/work" --specpath "$BUILD" \
   --add-data "$PROJ/web:web" \
+  --add-data "$PROJ/engine/rule_pack_us_offline.json:." \
   --add-data "$FROZEN_IDENTITY:release_identity" \
   --paths "$PROJ/server" --paths "$PROJ/engine" \
   --collect-all numpy \
   --collect-all webview --hidden-import webview.platforms.cocoa \
   --exclude-module numpy.f2py --exclude-module numpy.tests \
   --exclude-module numpy.distutils \
-  --hidden-import app --hidden-import engine_v98 --hidden-import presets --hidden-import build_report \
+  --hidden-import app --hidden-import engine_adapter --hidden-import presets --hidden-import build_report \
   --hidden-import fire_v6_model --hidden-import fire_v7_model --hidden-import fire_v8_model \
   --hidden-import fire_v9_1_model --hidden-import fire_v9_2_model --hidden-import fire_v9_3_model \
   --hidden-import fire_v9_4_model --hidden-import fire_v9_5_model --hidden-import fire_v9_6_model \

@@ -95,6 +95,12 @@ _HOUSEHOLD = None
 # manager (same process-wide-global pattern as _HOUSEHOLD; runs are serialized
 # by the adapter's engine lock).
 _LAYOFF = None
+#: Roadmap 6.0 (A13). A per-path wage factor, set by the caller before an
+#: accumulation run and cleared after -- the same module-global idiom
+#: `_LAYOFF` above already uses, chosen over threading a parameter through
+#: four call layers for one optional feature. `None` means every plan that has
+#: not asked for a stochastic career, and then nothing here changes.
+_WAGE_FACTORS = None
 
 
 @dataclass
@@ -105,6 +111,17 @@ class LayoffParams:
     bad_year_multiplier: float = 3.0
     p_cap: float = 0.50
     gap_months: float = 4.0
+    #: Roadmap 6.0 (A13). Extra months of search per year of age past
+    #: `decay_from_age`. Zero by default: the flat gap is what every existing
+    #: plan computed, and this must not change one of them silently.
+    #:
+    #: Deliberately not defaulted from any labour-market study. Re-employment
+    #: hazard by age is measured, but it varies enormously by occupation and
+    #: by cycle, and picking one number would be this app asserting a fact
+    #: about your industry that it does not have.
+    gap_months_per_year_of_age: float = 0.0
+    decay_from_age: int = 45
+    max_gap_months: float = 12.0
     # runtime: independent career stream (seed + 7_000_000, v2 convention),
     # consumed sequentially across a run's paths; set by the adapter.
     rng: object = None
@@ -228,6 +245,7 @@ def compute_contributions_for_year(
     primary_alive: bool = True,
     spouse_alive: bool = True,
     pool_household_expenses: bool = False,
+    wage_factor: float = 1.0,
 ) -> AccountStack:
     """
     Compute account-level contributions for a given year, accounting for
@@ -253,6 +271,7 @@ def compute_contributions_for_year(
             promo_params.base_salary_post
             * (1 + promo_params.base_growth_post) ** years_since_promo
             * (1 + contrib_params.salary_growth_pre) ** (promotion_year - 1)
+            * float(wage_factor)
             # ^ the today's $170K is also inflated to promotion year via salary growth
             # (bracket creep proxy — could decouple if needed)
         )
@@ -261,7 +280,13 @@ def compute_contributions_for_year(
         marginal_tax = promo_params.marginal_tax_post
     else:
         # Pre-promotion: scale current values at salary growth
-        sal_factor = (1 + contrib_params.salary_growth_pre) ** (year - 1)
+        # `wage_factor` is 1.0 for every plan that has not asked for a
+        # stochastic career (Roadmap 6.0, A13), so this is the same curve it
+        # always was. When a plan does ask, the factor carries that path's
+        # permanent and transitory shocks -- kept multiplicative so the two
+        # compose without either needing to know about the other.
+        sal_factor = ((1 + contrib_params.salary_growth_pre) ** (year - 1)
+                      * float(wage_factor))
         base_salary_now = contrib_params.base_salary_pre * sal_factor
         bonus_now = contrib_params.bonus_pre * sal_factor
         ot_now = contrib_params.ot_income_pre * sal_factor
@@ -392,6 +417,13 @@ def project_stratified_v8(
     path = [{
         'age': state.start_age, 'accounts': accounts.copy(),
         'expenses': expenses, 'total': accounts.total,
+        # No contributions have been made at the opening step.
+        'contributions_nominal': 0.0,
+        # The cumulative CPI these years were grown by. It was always here as
+        # a local; emitting it is what lets a reader deflate an accumulation
+        # year back into today's money. Without it every accumulation year is
+        # correctly but uselessly reported as unmeasured.
+        'cpi': cumulative_inf_factor,
     }]
 
     for i, (r, inf) in enumerate(zip(returns, inflations)):
@@ -408,11 +440,15 @@ def project_stratified_v8(
             if alive_by_year is not None and i < len(alive_by_year)
             else (True, True)
         )
+        _wf = 1.0
+        if _WAGE_FACTORS is not None and 0 <= year - 1 < len(_WAGE_FACTORS):
+            _wf = float(_WAGE_FACTORS[year - 1])
         c = compute_contributions_for_year(
             year, promotion_year, bonus_this_year,
             promo_params.base_salary_post, contrib_params, promo_params,
             primary_alive=primary_alive, spouse_alive=spouse_alive,
             pool_household_expenses=alive_by_year is not None,
+            wage_factor=_wf,
         )
         _lo = _LAYOFF
         if _lo is not None and getattr(_lo, "enabled", False) and _lo.rng is not None:
@@ -420,7 +456,19 @@ def project_stratified_v8(
                                     if r <= _lo.return_threshold else 1.0)
             p_lay = min(_lo.p_cap, p_lay)
             if _lo.rng.random() < p_lay:
-                frac = max(0.0, 1.0 - _lo.gap_months / 12.0)
+                # Roadmap 6.0 (A13): the door back in narrows with age. A
+                # flat four months at every age says a 55-year-old finds work
+                # as fast as a 30-year-old, which is a claim, not a neutral
+                # default -- and it is the optimistic one for exactly the
+                # people deciding whether they can afford to quit.
+                _gap = _lo.gap_months
+                _decay = float(getattr(_lo, "gap_months_per_year_of_age", 0.0))
+                if _decay:
+                    _from = int(getattr(_lo, "decay_from_age", 45))
+                    _age_now = int(state.start_age) + int(year) - 1
+                    _gap += max(0, _age_now - _from) * _decay
+                    _gap = min(_gap, float(getattr(_lo, "max_gap_months", 12.0)))
+                frac = max(0.0, 1.0 - _gap / 12.0)
                 c = AccountStack(pretax_401k=c.pretax_401k * frac,
                                  roth_ira=c.roth_ira * frac,
                                  hsa=c.hsa * frac,
@@ -437,6 +485,14 @@ def project_stratified_v8(
         path.append({
             'age': age, 'accounts': accounts.copy(),
             'expenses': expenses, 'total': accounts.total,
+            'cpi': cumulative_inf_factor,
+            # What was actually contributed this year, AFTER any layoff has
+            # scaled it down. Named `contributions` and not `income` because
+            # that is what it is: this engine never models gross salary as a
+            # cash flow, it models what reaches the accounts. A layoff is
+            # visible here as a drop, which is the only place in the whole
+            # engine where an income interruption is observable at all.
+            'contributions_nominal': c.total,
         })
 
     return path

@@ -177,20 +177,30 @@ def check_roth_grid_contract_source():
     """
     app = open(os.path.join(ROOT, "web", "app.js"), encoding="utf-8").read()
     index = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+    # Re-pinned when the directional mark was half-lifted: the flat-liquidation
+    # sentence became FALSE once the optimizer began comparing on the measured
+    # cost basis, so it had to go. The coverage limit stayed, because only
+    # eight points were ever tested. Both facts are pinned below -- what is
+    # gone must stay gone, and what survived must stay stated.
     zh = (
         "固定比较 8 个年转换基准档（$0–$100k）",
-        "每档按全局增长率逐年增长，不是多年度独立优化",
+        "每档按全局增长率逐年增长",
         "只在已测试档位中先比较三分支成功率，再在成功率相同的档位中比较全路径税后终值 P50（失败路径记 0）",
-        "终值采用账户桶平率清算折扣代理",
-        "档位之间/边界之外未测试，结果仅作方向参考",
+        "终值不再是平率清算代理",
+        "剩下的方向性只有一条",
     )
     en = (
         "Compare exactly 8 tested base annual levels ($0–$100k)",
-        "Each level grows by the global rate; this is not an independently optimized multi-year schedule",
+        "each growing by the global rate",
         "Among tested levels, maximize three-branch success first; only equal-success levels use unconditional after-tax terminal P50 (failed paths = 0)",
-        "Terminal value uses flat account-bucket liquidation haircuts",
-        "Points between or beyond the grid are untested; directional only",
+        "Terminal value is no longer a flat liquidation proxy",
+        "Coverage is the only directional limit left",
     )
+    gone = ("终值采用账户桶平率清算折扣代理",
+            "Terminal value uses flat account-bucket liquidation haircuts")
+    for phrase in gone:
+        check("the false flat-proxy claim stays gone from app.js",
+              phrase not in app, phrase)
     for phrase in zh:
         check("Roth Chinese contract is present in app.js", phrase in app)
     for phrase in en:
@@ -453,7 +463,57 @@ def drive(window):
 
         # ---- flow 2: wizard walk -> precision ----
         js(window, 'document.getElementById("startFresh").click()')
-        for _ in range(8):
+        for _ in range(3):
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.15)
+        premium_path = '.field[data-path="medical.premium_aca"]'
+        check("medical premium uses the existing single numeric control",
+              (js(window, f'document.querySelectorAll(\'{premium_path} input[type="number"]\').length') or 0) == 1)
+        premium_guidance = js(window, f'document.querySelector(\'{premium_path}\').textContent') or ""
+        check("medical premium reminds users to refresh after open enrollment",
+              "开放投保期" in premium_guidance and "地点、年龄或覆盖家庭变化" in premium_guidance,
+              premium_guidance[:240])
+        js(window, f'''const p=document.querySelector('{premium_path} input[type="number"]');
+          p.value="12345"; p.dispatchEvent(new Event("input", {{bubbles:true}}));''')
+        check("editing the premium confirms user-quote provenance",
+              js(window, f'document.querySelector(\'{premium_path} [data-medical-premium-confirm]\').checked') is True)
+        js(window, f'''const c=document.querySelector('{premium_path} [data-medical-premium-confirm]');
+          c.checked=false; c.dispatchEvent(new Event("change", {{bubbles:true}}));''')
+        check("clearing quote confirmation preserves the numeric anchor",
+              js(window, f'document.querySelector(\'{premium_path} input[type="number"]\').value') == "12345")
+        js(window, 'document.getElementById("wizSave").click()')
+        time.sleep(0.8)
+        js(window, 'location.reload()')
+        time.sleep(2.5)
+        js(window, 'document.getElementById("resumeDraft").click()')
+        for _ in range(3):
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.15)
+        check("unconfirmed premium survives save and reload without becoming zero",
+              js(window, f'document.querySelector(\'{premium_path} input[type="number"]\').value') == "12345"
+              and js(window, f'document.querySelector(\'{premium_path} [data-medical-premium-confirm]\').checked') is False)
+        js(window, f'''const p=document.querySelector('{premium_path} input[type="number"]');
+          p.value="23456"; p.dispatchEvent(new Event("input", {{bubbles:true}}));''')
+        for _ in range(3):
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.15)
+        annual_path = '.field[data-path="medical.annual_trajectory_enabled"]'
+        delta_path = '.field[data-path="medical.cpi_delta_routine"]'
+        check("annual medical trajectory is visibly opt-in",
+              js(window, f'document.querySelector(\'{annual_path} input[type="checkbox"]\').checked') is False)
+        js(window, f'''const c=document.querySelector('{annual_path} input[type="checkbox"]');
+          c.checked=true; c.dispatchEvent(new Event("change", {{bubbles:true}}));''')
+        js(window, f'''const d=document.querySelector('{delta_path} input[type="number"]');
+          d.value="0"; d.dispatchEvent(new Event("input", {{bubbles:true}}));''')
+        check("annual medical accepts an explicit zero spread",
+              js(window, f'document.querySelector(\'{delta_path} input[type="number"]\').value') == "0")
+        js(window, f'''const d=document.querySelector('{delta_path} input[type="number"]');
+          d.value=""; d.dispatchEvent(new Event("input", {{bubbles:true}}));''')
+        check("annual medical keeps blank visibly invalid rather than writing zero",
+              js(window, f'document.querySelector(\'{delta_path} input[type="number"]\').classList.contains("invalid")') is True)
+        js(window, f'''const d=document.querySelector('{delta_path} input[type="number"]');
+          d.value="0"; d.dispatchEvent(new Event("input", {{bubbles:true}}));''')
+        for _ in range(2):
             js(window, 'document.getElementById("wizNext").click()')
             time.sleep(0.15)
         check("wizard walk reaches precision",
@@ -467,6 +527,21 @@ def drive(window):
         time.sleep(0.4)
         check("saved plan listed on welcome",
               (js(window, 'document.querySelectorAll("#plansList .plan-row").length') or 0) >= 1)
+        js(window, 'document.querySelector("#plansList .plan-row [data-a=open]").click()')
+        for _ in range(3):
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.15)
+        check("confirmed premium survives plan save and open",
+              js(window, f'document.querySelector(\'{premium_path} input[type="number"]\').value') == "23456"
+              and js(window, f'document.querySelector(\'{premium_path} [data-medical-premium-confirm]\').checked') is True)
+        for _ in range(3):
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.15)
+        check("annual medical opt-in and explicit zero survive plan save and open",
+              js(window, f'document.querySelector(\'{annual_path} input[type="checkbox"]\').checked') is True
+              and js(window, f'document.querySelector(\'{delta_path} input[type="number"]\').value') == "0")
+        js(window, 'document.getElementById("restartBtn").click()')
+        time.sleep(0.3)
 
         # ---- flow 6: couple mode is a first-class path ----
         js(window, 'document.getElementById("startFresh").click()')
@@ -636,6 +711,80 @@ def drive(window):
         js(window, 'document.getElementById("restartBtn").click()')
         time.sleep(0.3)
 
+        # ---- flow 7: Roadmap 5.0's new dials actually reach the engine ----
+        # `test_ui_server_seams` already proves each control PATH is a real
+        # config leaf. What it cannot see is whether typing into the box moves
+        # the config that gets POSTED -- which is exactly the gap the decision
+        # panel shipped through: the call was there, the payload was not, and
+        # both sides' tests were green.
+        js(window, 'localStorage.clear(); location.reload()')
+        time.sleep(2.5)
+        js(window, 'document.getElementById("startFresh").click()')
+        time.sleep(0.4)
+        for _ in range(3):
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.2)
+
+        check("the 5.0 dials render on the assumptions step",
+              js(window, '["blocky_spending.enabled", "ss_trust_fund.enabled"]'
+                         '.every(p => !!document.querySelector('
+                         '`.field[data-path="${p}"]`))'))
+
+        # Off by default, dependants hidden: a plan that does not use these
+        # should not be asked about them.
+        # Absent OR display:none. With the module off the field is not
+        # rendered at all, and an earlier version of this check assumed
+        # "rendered but hidden" -- it crashed on null instead of failing,
+        # which is a worse report than either outcome.
+        check("the dependent dials stay away until the module is on",
+              js(window, 'const f = document.querySelector('
+                         '\'.field[data-path="ss_trust_fund.plan_start_year"]\');'
+                         ' !f || getComputedStyle(f).display === "none"'))
+
+        js(window, 'for (const p of ["blocky_spending.enabled",'
+                   ' "ss_trust_fund.enabled"]) {'
+                   ' const el = document.querySelector('
+                   '`.field[data-path="${p}"] input[type="checkbox"]`);'
+                   ' el.checked = true;'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true})); }')
+        time.sleep(0.3)
+
+        check("turning the trust fund on reveals the calendar anchor it needs",
+              js(window, 'const f = document.querySelector('
+                         '\'.field[data-path="ss_trust_fund.plan_start_year"]\');'
+                         ' !!f && getComputedStyle(f).display !== "none"'))
+
+        # The anchor arrives EMPTY. A prefilled year would be the app guessing
+        # the calendar, which is the one thing this module refuses to do.
+        check("the calendar anchor arrives empty rather than guessed",
+              js(window, 'document.querySelector('
+                         '\'.field[data-path="ss_trust_fund.plan_start_year"]'
+                         ' input\').value === ""'))
+
+        # The percent round-trip, read off the real controls: a config value
+        # of 0.15 must show as 15, not 0.15 and not 15%. This is the one
+        # failure mode the seam gate cannot see -- it checks that a control's
+        # PATH is a real config leaf, not that the number is scaled right --
+        # and getting it wrong would quietly run every plan at a hundredth of
+        # what the user typed.
+        check("the percent dials show percents, not fractions",
+              js(window, 'const v = p => document.querySelector('
+                         '`.field[data-path="${p}"] input`).value;'
+                         ' v("blocky_spending.annual_probability") === "15"'
+                         ' && v("blocky_spending.size_fraction") === "35"'),
+              js(window, 'document.querySelector(\'.field[data-path='
+                         '"blocky_spending.annual_probability"] input\').value'))
+
+        check("the scenario select offers exactly the report's alternatives",
+              js(window, 'const o = [...document.querySelector('
+                         '\'.field[data-path="ss_trust_fund.scenario"] select\')'
+                         '.options].map(x => x.value);'
+                         ' o.length === 2 && o.includes("intermediate")'
+                         ' && o.includes("range")'))
+
+        js(window, 'document.getElementById("restartBtn").click()')
+        time.sleep(0.3)
+
         # ---- flow 4: help language toggle ----
         js(window, 'document.querySelector(\'#langToggle [data-lang="zh"]\').click()')
         js(window, 'document.getElementById("helpBtn").click()')
@@ -656,7 +805,51 @@ def drive(window):
         check("quick estimate reaches results", ok)
         verdict = js(window, '(document.querySelector("#verdict .v-main")||{}).textContent || ""')
         check("verdict sentence rendered", len(verdict or "") > 20)
-        check("verdict carries sampling SE", "±" in (js(window, '(document.querySelector("#verdict .v-sub")||{}).textContent || ""') or ""))
+        check("verdict carries its sampling interval", "±" in (js(window, '(document.querySelector("#verdict .v-sub")||{}).textContent || ""') or ""))
+        # The tier in words, checked in the REAL page rather than in the
+        # source: a colourblind reader's only way to know which of three
+        # states this plan is in.
+        tier_text = js(window, '(document.querySelector("#verdict .v-tier")||{}).textContent || ""') or ""
+        check("verdict states its tier in words", tier_text.strip() != "")
+        # Hover, driven rather than grepped: `attachHover` being present in
+        # the source says nothing about a pointer producing a tooltip. The
+        # tip element is created lazily on first hover, so its absence before
+        # and presence after is the observable.
+        js(window, 'document.querySelectorAll(".chart-tip").forEach(e => e.remove())')
+        # The charts live on other result tabs, so a hover on the page the
+        # smoke happens to be on finds only 16x16 icons and 0x0 elements with
+        # no layout. My first version checked here and failed for that reason
+        # -- the check was in the wrong place, not the feature. Walk the tabs
+        # until a chart actually has a size.
+        js(window, """(function(){
+          var tabs = Array.prototype.slice.call(
+            document.querySelectorAll("#resultTabs .rtab"));
+          for (var i = 0; i < tabs.length; i++) {
+            tabs[i].click();
+            var big = Array.prototype.slice.call(document.querySelectorAll("svg"))
+              .filter(function(e){ var r = e.getBoundingClientRect();
+                                   return r.width > 200 && r.height > 80; });
+            if (big.length) return "found:" + i;
+          }
+          return "none";
+        })()""")
+        moved = js(window, """(function(){
+          var svgs = Array.prototype.slice.call(document.querySelectorAll("svg"));
+          var svg = svgs.filter(function(e){ var r=e.getBoundingClientRect();
+                                             return r.width > 200 && r.height > 80; })[0];
+          if (!svg) return "no-svg:" + svgs.length;
+          var r = svg.getBoundingClientRect();
+          var ev = new PointerEvent("pointermove", {
+            clientX: r.left + r.width * 0.5, clientY: r.top + r.height * 0.5,
+            bubbles: true});
+          svg.dispatchEvent(ev);
+          var tip = document.querySelector(".chart-tip");
+          return tip ? (tip.style.display || "") : "no-tip";
+        })()""")
+        check("a pointer over a chart produces a tooltip element",
+              not str(moved).startswith("no-"), str(moved))
+        check("verdict exposes the tier to assistive tech",
+              (js(window, '(document.querySelector("#verdict")||{}).getAttribute && document.querySelector("#verdict").getAttribute("data-tier") || ""') or "") in ("strong", "watch", "fragile"))
         overview_pack = js(
             window,
             '(document.getElementById("rulePackStatus")||{}).textContent || ""') or ""
@@ -757,13 +950,13 @@ def drive(window):
         check("Roth pre-run Chinese disclosure states the fixed 8-level grid",
               "8 个年转换基准档" in roth_zh_note and "$0–$100k" in roth_zh_note,
               roth_zh_note[:240])
-        check("Roth pre-run Chinese disclosure states global growth and no schedule optimization",
-              "全局增长率" in roth_zh_note and "不是多年度独立优化" in roth_zh_note,
+        check("Roth pre-run Chinese disclosure states global growth and points at the schedule panel",
+              "全局增长率" in roth_zh_note and "哪几年转，转多少" in roth_zh_note,
               roth_zh_note[:240])
-        check("Roth pre-run Chinese disclosure states objective and proxy limits",
+        check("Roth pre-run Chinese disclosure states objective and the ONE remaining limit",
               "三分支成功率" in roth_zh_note and "税后终值 P50" in roth_zh_note
-              and "账户桶平率清算折扣代理" in roth_zh_note
-              and "边界之外未测试" in roth_zh_note,
+              and "终值不再是平率清算代理" in roth_zh_note
+              and "剩下的方向性只有一条" in roth_zh_note,
               roth_zh_note[:300])
         check("Roth pre-run Chinese control says compare, not optimize",
               "对比 8 个转换档位" in roth_zh_button and "优化" not in roth_zh_button,
@@ -776,10 +969,11 @@ def drive(window):
         cjk = re.compile(r"[\u3400-\u9fff]")
         check("Roth pre-run English disclosure has the complete contract",
               all(phrase in roth_en_note for phrase in (
-                  "8 tested base annual levels", "global rate", "not an independently optimized multi-year schedule",
+                  "8 tested base annual levels", "global rate",
                   "three-branch success", "unconditional after-tax terminal P50", "failed paths = 0",
-                  "flat account-bucket liquidation haircuts", "between or beyond the grid are untested",
-                  "directional only")),
+                  "no longer a flat liquidation proxy",
+                  "Coverage is the only directional limit left",
+                  "which years to convert")),
               roth_en_note[:360])
         check("Roth pre-run English control says compare, not optimize",
               "Compare 8 conversion levels" in roth_en_button and "Optimize" not in roth_en_button,
@@ -827,10 +1021,11 @@ def drive(window):
         check("Roth post-run English caption repeats the boundary contract",
               roth_done and all(phrase in roth_en_cap for phrase in (
                   "Exactly 8 tested base annual levels", "global rate",
-                  "not an independently optimized multi-year schedule",
                   "three-branch success", "unconditional after-tax terminal P50",
-                  "failed paths = 0", "flat account-bucket liquidation haircuts",
-                  "between or beyond the grid are untested", "directional only")),
+                  "failed paths = 0",
+                  "no longer a flat liquidation proxy",
+                  "Coverage is the only directional limit left",
+                  "which years to convert")),
               roth_en_cap[:420])
         check("Roth post-run English output contains no CJK",
               not cjk.search(roth_en_cap + roth_en_readout + roth_en_chart),
@@ -840,7 +1035,8 @@ def drive(window):
         roth_zh_after = (js(window, 'document.getElementById("rothCap").textContent || ""') or "")
         roth_zh_after += " | " + (js(window, 'document.getElementById("rothReadout").textContent || ""') or "")
         check("Roth post-run Chinese output keeps the selected-grid wording",
-              "已选档位" in roth_zh_after and "方向参考" in roth_zh_after,
+              "已选档位" in roth_zh_after
+              and "剩下的方向性只有一条" in roth_zh_after,
               roth_zh_after[:360])
         js(window, 'document.querySelector(\'#langToggle [data-lang="en"]\').click()')
         js(window, 'if (window.__rothRealFetch) window.fetch = window.__rothRealFetch;')
@@ -869,6 +1065,205 @@ def drive(window):
                                 '[...document.querySelectorAll(".view")].find(v=>v.classList.contains("show")).id === "v-results"',
                                 timeout=90)
         check("Standard archive run reaches results", archive_ready)
+
+        # ---- Phase 2: the annual review, driven end to end -----------------
+        # Piggybacks the archived run above rather than starting its own: the
+        # review compares against an ARCHIVED forecast, and that is exactly
+        # what the run above just produced. Everything here is the real path --
+        # POST /api/checkin/record, POST /api/checkin/attribute, and the
+        # rendered waterfall -- in the engine the app actually ships.
+        review_tab = wait_js(
+            window, '!![...document.querySelectorAll(".rtab")].find(t=>t.dataset.p==="review")',
+            timeout=20)
+        check("annual review tab appears after an archived run", review_tab)
+        if review_tab:
+            js(window, '[...document.querySelectorAll(".rtab")].find(t=>t.dataset.p==="review").click()')
+            form_ready = wait_js(window, '!!document.getElementById("revOpening")', timeout=10)
+            check("annual review form renders", form_ready)
+            # The forecast list arrives asynchronously and the submit refuses
+            # without a chosen forecast ("Choose an archived forecast first").
+            # The candidate path won this race and the installed path lost it,
+            # which is the worst way for a gate to behave: the same code passed
+            # and failed in one run. Waiting for the control the form actually
+            # depends on removes the timing from the question.
+            picker_ready = wait_js(
+                window,
+                '(() => { const s = document.getElementById("revForecast");'
+                ' return !!s && s.options.length > 0 && !!s.value; })()',
+                timeout=20)
+            check("annual review forecast picker is populated", picker_ready)
+            js(window, '(() => {'
+                       ' const set=(id,v)=>{const e=document.getElementById(id);e.value=v;'
+                       '   e.dispatchEvent(new Event("input",{bubbles:true}));};'
+                       ' set("revOpening","205000"); set("revClosing","282000");'
+                       ' [["planned","net_contribution","72000"],'
+                       '  ["actual","net_contribution","72000"],'
+                       '  ["actual","spending","-8000"]].forEach(([s,k,v])=>{'
+                       '   const e=document.querySelector("[data-rev-"+s+"=\\""+k+"\\"]");'
+                       '   e.value=v; e.dispatchEvent(new Event("input",{bubbles:true}));});'
+                       ' document.getElementById("revSubmit").click(); })()')
+            attributed = wait_js(
+                window,
+                '(() => { const p=document.getElementById("revResultPanel");'
+                ' return p && !p.classList.contains("hidden")'
+                ' && document.querySelectorAll("#revWaterfall tr").length > 0; })()',
+                timeout=30)
+            rev_status = js(window, '(document.getElementById("revStatus")||{}).textContent || ""') or ""
+            check("annual review returns a waterfall", attributed, rev_status[:160])
+            # The lines must add up to the reported gap. A renderer that dropped
+            # or double-counted one would still look like a waterfall.
+            closes = js(window, '(() => {'
+                        ' const cells=[...document.querySelectorAll("#revWaterfall .rev-val")]'
+                        '   .map(c=>Number((c.textContent||"").replace(/[^0-9.]/g,""))'
+                        '            * ((c.textContent||"").indexOf("\u2212")>=0?-1:1));'
+                        ' const sum=cells.reduce((a,b)=>a+b,0);'
+                        ' const v=document.getElementById("revVerdict").textContent||"";'
+                        ' const m=v.match(/([0-9,]+)/); const gap=m?Number(m[1].replace(/,/g,"")):NaN;'
+                        ' return String(Math.abs(Math.abs(sum)-gap) <= 2); })()')
+            check("annual review waterfall reconciles to the reported gap",
+                  closes == "true", str(closes))
+            # §4: the model-update line must state which basis produced it.
+            basis = js(window, '(document.getElementById("revDisclosure")||{}).textContent || ""') or ""
+            check("annual review discloses the model-update basis",
+                  "proven, not assumed" in basis or "证明出来的零" in basis,
+                  basis[:160])
+            # setLang contract: built content must re-render, in both directions.
+            js(window, 'document.querySelector("#langToggle button[data-lang=zh]").click()')
+            time.sleep(0.4)
+            zh_verdict = js(window, '(document.getElementById("revVerdict")||{}).textContent || ""') or ""
+            js(window, 'document.querySelector("#langToggle button[data-lang=en]").click()')
+            time.sleep(0.4)
+            en_page = js(window, '(document.getElementById("rp-review")||{}).textContent || ""') or ""
+            check("annual review re-renders on language switch",
+                  bool(cjk.search(zh_verdict)) and not cjk.search(en_page),
+                  en_page[:160])
+        # ---- Phase 3: the decision page -------------------------------
+        # Deliberately stops at the cost estimate. A formal study is 22 full
+        # Monte Carlo runs at Standard, which is minutes; what a smoke can
+        # prove is that the page reaches the engine's own config, resolves its
+        # labels, and reports the cost honestly before spending it.
+        #
+        # Every check here corresponds to a defect this page actually shipped
+        # with: the lever read from the wrong state key so the button stayed
+        # disabled forever, class names with no stylesheet entry, and
+        # `data-i18n` tags with no dictionary entry that rendered the headings
+        # as the literal strings `dec.title` and `dec.setup.title`. All three
+        # passed every unit test that existed at the time.
+        decide_tab = wait_js(
+            window, '!![...document.querySelectorAll(".rtab")].find(t=>t.dataset.p==="decide")',
+            timeout=20)
+        check("decision tab appears once a run exists", decide_tab)
+        if decide_tab:
+            js(window, '[...document.querySelectorAll(".rtab")].find(t=>t.dataset.p==="decide").click()')
+            setup_ready = wait_js(window, '!!document.getElementById("decPlan")', timeout=10)
+            check("decision setup renders", setup_ready)
+            # The headings come from data-i18n; an undefined key renders as the
+            # key itself, which is how this shipped the first time.
+            heading = js(window, '(document.querySelector("#rp-decide .sec-title")||{}).textContent || ""') or ""
+            check("decision headings resolve rather than showing i18n keys",
+                  bool(heading) and "dec." not in heading, heading[:80])
+            # The lever is read out of the live config. Reading the wrong state
+            # key returns undefined for every path and disables the button.
+            lever_ok = js(window, '(() => {'
+                          ' const b=document.getElementById("decPlan");'
+                          ' const a=(document.getElementById("decAlternatives")||{}).textContent||"";'
+                          ' return String(!!b && !b.disabled && a.indexOf("state.")>=0); })()')
+            check("decision lever resolves from the live config",
+                  lever_ok == "true", str(lever_ok))
+            js(window, 'document.getElementById("decPlan").click()')
+            costed = wait_js(
+                window,
+                '(() => { const p=document.getElementById("decCostPanel");'
+                ' return p && !p.classList.contains("hidden")'
+                ' && ((document.getElementById("decCost")||{}).textContent||"").length > 20; })()',
+                timeout=30)
+            cost_text = js(window, '(document.getElementById("decCost")||{}).textContent || ""') or ""
+            check("decision run is costed before it is offered", costed, cost_text[:160])
+            # The cost must be stated, and the Run button must stay hidden
+            # until it has been.
+            check("decision cost states the engine-run count",
+                  bool(re.search(r"\d", cost_text)) and
+                  js(window, 'String(!document.getElementById("decRun").classList.contains("hidden"))') == "true",
+                  cost_text[:160])
+            # Packs that do not apply to this plan are reported as skipped, not
+            # folded into coverage. A default plan cannot reach four of the
+            # seven families, and saying nothing would read as having tested
+            # them.
+            check("decision names the assumption families it cannot test",
+                  ("cannot be tested here" in cost_text) or ("测不了" in cost_text),
+                  cost_text[-200:])
+            # The config the PAGE posts, not `default_config()`. Every unit
+            # test for the pack library built on default_config(), which holds
+            # every block the engine knows; the UI posts no `bonds` key at all.
+            # A pack targeting `bonds.correlation_with_equity` therefore raised
+            # inside the running study -- after the cost was quoted and the
+            # user pressed Run -- and reached an installed app twice without a
+            # single test failing.
+            js(window, 'window.__decProbe = null;'
+               '(async () => { try {'
+               '  const r = await fetch("/api/decide/plan", {method:"POST",'
+               '    headers:{"Content-Type":"application/json",'
+               '             "X-FIRE-Capability": (await (await fetch("/api/capability",{cache:"no-store"})).json()).capability},'
+               '    body: JSON.stringify({question:"higher_spending", paths:10000,'
+               '      config: (typeof buildConfig === "function" ? buildConfig() : null),'
+               '      alternatives:[{name:"less", changes:{"state.expenses_y0":40000}}]})});'
+               '  window.__decProbe = JSON.stringify(await r.json());'
+               '} catch (e) { window.__decProbe = "ERR:" + e.message; } })()')
+            probe_ready = wait_js(window, 'window.__decProbe || ""', timeout=30)
+            raw_probe = js(window, 'window.__decProbe || ""') or ""
+            try:
+                probe = json.loads(raw_probe) if probe_ready and not raw_probe.startswith("ERR:") else {}
+            except ValueError:
+                probe = {}
+            check("the page's own config survives pack selection",
+                  bool(probe) and not probe.get("error"), raw_probe[:200])
+            check("the page's own config can be tested against real packs",
+                  isinstance(probe.get("packs"), list) and len(probe["packs"]) > 0,
+                  raw_probe[:200])
+
+            js(window, 'document.querySelector("#langToggle button[data-lang=zh]").click()')
+            time.sleep(0.4)
+            zh_cost = js(window, '(document.getElementById("decCost")||{}).textContent || ""') or ""
+            js(window, 'document.querySelector("#langToggle button[data-lang=en]").click()')
+            time.sleep(0.4)
+            en_decide = js(window, '(document.getElementById("rp-decide")||{}).textContent || ""') or ""
+            # ---- Phase 4: the guardrail status the home page reads --------
+            # The four regression families ROADMAP names must each be touched
+            # by the real WebKit smoke, not only by unit suites: a unit suite
+            # cannot see a route wired to keys that do not exist, which is how
+            # this endpoint's first version read `period_end` off a payload
+            # that has no such field.
+            js(window, 'window.__grProbe = null;'
+               '(async () => { try {'
+               '  const cap = (await (await fetch("/api/capability",{cache:"no-store"})).json()).capability;'
+               '  const plans = JSON.parse(localStorage.getItem("fire_plans_v1") || "[]");'
+               '  const withArchive = (Array.isArray(plans) ? plans : []).filter(p => p && p.archive && p.archive.plan_id);'
+               '  if (!withArchive.length) { window.__grProbe = "NOPLAN"; return; }'
+               '  const r = await fetch("/api/guardrail/status?plan_id="'
+               '    + encodeURIComponent(withArchive[0].archive.plan_id),'
+               '    { headers: { "X-FIRE-Capability": cap } });'
+               '  window.__grProbe = JSON.stringify(await r.json());'
+               '} catch (e) { window.__grProbe = "ERR:" + e.message; } })()')
+            gr_ready = wait_js(window, 'window.__grProbe || ""', timeout=30)
+            raw_gr = js(window, 'window.__grProbe || ""') or ""
+            try:
+                gr = json.loads(raw_gr) if gr_ready and raw_gr.startswith("{") else {}
+            except ValueError:
+                gr = {}
+            check("guardrail status answers for an archived plan",
+                  bool(gr) and not gr.get("error"), raw_gr[:200])
+            # A fresh plan has no comparable history, and the honest answer is
+            # to withhold the status rather than show a green light.
+            check("guardrail withholds a status without enough history",
+                  gr.get("enough_history") is False and bool(gr.get("state_reason")),
+                  raw_gr[:200])
+            check("guardrail never claims to modify the plan",
+                  gr.get("modifies_plan") is False, raw_gr[:200])
+
+            check("decision page re-renders on language switch",
+                  bool(cjk.search(zh_cost)) and not cjk.search(en_decide),
+                  en_decide[:160])
+
         js(window, 'document.getElementById("restartBtn").click()')
         # Condition waits, not `sleep(0.4)`. `renderPlans()` reads the archive
         # through the §6 seam and re-renders when that resolves, so a fixed pause

@@ -1,0 +1,1207 @@
+{
+  "assembled_on": "2026-08-01",
+  "components": [
+    {
+      "coverage_year": 2026,
+      "id": "us_federal_tax",
+      "label": "US federal income tax",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "Official 2026 nominal thresholds are stored as real-dollar reference values under Rev. Proc. 2025-32 (published in IRB 2025-45); Social Security provisional-income thresholds remain nominal statutory amounts; open RMD bound uses null in canonical JSON.",
+        "sources": [
+          "https://www.irs.gov/irb/2025-45_IRB",
+          "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill"
+        ],
+        "verified_as_of": "2026-08-01"
+      },
+      "provenance_status": "official_irs_rev_proc_2025_32",
+      "scope": "Ordinary brackets, standard deduction, LTCG stacking, Social Security provisional-income thresholds, RMD divisors, and early-withdrawal penalty.",
+      "source_vintage": "2026",
+      "values": {
+        "early_withdrawal_age": 59.5,
+        "early_withdrawal_rate": 0.1,
+        "ltcg_mfj": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            98900.0,
+            0.15
+          ],
+          [
+            613700.0,
+            0.2
+          ]
+        ],
+        "ltcg_single": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            49450.0,
+            0.15
+          ],
+          [
+            545500.0,
+            0.2
+          ]
+        ],
+        "ordinary_mfj": [
+          [
+            0.0,
+            0.1
+          ],
+          [
+            24800.0,
+            0.12
+          ],
+          [
+            100800.0,
+            0.22
+          ],
+          [
+            211400.0,
+            0.24
+          ],
+          [
+            403550.0,
+            0.32
+          ],
+          [
+            512450.0,
+            0.35
+          ],
+          [
+            768700.0,
+            0.37
+          ]
+        ],
+        "ordinary_single": [
+          [
+            0.0,
+            0.1
+          ],
+          [
+            12400.0,
+            0.12
+          ],
+          [
+            50400.0,
+            0.22
+          ],
+          [
+            105700.0,
+            0.24
+          ],
+          [
+            201775.0,
+            0.32
+          ],
+          [
+            256225.0,
+            0.35
+          ],
+          [
+            640600.0,
+            0.37
+          ]
+        ],
+        "rmd_divisors": {
+          "100": 6.4,
+          "101": 6.0,
+          "102": 5.6,
+          "103": 5.2,
+          "104": 4.9,
+          "105": 4.6,
+          "106": 4.3,
+          "107": 4.1,
+          "108": 3.9,
+          "109": 3.7,
+          "110": 3.5,
+          "111": 3.4,
+          "112": 3.3,
+          "113": 3.1,
+          "114": 3.0,
+          "115": 2.9,
+          "116": 2.8,
+          "117": 2.7,
+          "118": 2.5,
+          "119": 2.3,
+          "120": 2.0,
+          "72": 27.4,
+          "73": 26.5,
+          "74": 25.5,
+          "75": 24.6,
+          "76": 23.7,
+          "77": 22.9,
+          "78": 22.0,
+          "79": 21.1,
+          "80": 20.2,
+          "81": 19.4,
+          "82": 18.5,
+          "83": 17.7,
+          "84": 16.8,
+          "85": 16.0,
+          "86": 15.2,
+          "87": 14.4,
+          "88": 13.7,
+          "89": 12.9,
+          "90": 12.2,
+          "91": 11.5,
+          "92": 10.8,
+          "93": 10.1,
+          "94": 9.5,
+          "95": 8.9,
+          "96": 8.4,
+          "97": 7.8,
+          "98": 7.3,
+          "99": 6.8
+        },
+        "ss_provisional_mfj": [
+          32000.0,
+          44000.0
+        ],
+        "ss_provisional_single": [
+          25000.0,
+          34000.0
+        ],
+        "std_deduction_mfj": 32200.0,
+        "std_deduction_single": 16100.0
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "medicare_irmaa",
+      "label": "Medicare IRMAA",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "CMS monthly Part B and Part D IRMAA surcharges are summed and multiplied by 12 into annual per-person surcharge tiers. The published intermediate thresholds are strict lower bounds for the next tier (an exact threshold remains in the preceding tier); the final $500,000 single/$750,000 MFJ threshold is inclusive for the top tier. The two-year MAGI lookback remains outside this refresh.",
+        "sources": [
+          "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles"
+        ],
+        "verified_as_of": "2026-08-01"
+      },
+      "provenance_status": "official_cms_2026_irmaa",
+      "scope": "Annual Part B and Part D surcharge tiers above the standard premium.",
+      "source_vintage": "2026",
+      "values": {
+        "mfj": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            218000.0,
+            1148.4
+          ],
+          [
+            274000.0,
+            2884.8
+          ],
+          [
+            342000.0,
+            4620.0
+          ],
+          [
+            410000.0,
+            6355.2
+          ],
+          [
+            750000.0,
+            6936.0
+          ]
+        ],
+        "single": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            109000.0,
+            1148.4
+          ],
+          [
+            137000.0,
+            2884.8
+          ],
+          [
+            171000.0,
+            4620.0
+          ],
+          [
+            205000.0,
+            6355.2
+          ],
+          [
+            500000.0,
+            6936.0
+          ]
+        ]
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "contribution_limits",
+      "label": "US contribution limits",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "First-year employee limits use 2026 IRS nominal limits; Rev. Proc. 2025-19 supplies the HSA amount; the 3% annual growth remains an explicit FIRE product modeling assumption, not an IRS value; HSA is the existing self-only modeled field and no family cap is modeled.",
+        "sources": [
+          "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-401k-and-profit-sharing-plan-contribution-limits",
+          "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-ira-contribution-limits",
+          "https://www.irs.gov/irb/2025-21_IRB"
+        ],
+        "verified_as_of": "2026-08-01"
+      },
+      "provenance_status": "official_irs_2026_limits_with_product_growth_assumption",
+      "scope": "First-year 401(k), Roth IRA, HSA limits and modeled annual limit growth.",
+      "source_vintage": "2026",
+      "values": {
+        "hsa_limit_y1": 4400.0,
+        "irs_limit_growth": 0.03,
+        "pretax_401k_limit_y1": 24500.0,
+        "roth_ira_limit_y1": 7500.0
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "aca_marketplace",
+      "label": "ACA marketplace",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "2026 Marketplace coverage retains the 2025 FPL basis used for the enrollment-year model; Rev. Proc. 2025-25 supplies the applicable-percentage reference. The existing 9.96% value is a flat proxy, not the full IRS piecewise schedule; it generally understates PTC below 300% FPL but can overstate it below 100% FPL because eligibility is not modeled. The 8.5% IRA value is a 2021-2025 historical counterfactual, not a current 2026 official value.",
+        "sources": [
+          "https://www.healthcare.gov/glossary/federal-poverty-level-fpl/",
+          "https://www.cms.gov/newsroom/fact-sheets/plan-year-2026-marketplace-plans-prices-fact-sheet",
+          "https://www.irs.gov/affordable-care-act/individuals-and-families/questions-and-answers-on-the-premium-tax-credit"
+        ],
+        "verified_as_of": "2026-08-01"
+      },
+      "provenance_status": "official_healthcare_gov_2025_fpl_cms_2026_coverage",
+      "scope": "Marketplace FPL basis, 400% cliff, and contribution-rate assumptions.",
+      "series_through": 2025,
+      "source_vintage": "2026 coverage / 2025 FPL",
+      "values": {
+        "cap_pct_ira": 0.085,
+        "cap_pct_pre_ira": 0.0996,
+        "default_scenario": "B_pre_IRA",
+        "fpl_additional_person_y0": 5500.0,
+        "fpl_single_y0": 15650.0,
+        "fpl_threshold": 4.0
+      }
+    },
+    {
+      "id": "ssa_benefit_rules",
+      "label": "Social Security benefit rules",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "This component retains the existing FRA/claiming-age/delayed-credit rule inputs; FRA 67 and the 70%/100%/124% illustration apply to the 1960-and-later birth cohort, not all ages or older cohorts. The 2026 SSA fact sheet's 2.8% COLA belongs to the separate statement-import component and is payable in January 2026.",
+        "sources": [
+          "https://www.ssa.gov/cola/factsheets/2026.html",
+          "https://www.ssa.gov/benefits/retirement/planner/1960.html",
+          "https://www.ssa.gov/benefits/retirement/planner/applying2.html",
+          "https://www.ssa.gov/benefits/retirement/planner/delayret.html"
+        ],
+        "verified_as_of": "2026-08-01"
+      },
+      "provenance_status": "official_ssa_rules_verified_2026",
+      "scope": "FRA, claiming-age reduction, and delayed-retirement-credit rules.",
+      "source_vintage": "2026 statutory rules",
+      "values": {
+        "delayed_credit_annual_pct": 0.08,
+        "earliest_claim_age": 62,
+        "early_after_36_monthly_pct": 0.004166666666666667,
+        "early_first_36_monthly_pct": 0.005555555555555556,
+        "fra_age": 67,
+        "latest_credit_age": 70
+      }
+    },
+    {
+      "id": "ssa_statement_import",
+      "label": "SSA statement import",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "AWI remains capped at the latest official published 2024 series; the 2025 determination's 2.8% COLA is payable in January 2026. Future AWI values are not forecast.",
+        "sources": [
+          "https://www.ssa.gov/OACT/cola/AWI.html",
+          "https://www.ssa.gov/cola/factsheets/2026.html",
+          "https://www.ssa.gov/oact/COLA/bendpoints.html"
+        ],
+        "verified_as_of": "2026-08-01"
+      },
+      "provenance_status": "official_ssa_series_verified_2026",
+      "scope": "Local statement import AWI, COLA, and statutory bend-point derivation.",
+      "series_through": {
+        "awi": 2024,
+        "cola": 2025
+      },
+      "source_vintage": "AWI through 2024 / COLA through 2025 (payable January 2026)",
+      "values": {
+        "awi_series": [
+          [
+            1951,
+            2799.16
+          ],
+          [
+            1952,
+            2973.32
+          ],
+          [
+            1953,
+            3139.44
+          ],
+          [
+            1954,
+            3155.64
+          ],
+          [
+            1955,
+            3301.44
+          ],
+          [
+            1956,
+            3532.36
+          ],
+          [
+            1957,
+            3641.72
+          ],
+          [
+            1958,
+            3673.8
+          ],
+          [
+            1959,
+            3855.8
+          ],
+          [
+            1960,
+            4007.12
+          ],
+          [
+            1961,
+            4086.76
+          ],
+          [
+            1962,
+            4291.4
+          ],
+          [
+            1963,
+            4396.64
+          ],
+          [
+            1964,
+            4576.32
+          ],
+          [
+            1965,
+            4658.72
+          ],
+          [
+            1966,
+            4938.36
+          ],
+          [
+            1967,
+            5213.44
+          ],
+          [
+            1968,
+            5571.76
+          ],
+          [
+            1969,
+            5893.76
+          ],
+          [
+            1970,
+            6186.24
+          ],
+          [
+            1971,
+            6497.08
+          ],
+          [
+            1972,
+            7133.8
+          ],
+          [
+            1973,
+            7580.16
+          ],
+          [
+            1974,
+            8030.76
+          ],
+          [
+            1975,
+            8630.92
+          ],
+          [
+            1976,
+            9226.48
+          ],
+          [
+            1977,
+            9779.44
+          ],
+          [
+            1978,
+            10556.03
+          ],
+          [
+            1979,
+            11479.46
+          ],
+          [
+            1980,
+            12513.46
+          ],
+          [
+            1981,
+            13773.1
+          ],
+          [
+            1982,
+            14531.34
+          ],
+          [
+            1983,
+            15239.24
+          ],
+          [
+            1984,
+            16135.07
+          ],
+          [
+            1985,
+            16822.51
+          ],
+          [
+            1986,
+            17321.82
+          ],
+          [
+            1987,
+            18426.51
+          ],
+          [
+            1988,
+            19334.04
+          ],
+          [
+            1989,
+            20099.55
+          ],
+          [
+            1990,
+            21027.98
+          ],
+          [
+            1991,
+            21811.6
+          ],
+          [
+            1992,
+            22935.42
+          ],
+          [
+            1993,
+            23132.67
+          ],
+          [
+            1994,
+            23753.53
+          ],
+          [
+            1995,
+            24705.66
+          ],
+          [
+            1996,
+            25913.9
+          ],
+          [
+            1997,
+            27426.0
+          ],
+          [
+            1998,
+            28861.44
+          ],
+          [
+            1999,
+            30469.84
+          ],
+          [
+            2000,
+            32154.82
+          ],
+          [
+            2001,
+            32921.92
+          ],
+          [
+            2002,
+            33252.09
+          ],
+          [
+            2003,
+            34064.95
+          ],
+          [
+            2004,
+            35648.55
+          ],
+          [
+            2005,
+            36952.94
+          ],
+          [
+            2006,
+            38651.41
+          ],
+          [
+            2007,
+            40405.48
+          ],
+          [
+            2008,
+            41334.97
+          ],
+          [
+            2009,
+            40711.61
+          ],
+          [
+            2010,
+            41673.83
+          ],
+          [
+            2011,
+            42979.61
+          ],
+          [
+            2012,
+            44321.67
+          ],
+          [
+            2013,
+            44888.16
+          ],
+          [
+            2014,
+            46481.52
+          ],
+          [
+            2015,
+            48098.63
+          ],
+          [
+            2016,
+            48642.15
+          ],
+          [
+            2017,
+            50321.89
+          ],
+          [
+            2018,
+            52145.8
+          ],
+          [
+            2019,
+            54099.99
+          ],
+          [
+            2020,
+            55628.6
+          ],
+          [
+            2021,
+            60575.07
+          ],
+          [
+            2022,
+            63795.13
+          ],
+          [
+            2023,
+            66621.8
+          ],
+          [
+            2024,
+            69846.57
+          ]
+        ],
+        "awi_through_year": 2024,
+        "bend1_1979": 180.0,
+        "bend2_1979": 1085.0,
+        "cola_series": [
+          [
+            1975,
+            0.08
+          ],
+          [
+            1976,
+            0.064
+          ],
+          [
+            1977,
+            0.059
+          ],
+          [
+            1978,
+            0.065
+          ],
+          [
+            1979,
+            0.099
+          ],
+          [
+            1980,
+            0.143
+          ],
+          [
+            1981,
+            0.112
+          ],
+          [
+            1982,
+            0.074
+          ],
+          [
+            1983,
+            0.035
+          ],
+          [
+            1984,
+            0.035
+          ],
+          [
+            1985,
+            0.031
+          ],
+          [
+            1986,
+            0.013
+          ],
+          [
+            1987,
+            0.042
+          ],
+          [
+            1988,
+            0.04
+          ],
+          [
+            1989,
+            0.047
+          ],
+          [
+            1990,
+            0.054
+          ],
+          [
+            1991,
+            0.037
+          ],
+          [
+            1992,
+            0.03
+          ],
+          [
+            1993,
+            0.026
+          ],
+          [
+            1994,
+            0.028
+          ],
+          [
+            1995,
+            0.026
+          ],
+          [
+            1996,
+            0.029
+          ],
+          [
+            1997,
+            0.021
+          ],
+          [
+            1998,
+            0.013
+          ],
+          [
+            1999,
+            0.025
+          ],
+          [
+            2000,
+            0.035
+          ],
+          [
+            2001,
+            0.026
+          ],
+          [
+            2002,
+            0.014
+          ],
+          [
+            2003,
+            0.021
+          ],
+          [
+            2004,
+            0.027
+          ],
+          [
+            2005,
+            0.041
+          ],
+          [
+            2006,
+            0.033
+          ],
+          [
+            2007,
+            0.023
+          ],
+          [
+            2008,
+            0.058
+          ],
+          [
+            2009,
+            0.0
+          ],
+          [
+            2010,
+            0.0
+          ],
+          [
+            2011,
+            0.036
+          ],
+          [
+            2012,
+            0.017
+          ],
+          [
+            2013,
+            0.015
+          ],
+          [
+            2014,
+            0.017
+          ],
+          [
+            2015,
+            0.0
+          ],
+          [
+            2016,
+            0.003
+          ],
+          [
+            2017,
+            0.02
+          ],
+          [
+            2018,
+            0.028
+          ],
+          [
+            2019,
+            0.016
+          ],
+          [
+            2020,
+            0.013
+          ],
+          [
+            2021,
+            0.059
+          ],
+          [
+            2022,
+            0.087
+          ],
+          [
+            2023,
+            0.032
+          ],
+          [
+            2024,
+            0.025
+          ],
+          [
+            2025,
+            0.028
+          ]
+        ],
+        "cola_through_year": 2025
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "us_state_archetypes",
+      "label": "State income-tax archetypes (by type, not by state)",
+      "maintenance_due_on": "2027-03-01",
+      "provenance": "Assembled from published 2026 state rate schedules as TYPES. No row promises any particular state's law: rates are round representative values chosen to separate the archetypes, not to reproduce a filing.",
+      "provenance_status": "explicit_assumption",
+      "scope": "Representative state income-tax shapes by TYPE: ordinary and capital-gains rates, whether Social Security is taxed, and any retirement-income exemption. Never a particular state.",
+      "source_vintage": "2026",
+      "values": {
+        "archetypes": [
+          {
+            "id": "no_income_tax",
+            "ordinary_rate": 0.0,
+            "ltcg_rate": 0.0,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "flat_low",
+            "ordinary_rate": 0.03,
+            "ltcg_rate": 0.03,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "flat_moderate",
+            "ordinary_rate": 0.05,
+            "ltcg_rate": 0.05,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "progressive_moderate",
+            "ordinary_rate": 0.055,
+            "ltcg_rate": 0.055,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "progressive_high",
+            "ordinary_rate": 0.093,
+            "ltcg_rate": 0.093,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "retirement_income_exempt",
+            "ordinary_rate": 0.05,
+            "ltcg_rate": 0.05,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 100000.0
+          },
+          {
+            "id": "retirement_income_partially_exempt",
+            "ordinary_rate": 0.055,
+            "ltcg_rate": 0.055,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 20000.0
+          },
+          {
+            "id": "taxes_social_security_moderate",
+            "ordinary_rate": 0.05,
+            "ltcg_rate": 0.05,
+            "taxes_social_security": true,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "taxes_social_security_high",
+            "ordinary_rate": 0.075,
+            "ltcg_rate": 0.075,
+            "taxes_social_security": true,
+            "retirement_exempt_real": 0.0
+          },
+          {
+            "id": "preferential_capital_gains",
+            "ordinary_rate": 0.06,
+            "ltcg_rate": 0.03,
+            "taxes_social_security": false,
+            "retirement_exempt_real": 0.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "ssa_trust_fund",
+      "label": "Social Security trust fund reserve depletion (OASI)",
+      "maintenance_due_on": "2027-06-30",
+      "provenance": {
+        "conversion": "Depletion quarters are carried as the calendar YEAR in which reserves run out (2032 Q4 -> 2032), so a reduction begins in the year of depletion rather than the year after. The payable path is the intermediate alternative's two published endpoints -- 78 percent at depletion, 62 percent in 2100 -- and the straight line between them is THIS APP'S interpolation, not the report's; it is disclosed as such. The low-cost and high-cost alternatives contribute their depletion YEARS only: their payable percentages are not stated in the sources below and are recorded as null rather than guessed. DI reserves are projected positive throughout the 75-year period, so no DI depletion is modelled. The theoretical combined OASDI figures are carried for disclosure only and never reduce a benefit, because the law does not permit interfund borrowing and the app does not predict that it will.",
+        "sources": [
+          "https://www.ssa.gov/oact/TR/2026/",
+          "https://www.ssa.gov/oact/TR/2026/II_A_highlights.html",
+          "https://www.ssa.gov/oact/TR/2026/IV_B_LRest.html",
+          "https://www.ssa.gov/news/en/press/releases/2026-06-09.html"
+        ],
+        "verified_as_of": "2026-08-17"
+      },
+      "provenance_status": "official_ssa_trustees_report_2026",
+      "scope": "OASI reserve depletion timing and the share of scheduled benefits payable afterwards, under the Trustees' three published alternatives. Legislation is not projected.",
+      "source_vintage": "2026 OASDI Trustees Report (intermediate assumptions set February 2026)",
+      "values": {
+        "assumptions_set": "2026-02",
+        "combined_oasdi_theoretical_depletion_year": 2034,
+        "combined_oasdi_theoretical_payable_2100": 0.65,
+        "combined_oasdi_theoretical_payable_at_depletion": 0.83,
+        "di_depleted_within_projection": false,
+        "oasi_depletion_year_high_cost": 2031,
+        "oasi_depletion_year_intermediate": 2032,
+        "oasi_depletion_year_low_cost": 2035,
+        "oasi_payable_2100_intermediate": 0.62,
+        "oasi_payable_at_depletion_high_cost": null,
+        "oasi_payable_at_depletion_intermediate": 0.78,
+        "oasi_payable_at_depletion_low_cost": null,
+        "report_year": 2026
+      }
+    }
+  ],
+  "delivery": "offline_embedded",
+  "external_refresh_status": "official_primary_sources_and_explicit_assumptions_verified_2026-08-01",
+  "field_source_ledger": [
+    {
+      "component_id": "us_federal_tax",
+      "field_group": "federal_brackets_deductions_ltcg",
+      "fields": [
+        "ordinary_single",
+        "ordinary_mfj",
+        "std_deduction_single",
+        "std_deduction_mfj",
+        "ltcg_single",
+        "ltcg_mfj"
+      ],
+      "note": "2026 federal thresholds; Rev. Proc. 2025-32 is published in IRB 2025-45.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill",
+        "https://www.irs.gov/irb/2025-45_IRB"
+      ]
+    },
+    {
+      "component_id": "us_federal_tax",
+      "field_group": "social_security_provisional_income",
+      "fields": [
+        "ss_provisional_single",
+        "ss_provisional_mfj"
+      ],
+      "note": "Nominal statutory thresholds; not CPI-indexed by the runtime.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p915"
+      ]
+    },
+    {
+      "component_id": "us_federal_tax",
+      "field_group": "rmd_divisors",
+      "fields": [
+        "rmd_divisors"
+      ],
+      "note": "Uniform Lifetime Table values used by this optional model path.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p590b"
+      ]
+    },
+    {
+      "component_id": "us_federal_tax",
+      "field_group": "early_withdrawal_penalty",
+      "fields": [
+        "early_withdrawal_age",
+        "early_withdrawal_rate"
+      ],
+      "note": "59 1/2 and 10% federal penalty reference; exceptions and state tax are outside this model.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/taxtopics/tc558",
+        "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-tax-on-early-distributions"
+      ]
+    },
+    {
+      "component_id": "medicare_irmaa",
+      "field_group": "irmaa_single_mfj",
+      "fields": [
+        "single",
+        "mfj"
+      ],
+      "note": "Part B+D monthly amounts converted to annual per-person tiers; current-year MAGI is a two-year-lookback proxy.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles"
+      ]
+    },
+    {
+      "component_id": "contribution_limits",
+      "field_group": "retirement_and_ira_limits",
+      "fields": [
+        "pretax_401k_limit_y1",
+        "roth_ira_limit_y1"
+      ],
+      "note": "2026 nominal first-year reference limits; plan values remain user-editable.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-401k-and-profit-sharing-plan-contribution-limits",
+        "https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-ira-contribution-limits"
+      ]
+    },
+    {
+      "component_id": "contribution_limits",
+      "field_group": "hsa_limit",
+      "fields": [
+        "hsa_limit_y1"
+      ],
+      "note": "Rev. Proc. 2025-19; $4,400 is the self-only modeled cap and no family cap is implemented.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/irb/2025-21_IRB"
+      ]
+    },
+    {
+      "component_id": "contribution_limits",
+      "field_group": "limit_growth",
+      "fields": [
+        "irs_limit_growth"
+      ],
+      "note": "3% annual growth is a FIRE modeling assumption, not an IRS forecast.",
+      "source_class": "product_assumption",
+      "sources": []
+    },
+    {
+      "component_id": "aca_marketplace",
+      "field_group": "fpl_and_cliff",
+      "fields": [
+        "fpl_single_y0",
+        "fpl_additional_person_y0",
+        "fpl_threshold"
+      ],
+      "note": "2026 coverage uses the modeled 2025 FPL basis and a 400% cliff.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.healthcare.gov/glossary/federal-poverty-level-fpl/",
+        "https://www.cms.gov/newsroom/fact-sheets/plan-year-2026-marketplace-plans-prices-fact-sheet"
+      ]
+    },
+    {
+      "component_id": "aca_marketplace",
+      "field_group": "default_scenario",
+      "fields": [
+        "default_scenario"
+      ],
+      "note": "B_pre_IRA is a product scenario label, not an official policy field.",
+      "source_class": "product_assumption",
+      "sources": []
+    },
+    {
+      "component_id": "aca_marketplace",
+      "field_group": "aca_pre_ira_cap",
+      "fields": [
+        "cap_pct_pre_ira"
+      ],
+      "note": "Rev. Proc. 2025-25 applicable-percentage reference; runtime retains a flat 9.96% proxy rather than the full piecewise schedule.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/irb/2025-32_IRB"
+      ]
+    },
+    {
+      "component_id": "aca_marketplace",
+      "field_group": "aca_ira_counterfactual",
+      "fields": [
+        "cap_pct_ira"
+      ],
+      "note": "8.5% is a 2021-2025 historical IRA-era counterfactual, not a current 2026 official value.",
+      "source_class": "historical_counterfactual",
+      "sources": []
+    },
+    {
+      "component_id": "ssa_benefit_rules",
+      "field_group": "ssa_claiming_rules",
+      "fields": [
+        "fra_age",
+        "earliest_claim_age",
+        "latest_credit_age",
+        "early_first_36_monthly_pct",
+        "early_after_36_monthly_pct",
+        "delayed_credit_annual_pct"
+      ],
+      "note": "FRA 67 and the 70%/100%/124% illustration apply to the 1960-and-later cohort; older cohorts and survivor rules differ.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.ssa.gov/benefits/retirement/planner/1960.html",
+        "https://www.ssa.gov/benefits/retirement/planner/applying2.html",
+        "https://www.ssa.gov/benefits/retirement/planner/delayret.html"
+      ]
+    },
+    {
+      "component_id": "ssa_statement_import",
+      "field_group": "ssa_statement_series",
+      "fields": [
+        "awi_through_year",
+        "cola_through_year",
+        "bend1_1979",
+        "bend2_1979",
+        "awi_series",
+        "cola_series"
+      ],
+      "note": "AWI through 2024 and COLA determination through 2025, payable January 2026; future AWI is capped, not forecast.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.ssa.gov/OACT/cola/AWI.html",
+        "https://www.ssa.gov/cola/factsheets/2026.html",
+        "https://www.ssa.gov/oact/COLA/bendpoints.html"
+      ]
+    },
+    {
+      "component_id": "us_state_archetypes",
+      "field_group": "state_income_tax_archetypes",
+      "fields": [
+        "archetypes"
+      ],
+      "note": "TYPES, not states. Every rate is a round representative value chosen to separate one archetype from another; none reproduces a particular state's schedule, and the app must never label a row with a state name.",
+      "source_class": "product_assumption",
+      "sources": [
+        "https://taxfoundation.org/data/all/state/state-income-tax-rates/"
+      ]
+    },
+    {
+      "component_id": "ssa_trust_fund",
+      "field_group": "oasi_reserve_depletion",
+      "fields": [
+        "assumptions_set",
+        "combined_oasdi_theoretical_depletion_year",
+        "combined_oasdi_theoretical_payable_2100",
+        "combined_oasdi_theoretical_payable_at_depletion",
+        "di_depleted_within_projection",
+        "oasi_depletion_year_high_cost",
+        "oasi_depletion_year_intermediate",
+        "oasi_depletion_year_low_cost",
+        "oasi_payable_2100_intermediate",
+        "oasi_payable_at_depletion_high_cost",
+        "oasi_payable_at_depletion_intermediate",
+        "oasi_payable_at_depletion_low_cost",
+        "report_year"
+      ],
+      "note": "2026 Trustees Report. The three depletion years are the report's own alternatives and are the only range this app claims; the two null payable figures are not published and are left unmeasured rather than filled in.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.ssa.gov/oact/TR/2026/",
+        "https://www.ssa.gov/oact/TR/2026/II_A_highlights.html",
+        "https://www.ssa.gov/oact/TR/2026/IV_B_LRest.html",
+        "https://www.ssa.gov/news/en/press/releases/2026-06-09.html"
+      ]
+    }
+  ],
+  "maintenance_semantics": "maintenance_due_on is an app review deadline, not legal validity",
+  "runtime_network_refresh": false,
+  "schema_version": 1
+}

@@ -3,7 +3,7 @@ app.py — local HTTP server for the FIRE Modeling desktop app.
 
 Pure Python standard library + numpy (already installed). No web framework, no
 CDN, no network access. Wraps the authoritative v9.8 lifecycle Monte Carlo
-engine (engine_v98) and serves an interactive single-page analysis panel.
+engine (engine_adapter) and serves an interactive single-page analysis panel.
 
 Routes
   GET  /                  -> web/index.html
@@ -88,7 +88,15 @@ def _arch_self_heal():
 
 _arch_self_heal()
 
-import engine_v98 as ENG           # noqa: E402  (authoritative v9.8 engine chain)
+import engine_adapter as ENG           # noqa: E402  (authoritative v9.8 engine chain)
+import asset_location as AL        # noqa: E402
+import roth_schedule as RSCH       # noqa: E402
+import funded_ratio as FRATIO      # noqa: E402
+import limitations as LIMITATIONS_MOD  # noqa: E402
+import sampling_error as SAMPLING_ERROR  # noqa: E402
+import throughput as THROUGHPUT  # noqa: E402
+import briefing_pack as BRIEFING_PACK  # noqa: E402
+import life_transitions as LIFE_TRANSITIONS  # noqa: E402
 from decision_lab import (  # noqa: E402
     SWEEP_CAP, SENS_CAP,
     _get_path, _set_path, _base_cfg, _scale_portfolio, _select_roth_best,
@@ -104,6 +112,9 @@ import formal_migration as FORMAL_MIGRATION  # noqa: E402
 import storage_api as STORAGE        # noqa: E402
 import archive_seam as ARCHIVE_SEAM  # noqa: E402
 import working_draft as WORKING_DRAFT  # noqa: E402
+import checkin_seam as CHECKIN         # noqa: E402
+import decision_archive as DECISION_ARCHIVE  # noqa: E402
+import decision_review as DECISION_REVIEW  # noqa: E402
 from persistence import (  # noqa: E402
     IdempotencyConflictError,
     PersistenceError,
@@ -113,6 +124,7 @@ from persistence import (  # noqa: E402
     default_database_path,
     normalize_config as _normalize_persistence_config,
     read_timeline,
+    utc_now,
     validate_request_id,
 )
 
@@ -124,9 +136,40 @@ MAX_REQUEST_BYTES = (FORMAL_MIGRATION.MAX_FORMAL_ENVELOPE_BYTES
                      + FORMAL_MIGRATION.FORMAL_HTTP_WRAPPER_BUDGET_BYTES)
 MIGRATION_SHADOW_DIR = (os.environ.get("FIRE_MIGRATION_SHADOW_DIR")
                         or MIGRATION.default_shadow_backup_dir())
+#: Paths for the per-strategy spending fan. Small on purpose: it is a
+#: percentile band, not a tail probability, and 300 costs ~0.3s per
+#: rule against ~1.9s for that rule's success rate.
+FAN_PATHS = 300
+
 PRECISION_BY_PATHS = {2_000: "quick", 10_000: "standard",
                       30_000: "deep", 100_000: "official"}
 ARCHIVE_PRECISIONS = frozenset(("standard", "official"))
+
+
+def study_paths_for(run_paths) -> int:
+    """The path count a formal decision study runs at, given the run on screen.
+
+    Ruled 2026-08-16: round UP to the smallest precision that can carry a
+    Robust claim, never down. An Official run is studied at Official; a Deep
+    run -- 30,000 paths, which `build_packet` refuses by name -- escalates to
+    Official rather than being quietly downgraded to Standard.
+
+    This lives here, on the side that owns `PRECISION_BY_PATHS`, because the
+    page had its own copy of the tier logic and its own copy of the tier list.
+    That is the shape every defect found on 2026-08-15/16 has had: one fact,
+    two places, and only one of them maintained. The page now sends the run's
+    own path count and reads back the answer.
+    """
+    qualifying = sorted(paths for paths, name in PRECISION_BY_PATHS.items()
+                        if name in ARCHIVE_PRECISIONS)
+    try:
+        run = int(run_paths or 0)
+    except (TypeError, ValueError):
+        run = 0
+    for paths in qualifying:
+        if paths >= run:
+            return paths
+    return qualifying[-1]
 # Underscores are inside the character class because the server mints ids that
 # contain them: `_m2_target_id` prefixes migrated objects `plan_mig_` /
 # `ver_mig_` as a deliberate provenance marker. Without them this validator
@@ -157,6 +200,17 @@ _IDEMPOTENT_POST_PATHS = (
     "/api/storage/plan-duplicate", "/api/storage/plan-status",
     "/api/storage/draft", "/api/storage/observe",
 )
+
+# Synchronous routes that actually start FIRE-engine work. Background starters
+# keep their own preflight because it must happen before _new_job(), while the
+# archive headline route must validate its resolved config rather than the raw
+# partial request. Keeping this set explicit makes a newly added route fail the
+# route-inventory contract instead of silently accepting an invalid plan.
+_SYNC_ENGINE_PREFLIGHT_ROUTES = frozenset({
+    "/api/roth_opt", "/api/drill", "/api/rentbuy", "/api/story",
+    "/api/live", "/api/strategies", "/api/robustness", "/api/sweep",
+    "/api/sensitivity", "/api/backtest",
+})
 
 
 class TrustBoundaryError(ValueError):
@@ -347,8 +401,62 @@ def _recovery_manager():
         return _RECOVERY_MANAGER
 
 
+#: The non-secret build metadata every engine-build identity in this process is
+#: derived from. It lives here as one constant because `/api/run_start` records
+#: a build id with it and the check-in seam recomputes one to ask whether the
+#: build has moved since; if the two ever disagreed, every attribution would
+#: report a model update that had not happened.
+_BUILD_METADATA = {"bundle_version": "0.0.0", "git_tag": None,
+                   "data_manifest_id": None}
+
+
 def _formal_migration_manager():
     return FORMAL_MIGRATION.FormalMigrationManager(_recovery_manager())
+
+
+def _checkin_seam():
+    """The Phase 2 check-in seam, bound to this archive and this build.
+
+    The ledger tables live in the archive database, so a recorded check-in is
+    an archive mutation like any other: when a control journal owns the
+    archive the write goes through it, and when none does the 2.0 direct path
+    is left exactly as it was. That is the same two-branch shape `/api/run_start`
+    uses, and it is here rather than inside the seam because which of the two
+    applies is a property of this process's archive, not of the request.
+    """
+    writer = _archive_writer()
+
+    def write(key, mutate):
+        return writer.write(
+            key, mutate,
+            close_store=_close_archive_store_for_recovery,
+            reopen_store=_reopen_archive_store_after_recovery)
+
+    return CHECKIN.CheckinSeam(
+        _archive_store(),
+        engine_version=ENG.ENGINE_VERSION,
+        source_root=ROOT,
+        write=None if writer is None else write,
+        metadata=dict(_BUILD_METADATA))
+
+
+def _decision_archive_seam():
+    """The Phase 4 decision record, bound to this archive.
+
+    Same two-branch shape as `_checkin_seam`, and here for the same reason:
+    whether a control journal owns the archive is a property of this process,
+    not of the request.
+    """
+    writer = _archive_writer()
+
+    def write(key, mutate):
+        return writer.write(
+            key, mutate,
+            close_store=_close_archive_store_for_recovery,
+            reopen_store=_reopen_archive_store_after_recovery)
+
+    return DECISION_ARCHIVE.DecisionArchiveSeam(
+        _archive_store(), write=None if writer is None else write)
 
 
 def _close_archive_store_for_recovery():
@@ -488,11 +596,40 @@ def _hydrate_idempotent_job(jid: str, context: dict,
     return jid
 
 
+def _preflight_config(cfg: dict, *, store=None) -> None:
+    """Raise ENG.ConfigIncomplete BEFORE a job exists, on the config that will
+    actually run.
+
+    A background job turns every refusal into a failed run: the client gets
+    200, polls, and is told the computation died. For a plan that is merely
+    missing a setting that is the wrong report — the same defect the archive
+    branch of /api/run_start already guards against one line at a time
+    ("refuse before anything durable happens").
+
+    `store` is not None means the archive path, which runs
+    `prepare_run`'s resolved config — `normalize_config` over the server
+    defaults — not the raw request. Checking the raw config there would reject
+    partial plans the archive path completes and runs today. If resolution
+    itself fails, this says nothing: the existing path already reports that,
+    and a pre-flight may only convert a would-be failure into an earlier and
+    more useful one, never invent a new one.
+    """
+    if store is not None:
+        try:
+            cfg = _normalize_persistence_config(cfg, ENG.default_config)
+        except Exception:                     # noqa: BLE001
+            return
+    ENG.check_config(cfg)
+
+
 def start_run_job(cfg: dict, paths: int, seed: int, dist_paths=None, *,
                   store=None, precision: str = "standard",
                   plan_id: str = None, plan_version_id: str = None,
                   archive: bool = False, request_id: str = None,
                   writer=None) -> str:
+    # Before _new_job() and before prepare_run: no job to poll, no Plan, no
+    # Version, no attempt row left behind by a run that was never going to run.
+    _preflight_config(cfg, store=store)
     requested_paths = int(paths)
     paths = max(200, min(requested_paths, MAX_PATHS))
     seed = int(seed)
@@ -516,8 +653,7 @@ def start_run_job(cfg: dict, paths: int, seed: int, dist_paths=None, *,
             plan_id=plan_id, plan_version_id=plan_version_id,
             request_id=request_id,
             source_root=ROOT,
-            metadata={"bundle_version": "0.0.0", "git_tag": None,
-                      "data_manifest_id": None})
+            metadata=dict(_BUILD_METADATA))
 
     if store is not None:
         try:
@@ -586,7 +722,35 @@ def start_run_job(cfg: dict, paths: int, seed: int, dist_paths=None, *,
             st = run_cfg.get("state") or {}
             mode = res.pop("mode", "sequential")
             elapsed_s = round(time.time() - t0, 2)
+            # One observation of how fast THIS machine runs paths, so the
+            # cost panels can quote a time instead of only a run count.
+            # Never raises: a telemetry failure must not fail a run.
+            try:
+                THROUGHPUT.record(_persistence_database_path(),
+                                  units=paths, elapsed_s=elapsed_s,
+                                  kind=THROUGHPUT.RUN, mode=mode)
+            except Exception:                                  # noqa: BLE001
+                pass
+            # Under `meta`, NOT inside the engine's own blocks.
+            #
+            # The first version put it in `res["home"]`, and two recorded
+            # contracts caught it within the hour: `replay_snapshot` recomputes
+            # the engine result and compares, so a server-derived key inside
+            # the deterministic payload makes every archived run fail to
+            # replay, and `test_confirmed_quote_runs_through_http_with_exact_
+            # engine_output` compares server output against the engine's
+            # directly. Both were right and neither was changed to
+            # accommodate this. `meta` is where server-added facts already
+            # live -- `current_age`, `protocol`, the wall-clock `elapsed_s` --
+            # precisely because it is outside what replay pins.
+            intervals = {}
+            for section in ("home", "relocation"):
+                block = res.get(section)
+                if isinstance(block, dict):
+                    intervals[section] = SAMPLING_ERROR.success_interval(
+                        block.get("lifetime_success"), block.get("n_paths"))
             res["meta"].update({
+                "sampling_error": intervals,
                 "current_age": st.get("start_age"),
                 "annual_retirement_spending": st.get("expenses_y0"),
                 "safe_withdrawal_rate": st.get("swr_pref"),
@@ -701,6 +865,7 @@ def _query_job(path: str):
 
 def start_goalseek_job(cfg, goal, levers, paths, seed, grid) -> str:
     _gs_validate(goal, levers)     # bad input -> ValueError BEFORE the thread
+    _preflight_config(cfg)         # and a config the engine will not map
     jid = _new_job()
 
     def work():
@@ -710,6 +875,399 @@ def start_goalseek_job(cfg, goal, levers, paths, seed, grid) -> str:
                 cb=lambda p, s: _job_set(jid, pct=float(p), stage=str(s)),
                 cancelled=lambda: _JOBS.get(jid, {}).get("cancelled"))
             _job_set(jid, result=out, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
+# ------------------------------------------------------------- /api/decide
+# Phase 3: one decision run across all three axes `Robust` is defined over.
+# Unlike the lab jobs above this one refuses to start quietly: a formal packet
+# needs Standard precision, and 14 runs at 10,000 paths is minutes of machine
+# time, so /api/decide/plan states the cost first and the client shows it
+# before /api/decide/start is ever called.
+
+
+def decide_plan(cfg, body) -> dict:
+    """The cost, the packs this plan can actually be tested against, and the
+    families it cannot. Runs no engine."""
+    import assumption_packs as AP
+    import decision_study as DS
+    question = str(body.get("question") or "")
+    alternatives = _decide_alternatives(body)
+    chosen = AP.select_packs(cfg)
+    seeds = int(body.get("seeds", 3))
+    models = tuple(body.get("return_models") or DECIDE_RETURN_MODELS)
+    plan = DS.plan_study(question, alternatives, seeds=seeds,
+                         return_models=models,
+                         adverse_packs=chosen["applicable"])
+    paths = (study_paths_for(body.get("run_paths"))
+             if body.get("run_paths") is not None
+             else int(body.get("paths", 10_000)))
+    return {
+        **plan,
+        "paths": paths,
+        # Reported as a multiple of a run the user has already sat through
+        # rather than as a fabricated seconds figure: the headline run at this
+        # precision is their own reference point, and this machine's rate is
+        # not something the server can know in advance.
+        "equivalent_headline_runs": plan["engine_runs"],
+        "total_simulated_paths": plan["engine_runs"] * paths,
+        # A time, not only a run count -- calibrated on THIS machine from
+        # previous STUDIES, and absent until one has been timed here. A
+        # built-in constant would be my machine's speed presented as theirs,
+        # and borrowing the single-run rate would be the 3x error the module
+        # docstring records.
+        "time_estimate": THROUGHPUT.estimate(
+            _persistence_database_path(),
+            units=plan["engine_runs"] * paths,
+            kind=THROUGHPUT.STUDY),
+        "packs": [p.describe() for p in chosen["applicable"]],
+        "packs_skipped": chosen["skipped"],
+        "families_covered": chosen["families_covered"],
+        "families_missing": chosen["families_missing"],
+        "families_total": chosen["families_total"],
+    }
+
+
+def _decide_alternatives(body) -> list:
+    import decision_packet as DP
+    out = []
+    for entry in body.get("alternatives") or []:
+        out.append(DP.Alternative(str((entry or {}).get("name") or ""),
+                                  (entry or {}).get("changes") or {},
+                                  str((entry or {}).get("rationale") or "")))
+    return out
+
+
+DECIDE_RETURN_MODELS = ("iid", "markov", "blocks")
+
+
+def start_decide_job(cfg, body, seed) -> str:
+    import decision_packet as DP
+    import decision_study as DS
+    import assumption_packs as AP
+    _preflight_config(cfg)         # same rule as plan_study below, for the config
+    alternatives = _decide_alternatives(body)
+    chosen = AP.select_packs(cfg)
+    constraints = [DP.Constraint(str(c.get("kind")), str(c.get("metric")),
+                                 float(c.get("threshold")))
+                   for c in (body.get("constraints") or [])]
+    paths = (study_paths_for(body.get("run_paths"))
+             if body.get("run_paths") is not None
+             else int(body.get("paths", 10_000)))
+    precision = PRECISION_BY_PATHS.get(paths)
+    # The same refusal `build_packet` makes, made here instead of there.
+    #
+    # There, it lands after `run_study` has finished every engine run --
+    # twenty-odd Monte Carlo runs, minutes of them -- because the packet is
+    # assembled last. The user waits for the whole study and is then told the
+    # precision it was run at cannot carry its conclusion. Nothing about that
+    # verdict needed a single path to be drawn.
+    #
+    # Reachable rather than theoretical: the UI offers a Deep tier at 30,000
+    # paths, `PRECISION_BY_PATHS[30_000]` is `deep`, and `build_packet`
+    # refuses `deep` by name. The page now rounds up to a tier that qualifies
+    # (ruled 2026-08-16), but the page is not the only thing that can call
+    # this, and "the caller will send a good value" is what E13 assumed.
+    if precision not in ARCHIVE_PRECISIONS:
+        raise ValueError(
+            "a formal decision packet needs Standard (10,000) or Official "
+            "(100,000) paths; %s cannot carry a Robust claim, and running it "
+            "first would not change that" % (precision or "%d paths" % paths))
+    # Checked before the thread so the user meets the refusal immediately
+    # rather than after minutes of computation.
+    # The return value is kept, not discarded: the work below records how
+    # long a study of this SHAPE took, and the shape is `engine_runs`. The
+    # first version of that recording referenced a `plan` this scope never
+    # had, and its blanket `except Exception` would have swallowed the
+    # NameError -- a sample silently never written, which looks exactly like
+    # a machine that has not been timed yet.
+    plan = DS.plan_study(str(body.get("question") or ""), alternatives,
+                         seeds=int(body.get("seeds", 3)),
+                         return_models=DECIDE_RETURN_MODELS,
+                         adverse_packs=chosen["applicable"])
+    jid = _new_job()
+
+    def work():
+        try:
+            # Progress WITHOUT giving up the pool. Injecting a serial runner to
+            # count completions is how this shipped at first, and it silently
+            # dropped the process-level parallelism ROADMAP names as an
+            # explicit Phase 3 deliverable — 22 runs took 3.6s serial against
+            # 1.3s parallel on this machine. `on_progress` reports each landing
+            # while the pool keeps the work spread across cores.
+            def on_progress(done, total):
+                # Cooperative cancellation at the next completed engine
+                # point. Raising from the pool consumer exits its context,
+                # which terminates work that has not landed yet without
+                # changing ensemble/process-pool architecture.
+                if _JOBS.get(jid, {}).get("cancelled"):
+                    raise _GsCancelled()
+                _job_set(jid, pct=min(done / max(total, 1), 0.99),
+                         stage="%d/%d" % (done, total))
+
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            study_t0 = time.time()
+            packet = DS.run_study(
+                cfg, str(body.get("question") or ""), alternatives,
+                paths=paths, seed=seed, root=ROOT,
+                adverse_packs=chosen["applicable"], constraints=constraints,
+                seeds=int(body.get("seeds", 3)),
+                return_models=DECIDE_RETURN_MODELS,
+                protocol={"precision": precision, "true_tax": True,
+                          "engine_version": ENG.ENGINE_VERSION},
+                analyses=body.get("analyses"), on_progress=on_progress)
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            # What a study of this shape actually costs here. Recorded as its
+            # own kind: a study's rate cannot be derived from a single run's,
+            # which the module docstring measures at 7.5x rather than 20x.
+            try:
+                THROUGHPUT.record(
+                    _persistence_database_path(),
+                    units=(plan.get("engine_runs") or 0) * paths,
+                    elapsed_s=time.time() - study_t0,
+                    kind=THROUGHPUT.STUDY)
+            except Exception:                                  # noqa: BLE001
+                pass
+            packet["packs_skipped"] = chosen["skipped"]
+            packet["families_missing"] = chosen["families_missing"]
+            packet["families_total"] = chosen["families_total"]
+            _job_set(jid, result=packet, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
+# ------------------------------------------------------------- /api/annuity
+# Phase 2: the license-to-spend half of the annuity decision. The robustness
+# half is /api/decide, which already takes alternatives — this route builds the
+# arms and hands the same list to that one rather than growing a second study
+# engine. What it owns is the spending-ceiling search, which is expensive in a
+# way the user should see priced before it starts: every arm costs several full
+# runs, and the count is not obvious from the outside.
+
+
+def _annuity_context(cfg, body):
+    """The arms, built against the ages and blocks the engine will actually use.
+
+    Two things this has to get right, and driving the route is what found both.
+
+    The plan's current age is `state.start_age`; there is no `state.current_age`,
+    and reading one gave 0, which made every arm "defer to N" — including the
+    one starting today.
+
+    And a request may post a partial config, or none: the engine fills the rest
+    from its own defaults, but `Alternative.apply` refuses a path the config
+    does not literally hold. So the block the arm switches on is seeded from
+    `default_config()` when the request omitted it. Only that block — every
+    other key the user sent stays exactly as sent.
+    """
+    import guaranteed_income_packet as GIP
+    defaults = ENG.default_config()
+    prepared = copy.deepcopy(cfg) if isinstance(cfg, dict) else {}
+    if not isinstance(prepared.get("guaranteed_income"), dict):
+        prepared["guaranteed_income"] = copy.deepcopy(
+            defaults["guaranteed_income"])
+    age = _get_path(prepared, "state.start_age")
+    if not isinstance(age, (int, float)):
+        age = defaults["state"]["start_age"]
+    # Same treatment for the spending figure, and for a sharper reason: the
+    # ceiling search only uses it to pick a bracket and falls back on its own,
+    # but the consumption reading RUNS the plan at it. Absent, that was 0.0 and
+    # the engine divided by it — a crash reached by the ordinary case of
+    # posting no config, which every API test happened to avoid.
+    spending = _get_path(prepared, "state.expenses_y0")
+    if not isinstance(spending, (int, float)) or spending <= 0:
+        prepared.setdefault("state", {})["expenses_y0"] = float(
+            defaults["state"]["expenses_y0"])
+    # The baseline is "don't buy", and it has to be FORCED off rather than
+    # taken as posted. Reaching this panel at all requires switching the module
+    # on and entering a quote, so the config that arrives here already holds
+    # the annuity — and measuring it against itself produced a consumption
+    # delta of exactly 0.0 to twelve digits. Every user would have hit that,
+    # and it reads as "the annuity changes nothing". Same treatment
+    # `_base_cfg` gives relocation, for the same reason.
+    existing = prepared["guaranteed_income"]
+    # What this clears is named rather than silently dropped: the rule here is
+    # that a subsystem the user switched on and the run then ignored has to be
+    # reported. Both sides of the comparison are the plan WITHOUT guaranteed
+    # income, plus the one instrument the arm is about — comparable, but not
+    # the plan the user is running if they already hold a ladder.
+    dropped = []
+    if existing.get("mode") != "off" and existing.get("annuities"):
+        dropped.append("the %d annuity/annuities already in the plan"
+                       % len(existing["annuities"]))
+    if existing.get("mode") != "off" and existing.get("ladders"):
+        dropped.append("the %d TIPS ladder(s) already in the plan"
+                       % len(existing["ladders"]))
+    prepared["guaranteed_income"] = {
+        **existing, "mode": "off", "annuities": [], "ladders": [],
+    }
+    built = GIP.build_alternatives(
+        body.get("quotes") or [], current_age=int(age),
+        defer_age=int(body.get("defer_age", GIP.DEFER_AGE)))
+    built["dropped_from_both_sides"] = dropped
+    return prepared, built
+
+
+def annuity_plan(cfg, body) -> dict:
+    """The arms, the arms that cannot be built, and what the search will cost.
+
+    Runs no engine.
+    """
+    prepared, built = _annuity_context(cfg, body)
+    paths = int(body.get("paths", 2_000))
+    budget = int(body.get("max_evaluations", 10))
+    # One search for the baseline plus one per arm. Quoted as an upper bound
+    # because the search stops early when the bracket closes, and a quote that
+    # could be exceeded is worse than one that is beaten.
+    searches = 1 + len(built["alternatives"]) if built["alternatives"] else 0
+    # One more run per side, at the plan's own spending, for the consumption
+    # reading. Cheap and necessary: the guardrails flatten `lifetime_success`,
+    # so a packet carrying only the ceiling search reports "below resolution"
+    # for essentially every annuity and the user learns nothing.
+    consumption_runs = searches
+    alternatives = [a.describe() for a in built["alternatives"]]
+    threshold = float(body.get("success_threshold", 0.90))
+    # The same rule the decide panel uses, from the same function. This was a
+    # local clamp that rounded a non-qualifying precision DOWN to Standard,
+    # which contradicts the 2026-08-16 ruling (round up to a tier that can
+    # carry the claim) and was a second copy of a decision besides.
+    requested_decide_paths = study_paths_for(
+        body.get("decide_run_paths", body.get("decide_paths")))
+    decide_body = {
+        "question": "annuitization",
+        "alternatives": alternatives,
+        "paths": requested_decide_paths,
+        "constraints": [{"kind": "success_threshold",
+                         "metric": "lifetime_success",
+                         "threshold": threshold}],
+    }
+    decide = {
+        "question": "annuitization",
+        "baseline_config": prepared,
+        "paths": requested_decide_paths,
+        "constraints": decide_body["constraints"],
+        "plan": (decide_plan(prepared, decide_body)
+                 if alternatives else None),
+        "unavailable_reason": (None if alternatives else
+                               "no comparable annuity arm was built from "
+                               "the supplied quotes"),
+    }
+    return {
+        "alternatives": alternatives,
+        "not_compared": built["not_compared"],
+        "baseline_is": built["baseline_is"],
+        "dropped_from_both_sides": built["dropped_from_both_sides"],
+        "comparison_is_partial": bool(built["not_compared"]),
+        "paths": paths,
+        "precision": PRECISION_BY_PATHS.get(paths),
+        "engine_runs_at_most": searches * budget + consumption_runs,
+        "searches": searches,
+        # So the page can post the identical arms to /api/decide without
+        # rebuilding them and drifting from what was priced here.
+        "decide_alternatives": alternatives,
+        "decide": decide,
+    }
+
+
+def start_annuity_job(cfg, body, seed) -> str:
+    """Spending ceilings for the baseline and each arm, then the readings."""
+    import guaranteed_income_packet as GIP
+    _preflight_config(cfg)         # refusal before the thread, not inside it
+    cfg, built = _annuity_context(cfg, body)
+    if not built["alternatives"]:
+        # Refused here rather than after minutes of computation, and refused
+        # rather than returning an empty comparison that looks like a result.
+        raise ValueError(
+            "no arm can be compared: %s"
+            % "; ".join(e["reason"] for e in built["not_compared"]))
+    paths = int(body.get("paths", 2_000))
+    threshold = float(body.get("success_threshold", 0.90))
+    budget = int(body.get("max_evaluations", 10))
+    spend_now = float(_get_path(cfg, "state.expenses_y0") or 0.0)
+    low = float(body.get("low", spend_now * 0.6 if spend_now else 30_000.0))
+    high = float(body.get("high", spend_now * 2.0 if spend_now else 200_000.0))
+    tolerance = float(body.get("tolerance", 0.01))
+    # `spending_ceiling` refuses an empty bracket -- but it refuses from
+    # inside the worker, on the first arm, after the job id exists and the
+    # user is watching a progress bar. Nothing about `high > low` needs a
+    # path drawn. Asked here in the same words so the two cannot disagree
+    # about what "empty" means.
+    if not high > low:
+        raise ValueError("the bracket is empty: low=%r high=%r" % (low, high))
+    jid = _new_job()
+
+    def work():
+        try:
+            total = 1 + len(built["alternatives"])
+            done = [0]
+
+            def ceiling_for(run_cfg, label):
+                if _JOBS.get(jid, {}).get("cancelled"):
+                    raise _GsCancelled()
+
+                def evaluate(spending):
+                    if _JOBS.get(jid, {}).get("cancelled"):
+                        raise _GsCancelled()
+                    trial = copy.deepcopy(run_cfg)
+                    trial.setdefault("state", {})["expenses_y0"] = spending
+                    return ENG.summary(trial, paths, seed).get(
+                        "lifetime_success")
+
+                out = GIP.spending_ceiling(
+                    evaluate, low=low, high=high, threshold=threshold,
+                    tolerance=tolerance, max_evaluations=budget)
+                done[0] += 1
+                _job_set(jid, pct=min(done[0] / total, 0.99),
+                         stage="%s (%d/%d)" % (label, done[0], total))
+                return out
+
+            def consumption_at(run_cfg):
+                """Median consumption at the plan's OWN spending — the metric
+                the guardrails cannot flatten."""
+                trial = copy.deepcopy(run_cfg)
+                trial.setdefault("state", {})["expenses_y0"] = spend_now
+                return ENG.summary(trial, paths, seed).get("cons_p50")
+
+            baseline = ceiling_for(cfg, GIP.DO_NOTHING)
+            base_cons = consumption_at(cfg)
+            readings, ceilings, consumption = [], {GIP.DO_NOTHING: baseline}, []
+            for alternative in built["alternatives"]:
+                applied = alternative.apply(cfg)
+                arm = ceiling_for(applied, alternative.name)
+                ceilings[alternative.name] = arm
+                readings.append(GIP.license_to_spend(baseline, arm,
+                                                     name=alternative.name))
+                consumption.append(GIP.consumption_reading(
+                    base_cons, consumption_at(applied),
+                    name=alternative.name))
+            result = GIP.read_packet(
+                {"question": str(body.get("question") or
+                                 "annuitize, and how much"),
+                 "baseline_is": built["baseline_is"],
+                 "success_threshold": threshold,
+                 "spending_bracket": [low, high],
+                 "paths": paths,
+                 "precision": PRECISION_BY_PATHS.get(paths),
+                 "ceilings": ceilings,
+                 "spending_measured_at": spend_now,
+                 "dropped_from_both_sides": built["dropped_from_both_sides"]},
+                readings, built["not_compared"], consumption)
+            _job_set(jid, result=result, done=True, pct=1.0, stage="done")
         except _GsCancelled:
             _job_set(jid, error="cancelled", done=True, stage="cancelled")
         except Exception as exc:              # noqa: BLE001
@@ -732,7 +1290,105 @@ def start_goalseek_job(cfg, goal, levers, paths, seed, grid) -> str:
 
 
 
+def start_bequest_job(cfg, body, seed) -> str:
+    """Does this plan only work because somebody dies? (`OPEN_ITEMS.md` E5.)
+
+    The engine side has been complete and pinned by four tests since the parent
+    lifecycle landed; what was missing was any way to reach it. It runs the
+    plan twice at ONE seed -- once as configured, once with the bequest not
+    credited -- so it costs two full simulations and belongs on the background
+    channel with everything else rather than blocking a request.
+
+    Progress is deliberately coarse. `bequest_dependency` runs both halves
+    internally and takes no callback, and inventing a smooth-looking bar over
+    work this function cannot observe would be a progress indicator that
+    reports confidence it does not have. The stage string says what is
+    actually happening instead.
+    """
+    _preflight_config(cfg)         # refusal before the thread, not inside it
+    paths = int(body.get("paths", 2_000))
+    jid = _new_job()
+
+    def work():
+        try:
+            _job_set(jid, pct=0.05,
+                     stage="running the plan twice at one seed")
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            out = ENG.bequest_dependency(cfg, paths, seed)
+            _job_set(jid, result=out, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
+def start_roth_schedule_job(cfg, body, seed) -> str:
+    """Multi-year conversion schedules, priced and left unranked.
+
+    Ten-ish full simulations plus two single-path probes, so it belongs on the
+    background channel. There is deliberately no `best` in the result: the
+    ruling was to expose the frontier, and a caller that wants one answer has
+    to choose which axis it cares about.
+    """
+    _preflight_config(cfg)         # refusal before the thread, not inside it
+    paths = int(body.get("paths", 1_200))
+    jid = _new_job()
+
+    def work():
+        try:
+            _job_set(jid, pct=0.02, stage="pricing conversion schedules")
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            out = RSCH.search(cfg, paths, seed)
+            _job_set(jid, result=out, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
+def start_asset_location_job(cfg, body, seed) -> str:
+    """Three placements of the same portfolio, on one set of paths.
+
+    Three full simulations, so it belongs on the background channel with the
+    other multi-run studies rather than blocking a request. Progress is per
+    arm, which is real: the comparison genuinely completes one placement at a
+    time, so the bar is reporting work that happened rather than interpolating
+    over work it cannot see.
+    """
+    _preflight_config(cfg)         # refusal before the thread, not inside it
+    paths = int(body.get("paths", 2_000))
+    horizon = int(body.get("horizon", 50))
+    jid = _new_job()
+
+    def work():
+        try:
+            _job_set(jid, pct=0.02, stage="pricing the placements")
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            out = AL.compare_placements(cfg, paths, seed, horizon)
+            _job_set(jid, result=out, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
 def start_frontier_job(cfg, paths, seed, grid, ranges) -> str:
+    _preflight_config(cfg)         # refusal before the thread, not inside it
     jid = _new_job()
 
     def work():
@@ -1006,6 +1662,73 @@ class Handler(BaseHTTPRequestHandler):
             except RECOVERY.RecoveryError as exc:
                 return self._json({"error": _public_error(exc),
                                    "code": "recovery_failed"}, 409)
+        if path == "/api/guardrail/status":
+            # Phase 4's home-page light, read from the plan's real check-in
+            # history. Deliberately GET and deliberately cheap: it runs no
+            # engine, because a status the home page cannot render instantly
+            # is a status the home page will not render.
+            plan_id = (parse_qs(urlparse(self.path).query).get("plan_id")
+                       or [""])[0]
+            try:
+                import guardrail_seam as GSEAM
+                seam = _checkin_seam()
+                history = seam.history(plan_id).get("checkins") or []
+                forecasts = seam.forecasts(plan_id).get("forecasts") or []
+                # The join is an ordinal, not a key: a check-in stores dates,
+                # a forecast stores a per-age curve. See
+                # guardrail_seam.expected_from_forecasts.
+                live = [row for row in history
+                        if not row.get("supersedes_checkin_id")]
+                expected = GSEAM.expected_from_forecasts(forecasts, len(live))
+                return self._json(GSEAM.status_from_history(history, expected))
+            except CHECKIN.CheckinError as exc:
+                return self._json({"error": str(exc), "code": exc.code},
+                                  exc.http_status)
+        if path in ("/api/checkin/history", "/api/checkin/forecasts",
+                    "/api/checkin/standing"):
+            plan_id = (parse_qs(urlparse(self.path).query).get("plan_id")
+                       or [""])[0]
+            try:
+                seam = _checkin_seam()
+                if path == "/api/checkin/history":
+                    return self._json(seam.history(plan_id))
+                if path == "/api/checkin/standing":
+                    return self._json(seam.standing(plan_id))
+                return self._json(seam.forecasts(plan_id))
+            except CHECKIN.CheckinError as exc:
+                return self._json({"error": str(exc), "code": exc.code},
+                                  exc.http_status)
+        if path == "/api/decision/review":
+            # Pure, and deliberately a GET: reviewing a decision changes
+            # nothing about it. `as_of` is passed in rather than read from
+            # the clock here so the answer is a function of its inputs --
+            # the same reason `set_choice_state` takes its timestamp from
+            # the caller.
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                return self._json(DECISION_REVIEW.review(
+                    _archive_store(), (query.get("plan_id") or [""])[0],
+                    as_of=(query.get("as_of") or
+                           [utc_now()])[0]))
+            except DECISION_REVIEW.DecisionReviewError as exc:
+                return self._json({"error": str(exc), "code": exc.code},
+                                  exc.http_status)
+        if path in ("/api/decision/archive/list", "/api/decision/archive/get"):
+            # Both pure. `list` answers with an empty list rather than a
+            # refusal when the archive has no decision record yet: a user who
+            # has never archived a decision has no decisions, which is not an
+            # error condition.
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                seam = _decision_archive_seam()
+                if path == "/api/decision/archive/list":
+                    return self._json(
+                        seam.history((query.get("plan_id") or [""])[0]))
+                return self._json(
+                    seam.get((query.get("packet_id") or [""])[0]))
+            except DECISION_ARCHIVE.DecisionArchiveError as exc:
+                return self._json({"error": str(exc), "code": exc.code},
+                                  exc.http_status)
         if path == "/api/presets":
             return self._json({
                 "presets": PRESETS_MOD.PRESETS,
@@ -1453,6 +2176,92 @@ class Handler(BaseHTTPRequestHandler):
                                        "code": "recovery_failed"}, 400)
             cfg = body.get("config") or {}
             seed = int(body.get("seed", 96000))
+            if path in _SYNC_ENGINE_PREFLIGHT_ROUTES:
+                _preflight_config(cfg)
+            if path == "/api/checkin/counterfactual_start":
+                # Turns the model-update line from `unknown` into a number, by
+                # re-running the archived plan under the current build. It goes
+                # through the SAME job path a normal run uses -- progress,
+                # cancellation, idempotency, archive ownership and the snapshot
+                # commit are solved there, and a second copy would be a second
+                # set of bugs. The plan below is entirely pinned from the
+                # archive; the only thing that differs is the build.
+                try:
+                    plan = _checkin_seam().counterfactual_plan(
+                        str(body.get("forecast_snapshot_id") or ""))
+                except CHECKIN.CheckinError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+                writer = _archive_writer()
+                # Ask whether the archive will accept a write BEFORE minting a
+                # job id, exactly as the `/api/run_start` archive branch does.
+                # Without this the refusal still happens -- it is the first
+                # statement inside the writer -- but it happens inside the
+                # worker thread, where `start_run_job`'s blanket handler turns
+                # it into a job error. The user is shown "re-running... 0%",
+                # waits, and then gets a message with no code and no status
+                # for a condition that was knowable before they were shown a
+                # progress bar at all. That is the failure this project's
+                # first rule exists to prevent, and the sibling route was
+                # already doing it right.
+                if writer is not None:
+                    writer.require_writable()
+                jid = start_run_job(
+                    plan["config"], plan["paths"], plan["seed"],
+                    plan["dist_paths"], store=_archive_store(),
+                    precision=plan["precision"], plan_id=plan["plan_id"],
+                    plan_version_id=plan["plan_version_id"], archive=True,
+                    request_id=plan["request_id"], writer=writer)
+                return self._json({"job": jid,
+                                   "old_snapshot_id": plan["old_snapshot_id"],
+                                   "engine_build_id": plan["engine_build_id"]})
+            if path in ("/api/checkin/record", "/api/checkin/attribute"):
+                # Phase 2. `record` is an archive_write; `attribute` is pure.
+                # Both refuse far more often than they answer, which is the
+                # protocol's design: an unattributable period is reported as
+                # such rather than decomposed into plausible numbers.
+                try:
+                    seam = _checkin_seam()
+                    if path == "/api/checkin/record":
+                        return self._json(seam.record(body))
+                    return self._json(seam.attribute(body))
+                except CHECKIN.CheckinError as exc:
+                    return self._json({"error": str(exc), "code": exc.code,
+                                       **exc.payload}, exc.http_status)
+                except RECOVERY.ManualRecoveryRequired as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "manual_recovery_required",
+                                       **_latched_authority_payload()}, 423)
+                except RECOVERY.RecoveryConflict as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "recovery_conflict"}, 409)
+                except RECOVERY.RecoveryError as exc:
+                    return self._json({"error": _public_error(exc),
+                                       "code": "recovery_failed"}, 400)
+            if path in ("/api/decision/archive",
+                        "/api/decision/archive/state"):
+                # Phase 4. Both are archive writes: a decision record and a
+                # decision are durable things, which is the whole point of
+                # the slice -- before this, a packet died with the process
+                # and there was nothing for next year's review to review.
+                try:
+                    seam = _decision_archive_seam()
+                    if path == "/api/decision/archive":
+                        return self._json(seam.save(body))
+                    return self._json(seam.set_state(body))
+                except DECISION_ARCHIVE.DecisionArchiveError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+                except RECOVERY.ManualRecoveryRequired as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "manual_recovery_required",
+                                       **_latched_authority_payload()}, 423)
+                except RECOVERY.RecoveryConflict as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "recovery_conflict"}, 409)
+                except RECOVERY.RecoveryError as exc:
+                    return self._json({"error": _public_error(exc),
+                                       "code": "recovery_failed"}, 400)
             if path == "/api/run_start":
                 archive = body.get("archive", False)
                 if not isinstance(archive, bool):
@@ -1592,6 +2401,8 @@ class Handler(BaseHTTPRequestHandler):
                                     int(body.get("paths", 200)),
                                     **{k: body[k] for k in ("age", "lo", "hi")
                                        if k in body})
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
                 except (ValueError, KeyError) as exc:
                     return self._json({"error": str(exc)}, 400)
                 return self._json(out)
@@ -1610,6 +2421,30 @@ class Handler(BaseHTTPRequestHandler):
                 import csv_import
                 r = csv_import.parse_broker_csv(str(body.get("text") or ""))
                 return self._json(r, 400 if "error" in r else 200)
+            if path == "/api/checkin/import_csv":
+                # Phase 2. Parses a broker TRANSACTIONS export into proposed
+                # check-in flow lines; it proposes, never records. The ledger
+                # is append-only with immutability triggers, so a mis-parsed
+                # import cannot be taken back — the user confirms and
+                # /api/checkin/record does the writing. Local-only, like the
+                # positions parser beside it.
+                import csv_import
+                r = csv_import.parse_transactions_csv(str(body.get("text") or ""))
+                return self._json(r, 400 if "error" in r else 200)
+            if path == "/api/spending_import":
+                # Phase 4. A year of budgeting-app export -> an annual total
+                # and a category breakdown, offered as the check-in's actual
+                # spending. Aggregates ONLY: unlike the broker importer beside
+                # it, no transaction row is returned, because a year of
+                # personal spending is a record of what somebody did rather
+                # than of what they own, and the check-in needs one number.
+                #
+                # Nothing is written here, and no config is involved, so this
+                # is deliberately outside the preflight: there is nothing to
+                # preflight against.
+                import spending_import as SPEND
+                r = SPEND.parse_spending_csv(str(body.get("text") or ""))
+                return self._json(r, 400 if "error" in r else 200)
             if path == "/api/housing":
                 # E5: deterministic mortgage schedule + rent-vs-buy net-worth
                 # comparison (no MC — pure math, instant).
@@ -1627,6 +2462,186 @@ class Handler(BaseHTTPRequestHandler):
                     hz["mode"] = m
                     out[m] = ENG.summary(c, n, seed, relocation_on=False)
                 return self._json({"n_paths": n, "seed": seed, **out})
+            if path == "/api/decide/plan":
+                # Synchronous and cheap: it runs no engine, it only counts.
+                try:
+                    return self._json(decide_plan(cfg, body))
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+            if path == "/api/decide/start":
+                # Background job on the same polling channel as the headline
+                # run: poll /api/progress, fetch /api/result, /api/cancel.
+                try:
+                    jid = start_decide_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
+            if path == "/api/annuity/plan":
+                # Synchronous and cheap: it runs no engine, it only counts.
+                try:
+                    return self._json(annuity_plan(cfg, body))
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+            if path == "/api/annuity/start":
+                # Background job on the same polling channel as everything
+                # else: /api/progress, /api/result, /api/cancel.
+                try:
+                    jid = start_annuity_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
+                return self._json({"job": jid})
+            if path == "/api/briefing_pack":
+                # Assembles what already exists; runs no engine. Behind the
+                # preflight anyway, because a config this cannot parse would
+                # produce a pack whose limitations section is wrong, and this
+                # is the one export designed to be read somewhere else.
+                _preflight_config(cfg)
+                lang = str(body.get("language") or "zh")
+                return self._json(BRIEFING_PACK.build(
+                    config=cfg,
+                    packet=body.get("packet"),
+                    memo=body.get("memo"),
+                    attribution=body.get("attribution"),
+                    sampling_error=(body.get("sampling_error")),
+                    limitations=LIMITATIONS_MOD.triggered(cfg, lang),
+                    language=lang))
+            if path == "/api/transition/propose":
+                # Reads and returns a checklist; it cannot write. The split
+                # between this and `apply` is the feature's whole contract.
+                _preflight_config(cfg)
+                try:
+                    return self._json(LIFE_TRANSITIONS.propose(
+                        str(body.get("kind") or ""), cfg))
+                except LIFE_TRANSITIONS.TransitionError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+            if path == "/api/transition/commit":
+                # The atomic write. Without a route this whole slice would be
+                # a library nothing calls -- "both sides correct, nobody
+                # looking at the seam", which this project has paid for six
+                # times.
+                _preflight_config(cfg)
+                writer = _archive_writer()
+                if writer is None:
+                    return self._json({
+                        "error": ("this archive has no control journal, so a "
+                                  "transition cannot be written atomically; "
+                                  "run a formal migration first"),
+                        "code": "no_control_journal"}, 409)
+                try:
+                    return self._json(LIFE_TRANSITIONS.commit(
+                        _archive_store(), writer, _checkin_seam(),
+                        plan_id=str(body.get("plan_id") or ""),
+                        parent_version_id=str(body.get("plan_version_id") or ""),
+                        kind=str(body.get("kind") or ""),
+                        cfg=cfg, confirmed=body.get("confirmed") or [],
+                        checkin_body=body.get("checkin") or {},
+                        jump_minor=body.get("jump_minor"),
+                        occurred_at=str(body.get("occurred_at") or "")))
+                except LIFE_TRANSITIONS.TransitionError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+                except CHECKIN.CheckinError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+            if path == "/api/transition/packet_plan":
+                # What a before/after packet for this transition would cost,
+                # BEFORE anything runs. Twenty-odd engine runs is not a thing
+                # to start quietly, and this project's first rule is that a
+                # refusal or a price lands before the user is shown progress.
+                #
+                # No second study engine: the transition becomes an ordinary
+                # decision alternative and goes through `plan_study`, which is
+                # the same call the decide panel makes.
+                _preflight_config(cfg)
+                try:
+                    shaped = LIFE_TRANSITIONS.as_alternative(
+                        cfg, str(body.get("kind") or ""),
+                        body.get("confirmed") or [])
+                except LIFE_TRANSITIONS.TransitionError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+                if not shaped["applicable"]:
+                    return self._json(shaped)
+                import assumption_packs as AP
+                import decision_packet as DP
+                import decision_study as DS
+                chosen = AP.select_packs(cfg)
+                plan = DS.plan_study(
+                    "transition", [DP.Alternative(
+                        shaped["alternative"]["name"],
+                        shaped["alternative"]["changes"], shaped["levers"])],
+                    seeds=int(body.get("seeds", 3)),
+                    return_models=DECIDE_RETURN_MODELS,
+                    adverse_packs=chosen["applicable"])
+                return self._json({**shaped, "plan": plan,
+                                   "paths": int(body.get("paths", 10_000))})
+            if path == "/api/transition/apply":
+                # Returns a NEW config carrying only the confirmed paths. It
+                # saves nothing: the user looks at the result and keeps it
+                # through the normal save, so a wizard cannot write a plan
+                # nobody reviewed.
+                _preflight_config(cfg)
+                try:
+                    return self._json(LIFE_TRANSITIONS.apply_confirmed(
+                        cfg, str(body.get("kind") or ""),
+                        body.get("confirmed") or []))
+                except LIFE_TRANSITIONS.TransitionError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
+            if path == "/api/limitations":
+                # Pure and cheap: it runs no engine, it reads flags. Still
+                # behind the preflight, because a config this cannot parse is
+                # a config whose disclosures would be wrong, and quietly
+                # returning the four that happen to evaluate would be the
+                # worst answer available.
+                _preflight_config(cfg)
+                return self._json(LIMITATIONS_MOD.triggered(
+                    cfg, str(body.get("language") or "zh")))
+            if path == "/api/funded_ratio":
+                # Synchronous on purpose: this runs no simulation at all, it
+                # discounts two sets of cash flows. A background job would be
+                # ceremony around arithmetic.
+                try:
+                    # The refusal comes first even though there is no job to
+                    # mint here: without it a malformed discount rate computes
+                    # a confident wrong ratio instead of being named.
+                    _preflight_config(cfg)
+                    return self._json(FRATIO.compute(cfg))
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+            if path == "/api/roth_schedule/start":
+                try:
+                    jid = start_roth_schedule_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
+            if path == "/api/asset_location/start":
+                try:
+                    jid = start_asset_location_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
+            if path == "/api/bequest/start":
+                # Background job on the same polling channel as everything
+                # else: /api/progress, /api/result, /api/cancel.
+                try:
+                    jid = start_bequest_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
             if path == "/api/frontier":
                 # S2: background job — same polling channel.
                 jid = start_frontier_job(cfg, body.get("paths", 1200), seed,
@@ -1640,6 +2655,8 @@ class Handler(BaseHTTPRequestHandler):
                     jid = start_goalseek_job(
                         cfg, body.get("goal") or {}, body.get("levers") or [],
                         body.get("paths", 1200), seed, body.get("grid", 8))
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
                 except ValueError as exc:
                     return self._json({"error": str(exc)}, 400)
                 return self._json({"job": jid})
@@ -1679,9 +2696,37 @@ class Handler(BaseHTTPRequestHandler):
                     rd["type"] = rt
                     rd.update(params.get(rt) or {})
                     st = ENG.summary(c, n, seed, relocation_on=False)
-                    pts.append({"type": rt, **st})
+                    # The spending fan for THIS rule. ROADMAP's presentation
+                    # item: "a spending-path percentile fan per withdrawal
+                    # strategy, turning ABW/VPW's spending volatility into a
+                    # visible comparison dimension". The volatility is the
+                    # whole point of choosing between these rules and a
+                    # success rate cannot show it -- two rules can survive
+                    # equally often while one of them cuts your spending by a
+                    # third in a bad decade.
+                    #
+                    # A SEPARATE, SMALLER run: `summary` and `lifecycle_sample`
+                    # each draw their own paths, and a fan is a distribution
+                    # view, which is what the smaller illustrative sample is
+                    # for. The count is reported beside it rather than left to
+                    # look like the headline's -- the estate line went the
+                    # other way for the opposite reason, because a FRACTION
+                    # off a small binned sample would be wrong where a shape
+                    # is not.
+                    fan = ENG.lifecycle_sample(c, FAN_PATHS, seed, False)
+                    pts.append({"type": rt, **st,
+                                "spending_fan": fan.get("consumption") or [],
+                                "spending_fan_paths": FAN_PATHS})
                 return self._json({"n_paths": n, "seed": seed,
-                                   "points": pts, "labels": labels})
+                                   "points": pts, "labels": labels,
+                                   "spending_fan_paths": FAN_PATHS,
+                                   "spending_fan_basis": (
+                                       "Each rule's spending fan is drawn from "
+                                       "a separate, smaller sample than the "
+                                       "success rates above it. It shows the "
+                                       "SHAPE of spending under that rule, not "
+                                       "a rate; a percentile band needs far "
+                                       "fewer paths than a tail probability.")})
             if path == "/api/robustness":
                 # Multi-seed robustness: same config & paths, three independent
                 # seeds — the simplest honest check that a headline number is
@@ -1709,13 +2754,48 @@ class Handler(BaseHTTPRequestHandler):
                 os.makedirs(ddir, exist_ok=True)
                 stamp = time.strftime("%Y%m%d-%H%M%S")
                 if kind == "report":
+                    # Guardrail dollarisation is derived HERE rather than on
+                    # the page: the derivation belongs next to the policies it
+                    # reads, and a second copy in JavaScript would be the shape
+                    # every seam defect this week has had. The page sends its
+                    # config; the report gets the priced rows.
+                    extra = dict(body.get("extra") or {})
+                    if cfg and not extra.get("guardrail_dollars"):
+                        import guardrails as GUARD
+                        import guardrail_dollars as GDOLLARS
+                        baseline = (results.get("home") or {})
+                        try:
+                            policies = GUARD.default_policies(baseline)
+                        except Exception:              # noqa: BLE001
+                            policies = []
+                        extra["guardrail_dollars"] = GDOLLARS.dollarise_all(
+                            policies, cfg)
                     f, out = _open_export(ddir, f"{safe}_report_{stamp}", "html")
                     with f:
-                        f.write(build_report.build(results, body.get("extra")))
+                        f.write(build_report.build(results, extra))
                 elif kind == "json":
                     f, out = _open_export(ddir, f"{safe}_results_{stamp}", "json")
                     with f:
                         json.dump(results, f, indent=1, ensure_ascii=False)
+                elif kind == "briefing":
+                    # Two files, deliberately: the Markdown is what a person
+                    # pastes and the JSON is what a machine parses, and
+                    # collapsing them would make one of the two audiences read
+                    # the wrong one. Both carry the same not-de-identified
+                    # statement, because whichever one travels is the one that
+                    # has to say it.
+                    pack = body.get("pack") or {}
+                    f, out = _open_export(ddir, f"{safe}_briefing_{stamp}", "md")
+                    with f:
+                        f.write(str(pack.get("markdown") or ""))
+                    fj, outj = _open_export(ddir, f"{safe}_briefing_{stamp}",
+                                            "json")
+                    with fj:
+                        json.dump(pack.get("json") or {}, fj, indent=1,
+                                  ensure_ascii=False)
+                    return self._json({
+                        "path": "~/Downloads/" + os.path.basename(out),
+                        "json_path": "~/Downloads/" + os.path.basename(outj)})
                 else:
                     return self._json({"error": "unknown kind"}, 400)
                 return self._json({"path": "~/Downloads/" + os.path.basename(out)})
@@ -1739,6 +2819,49 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "no results to render"}, 400)
                 return self._json({"html": build_report.build(results, body.get("extra"))})
             return self._json({"error": "unknown endpoint"}, 404)
+        except ENG.ConfigIncomplete as exc:
+            # One clause for every config-taking route, current and future. A
+            # per-route list is the shape that silently stops covering the route
+            # added after it, and this endpoint set has already grown twice
+            # under this seam. 400, not 500: the request is answerable, the plan
+            # is what is missing, and `field` says which part of it.
+            return self._json({"error": _public_error(exc),
+                               "code": exc.code, "field": exc.field}, 400)
+        except PersistenceError as exc:
+            # Not a blanket 4xx for everything the persistence layer can
+            # raise -- a corrupt archive really is a server fault and should
+            # stay a 500. This is the narrower statement `/api/run_start`
+            # already makes at its two `archive_store_unavailable` sites: if
+            # the store cannot be OPENED, that is a named, actionable
+            # condition rather than an anonymous stack trace, and it should
+            # reach the client as one.
+            #
+            # Found by driving install #12: a disposable archive under a path
+            # the persistence layer refuses produced
+            # `500 {"error": "unsafe SQLite parent path: <local path>"}` from
+            # `/api/decision/archive`. The real app uses Application Support
+            # and never meets it, which is why nothing had noticed -- and the
+            # route that DOES handle it was found by comparing two servers,
+            # not by a test.
+            return self._json({"error": _public_error(exc),
+                               "code": "archive_store_unavailable"}, 503)
+        except ARCHIVE_SEAM.ArchiveWriteRefused as exc:
+            # Same reasoning as the clause above, and the same defect it was
+            # written for. This refusal already carries its own status and
+            # code -- `require_writable` raises it as a 409 precisely so the
+            # front end can act on it -- but for a long time exactly ONE route
+            # caught it: the archive branch of `/api/run_start`. Every other
+            # write went through `writer.write()`, whose first statement is
+            # that same `require_writable()`, and got a 500 with a traceback.
+            #
+            # So under a `source_changed` or `manual_recovery_required`
+            # archive, recording a check-in and archiving a decision both
+            # answered "server error" for a condition the app understands
+            # perfectly and reports properly one route over. It is not a
+            # RecoveryError subclass, which is why the four RECOVERY clauses
+            # in those branches never saw it.
+            return self._json({"error": str(exc), "code": exc.code},
+                              exc.http_status)
         except Exception as exc:
             traceback.print_exc()
             return self._json({"error": _public_error(exc)}, 500)

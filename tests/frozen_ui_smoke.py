@@ -211,6 +211,59 @@ def _drive_webview(window, state):
                   js('FIRELegacyStore.writeDraft("X").code')
                   == "sqlite_authoritative",
                   str(js('FIRELegacyStore.writeDraft("X").code')))
+
+            # ----------------------------------------- the five-minute review
+            # ROADMAP Phase 4 acceptance: the object is the whole review line,
+            # walked in the INSTALLED bundle, and the test must assert the
+            # review page RENDERED rather than that a request did not error.
+            #
+            # The roadmap names the failure this guards: the review tab is
+            # gated on `archiveRefForReview()`, so a smoke with no archived
+            # plan can be entirely green having never drawn the page.
+            #
+            # The sequence is `ui_smoke`'s, which already drives it against
+            # the repository build -- ported rather than reinvented, because
+            # every identifier here is one I would otherwise be guessing at.
+            def wait_for(expr, timeout):
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    try:
+                        if js(expr):
+                            return True
+                    except Exception:                        # noqa: BLE001
+                        pass
+                    time.sleep(0.5)
+                return False
+
+            review_start = time.time()
+            js('document.getElementById("restartBtn").click()')
+            time.sleep(0.4)
+            js('document.getElementById("startExample").click()')
+            reached = wait_for(
+                '[...document.querySelectorAll(".view")].find('
+                'v=>v.classList.contains("show")).id === "v-results"', 420)
+            check("an archived Standard run reaches results in the frozen app",
+                  reached)
+
+            if reached:
+                tab = wait_for(
+                    '!![...document.querySelectorAll(".rtab")].find('
+                    't=>t.dataset.p==="review")', 30)
+                check("the annual review tab appears after an archived run",
+                      tab, "gated on archiveRefForReview()")
+                if tab:
+                    js('[...document.querySelectorAll(".rtab")].find('
+                       't=>t.dataset.p==="review").click()')
+                    rendered = wait_for(
+                        '!!document.getElementById("revOpening")', 20)
+                    check("the annual review page actually rendered",
+                          rendered,
+                          "asserting the form exists on screen, not that a "
+                          "request returned 200")
+                    elapsed = time.time() - review_start
+                    check("the review line completes inside five minutes",
+                          elapsed < 300,
+                          "%.0fs from restart to a rendered review" % elapsed)
     except Exception as exc:                                  # noqa: BLE001
         check("frozen ui driver crashed", False, repr(exc))
     finally:

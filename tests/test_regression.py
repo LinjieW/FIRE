@@ -33,7 +33,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "engine"))
 sys.path.insert(0, os.path.join(ROOT, "server"))
 
-import engine_v98 as ENG                      # noqa: E402
+import engine_adapter as ENG                      # noqa: E402
 from fire_v95_actual_baseline import INITIAL_STACK_ACTUAL  # noqa: E402
 
 SEED = 96_000
@@ -41,9 +41,16 @@ SEED = 96_000
 # 401(k) first-year default from $23,500 to $24,500.  The engine/RNG call graph
 # is unchanged; the terminal deltas are model-vintage effects. Both values are
 # cross-arch pins.
-GOLDEN_TERMINAL = 2_607_287.5967222806         # 2026 pack · 800 paths · seed 96000
+# Re-recorded once by `FIRE4-P3-DIVIDEND-DRAG/r1` (2026-08-14), deliberately
+# and with the user's authorisation: the taxable drag is now derived from a
+# yield and a rate (1.7% x 14.7% = 0.002499) instead of the hardcoded 0.0025,
+# so every run that touches a taxable bucket moves by about +0.002%. Previous
+# values kept so the change stays legible rather than merely overwritten:
+#   GOLDEN_TERMINAL        2_607_287.5967222806   (delta +50.73)
+#   GOLDEN_LEGACY_TERMINAL 2_557_596.4512437508   (delta +26.35)
+GOLDEN_TERMINAL = 2_607_338.325309041          # 2026 pack · 800 paths · seed 96000
 GOLDEN_FIRE_P50 = 38.0
-GOLDEN_LEGACY_TERMINAL = 2_557_596.4512437508  # 2026 pack · annual_spending_now=40440
+GOLDEN_LEGACY_TERMINAL = 2_557_622.7997192703  # 2026 pack · annual_spending_now=40440
 
 
 def cfg0():
@@ -2054,10 +2061,33 @@ class TestDataVintage(unittest.TestCase):
         self.assertEqual(first, second)
         source = pathlib.Path(
             ROOT, "engine", "fire_rule_pack.py").read_text(encoding="utf-8")
-        for forbidden in (
-                "date.today(", "urlopen(", "requests.", "socket.",
-                "open(", "read_text(", "write_text("):
+        # No network and no clock, absolutely. The pack must stay a
+        # deterministic, content-addressed leaf: a hidden fetch or a hidden
+        # `today()` would make one run's tax tables differ from another's with
+        # nothing in the result saying so.
+        for forbidden in ("date.today(", "urlopen(", "requests.", "socket.",
+                          "read_text(", "write_text("):
             self.assertNotIn(forbidden, source)
+        # `open(` was on that list too, and 4.0's rule that a pack carries
+        # declarative data rather than a Python literal cannot be satisfied
+        # without reading a file. The two conflict and one had to give; what
+        # the ban actually protects — determinism and content addressing — is
+        # preserved by narrowing it rather than dropping it:
+        #   * exactly one read, inside `_load_payload`;
+        #   * of a file that ships inside the bundle and is part of the release
+        #     identity manifest, so editing it moves the app's identity;
+        #   * whose content hash is pinned in tests/test_rule_pack_payload.py.
+        self.assertEqual(source.count("open("), 1)
+        loader = source[source.index("def _load_payload"):]
+        loader = loader[:loader.index("_PACK_PAYLOAD:")]
+        self.assertIn("open(", loader)
+        # The path is derived, never taken from a caller or the environment:
+        # a pack read from somewhere a user chose is a different guarantee.
+        path_fn = source[source.index("def _payload_path"):
+                         source.index("def _load_payload")]
+        self.assertIn("_PAYLOAD_FILENAME", path_fn)
+        for external in ("environ", "argv", "input("):
+            self.assertNotIn(external, path_fn)
 
     def test_rule_pack_maintenance_deadline_and_applicability(self):
         import fire_rule_pack as RP
@@ -2754,7 +2784,15 @@ class TestTrueTaxEngine(unittest.TestCase):
 
         def fake_solver(accounts, need_after_tax_nominal, ss_gross_nominal,
                         conversions_nominal, roth_locked, age, cpi, params,
-                        rmd_balance_prior_year_end=None):
+                        rmd_balance_prior_year_end=None, gain_fraction=None,
+                        **_forward_compatible):
+            # `gain_fraction` is named rather than swallowed because it is the
+            # one Phase 3 added and these traces care what the solver is told.
+            # `**_forward_compatible` is here for a duller reason: this stub
+            # stands in for a real function, and when the real signature grew
+            # the stub raised TypeError instead of failing an assertion --
+            # which nothing noticed, because this file is not in the gate's
+            # SUITES. It is now.
             age = int(age)
             index = solve_counts.get(age, 0)
             solve_counts[age] = index + 1
@@ -2775,6 +2813,14 @@ class TestTrueTaxEngine(unittest.TestCase):
                 "gross_wd": float(max(0.0, need_after_tax_nominal)),
                 "flow_err": 0.0,
                 "shortfall": 0.0,
+                # Phase 3 keys. This trace does not exercise cost basis or the
+                # dividend drag, but the production loop reads these every
+                # year, and a stub that omits them fails with KeyError -- an
+                # error, not an assertion, which says nothing about the
+                # behaviour under test.
+                "taxable_wd": 0.0,
+                "gain_fraction_used": 0.0,
+                "ordinary_taxable_real": 0.0,
             }
 
         def fake_irmaa(magi_real, mfj, persons):
@@ -3662,8 +3708,15 @@ class TestServedSurface(unittest.TestCase):
                  "ab": {"a": {"label": "A", "s": r["home"]},
                         "b": {"label": "B", "s": r["home"]}}}
         html2 = build_report.build(r, extra)
+        # `sampling SE` was this label until 2026-08-16 and was replaced on
+        # purpose. It printed ONE standard error -- about 68% -- under a name
+        # every reader takes for a confidence interval, so the honest 95%
+        # width was roughly double what this report showed. Asserting the old
+        # label would pin the misleading version of the very thing that was
+        # fixed; asserting the property keeps the check and drops the wrong
+        # word.
         for token in ("VERDICT-SENTINEL", "T1", "LIM-SENTINEL", "Scenario A/B",
-                      "sampling SE", "Monte Carlo"):
+                      "95% interval", "Monte Carlo"):
             self.assertIn(token, html2)
         legacy = copy.deepcopy(r)
         legacy["meta"].pop("rule_pack")

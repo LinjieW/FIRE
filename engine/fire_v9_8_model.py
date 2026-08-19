@@ -90,6 +90,7 @@ import numpy as np
 from dataclasses import dataclass, replace
 from typing import Optional, Sequence
 
+from fire_rule_pack import SSA_TRUST_FUND
 from fire_v9_3_model import (
     BondParams, DEFAULT_BOND_PARAMS,
     GlidePath, GLIDE_ALL_EQUITY,
@@ -105,6 +106,15 @@ from fire_v6_model import (
     STATE, TAX_US,
     find_fire_crossing, effective_ordinary_rate,
 )
+# 4.0 Phase 2 · the user's own long-term care. Distinct from the eldercare
+# shock above, which is paying for a parent. Imported unconditionally because
+# the module is pure Python with no cost to import; nothing is DRAWN unless a
+# plan turns it on.
+import ltc_model as LTC
+# 4.0 Phase 2 · the parent lifecycle. Replaces the eldercare shock and the
+# inheritance draw with one parent who has one death, when the plan opts in;
+# both of those stay exactly as they were for a plan that does not.
+import parents_model as PARENTS
 from fire_v7_model import (
     TaxParamsChina, TAX_CN, V7Config, sample_lifetime_v7,
 )
@@ -116,6 +126,7 @@ from fire_v9_1_model import (
     MortalityParams, MORTALITY_MALE, MORTALITY_FEMALE,
     annual_mortality_rate,
     MedicalParams, DEFAULT_MEDICAL, compute_medical_components,
+    MedicalHousehold,
     ACAParams,
     estimate_magi_proxy, compute_aca_premium_paid,
     WithdrawalRule, FixedRealRule, GuytonKlingerRule,
@@ -130,7 +141,9 @@ from fire_v9_4_model import (
     EARLY_WD_PENALTY_AGE, EARLY_WD_PENALTY_RATE,
     withdraw_with_seasoning_v94,
 )
-from fire_tax_true import TrueTaxParams, solve_retirement_year, irmaa_annual_surcharge_real
+from fire_tax_true import (TrueTaxParams, solve_retirement_year,
+                           irmaa_annual_surcharge_real,
+                           dividend_drag_rate_real)
 from fire_v9_6_model import (
     ChinaHealthcareParams, china_healthcare_cost_nominal,
     SSNRAHaircutParams, compute_dynamic_col_reduction,
@@ -140,7 +153,12 @@ from fire_v9_6_model import (
 # ============================================================
 # v9.8+ opt-in: LIFE EVENTS (children, education, sales, windfalls)
 # ============================================================
-INCOME_STREAM_KINDS = ("pension", "rental", "parttime", "equity")
+# 4.0 Phase 2 added the two guaranteed-income instruments. They are separate
+# kinds rather than a pension with different numbers because the decision the
+# packet exists to inform is exactly "annuity or ladder", and a bucket that
+# merges them cannot answer it.
+INCOME_STREAM_KINDS = ("pension", "rental", "parttime", "equity",
+                       "annuity", "tips_ladder")
 INCOME_STREAM_OWNERS = ("unspecified", "household", "primary", "spouse")
 
 
@@ -194,6 +212,22 @@ class IncomeStreamSpec:
             if (self.duration_years is None or self.end_age is not None
                     or self.after_fire_only or not self.cola):
                 raise ValueError("equity requires a working/retirement duration")
+        elif self.kind == "annuity":
+            # Open-ended on purpose: an annuity ends at a death, and an
+            # `end_age` here would be a guess at the lifespan the contract
+            # exists to stop the buyer having to guess.
+            if (self.end_age is not None or self.duration_years is not None
+                    or self.after_fire_only):
+                raise ValueError("an annuity runs until a death, not to an age")
+        elif self.kind == "tips_ladder":
+            # The mirror image: a ladder ends when its rungs run out, whether
+            # or not anyone is alive, so it MUST carry an end age.
+            if self.end_age is None or self.duration_years is not None:
+                raise ValueError("a TIPS ladder requires an inclusive end_age")
+            if self.after_fire_only or not self.cola:
+                raise ValueError("a TIPS ladder is inflation-linked by "
+                                 "construction; that is what makes it a TIPS "
+                                 "ladder rather than a bond ladder")
         if self.nominal_anchor_cpi is not None:
             nominal_anchor_cpi = float(self.nominal_anchor_cpi)
             if not np.isfinite(nominal_anchor_cpi):
@@ -273,7 +307,15 @@ def _income_schedule_active(stream: IncomeStreamSpec, age: int,
 
 def _income_nominal(stream: IncomeStreamSpec, cpi_cumulative: float,
                     nominal_anchor_cpi: Optional[float] = None) -> float:
-    if stream.kind == "pension" and not stream.cola:
+    # Keyed on `cola`, not on the kind. It used to read
+    # `kind == "pension" and not cola`, which was correct while the pension was
+    # the only stream that could switch COLA off — and silently wrong the
+    # moment a fixed annuity arrived, because that stream would have been paid
+    # as though it were inflation-linked. Losing purchasing power is the whole
+    # difference between two annuity quotes that look alike, and it would have
+    # gone the flattering way. Behaviour-neutral for every existing config:
+    # the pension is still the only OTHER stream whose adapter sets `cola`.
+    if not stream.cola:
         anchor = (stream.nominal_anchor_cpi
                   if stream.nominal_anchor_cpi is not None
                   else nominal_anchor_cpi)
@@ -460,6 +502,22 @@ def _apply_income_streams_accum_v98(
     received_nominal_by_kind_age = {}
     received_real_by_kind_age = {}
     exp0 = max(float(state.expenses_y0), 1e-9)
+    # A non-COLA stream is paid a fixed NOMINAL amount, so it needs the price
+    # level of its first payment. The retirement loop records that; these
+    # accumulation loops never did, and until `_income_nominal` was keyed on
+    # `cola` instead of `kind == "pension"` it did not show, because no working
+    # config paid a non-COLA stream before FIRE without also setting the anchor
+    # on the spec. A fixed annuity bought at 65 by a 65-year-old does exactly
+    # that, and the run died with "missing its CPI anchor". Recorded here and
+    # handed to the retirement phase so ONE anchor covers the whole life of the
+    # stream: anchoring again at the first retirement payment would quietly
+    # re-base the annuity upward at FIRE.
+    nominal_anchors = {
+        idx: float(stream.nominal_anchor_cpi)
+        for idx, stream in enumerate(income_streams)
+        if stream.nominal_anchor_cpi is not None
+    }
+
     new_path = [accum_path[0]]
     for i in range(1, len(accum_path)):
         step = accum_path[i]
@@ -471,14 +529,17 @@ def _apply_income_streams_accum_v98(
             primary_alive, spouse_alive = alive_by_year[i - 1]
         else:
             primary_alive, spouse_alive = True, True
-        for stream in income_streams:
+        for stream_idx, stream in enumerate(income_streams):
             if not _income_schedule_active(stream, age):
                 continue
             if not _income_owner_is_alive(
                     stream.owner, household_on,
                     primary_alive, spouse_alive):
                 continue
-            amount_nominal = _income_nominal(stream, cpi_i)
+            if not stream.cola and stream_idx not in nominal_anchors:
+                nominal_anchors[stream_idx] = cpi_i
+            amount_nominal = _income_nominal(stream, cpi_i,
+                                             nominal_anchors.get(stream_idx))
             amount_real = amount_nominal / max(cpi_i, 1e-9)
             delta += amount_nominal
             received_nominal_by_age[age] = (
@@ -503,6 +564,7 @@ def _apply_income_streams_accum_v98(
         "received_real_by_age": received_real_by_age,
         "received_nominal_by_kind_age": received_nominal_by_kind_age,
         "received_real_by_kind_age": received_real_by_kind_age,
+        "nominal_anchor_by_index": dict(nominal_anchors),
     }
 
 
@@ -532,6 +594,13 @@ def _apply_events_and_income_accum_v98(
     received_nominal_by_kind_age = {}
     received_real_by_kind_age = {}
     exp0 = max(float(state.expenses_y0), 1e-9)
+    # Same anchor bookkeeping as the income-only overlay above, and for the
+    # same reason: one anchor per stream for the whole life of the stream.
+    nominal_anchors = {
+        idx: float(stream.nominal_anchor_cpi)
+        for idx, stream in enumerate(income_streams)
+        if stream.nominal_anchor_cpi is not None
+    }
     delta = 0.0
     new_path = [accum_path[0]]
     for i in range(1, len(accum_path)):
@@ -584,14 +653,17 @@ def _apply_events_and_income_accum_v98(
             primary_alive, spouse_alive = alive_by_year[i - 1]
         else:
             primary_alive, spouse_alive = True, True
-        for stream in income_streams:
+        for stream_idx, stream in enumerate(income_streams):
             if not _income_schedule_active(stream, age):
                 continue
             if not _income_owner_is_alive(
                     stream.owner, household_on,
                     primary_alive, spouse_alive):
                 continue
-            amount_nominal = _income_nominal(stream, cpi_i)
+            if not stream.cola and stream_idx not in nominal_anchors:
+                nominal_anchors[stream_idx] = cpi_i
+            amount_nominal = _income_nominal(stream, cpi_i,
+                                             nominal_anchors.get(stream_idx))
             amount_real = amount_nominal / max(cpi_i, 1e-9)
             delta += amount_nominal
             received_nominal_by_age[age] = (
@@ -623,6 +695,7 @@ def _apply_events_and_income_accum_v98(
         "received_real_by_age": received_real_by_age,
         "received_nominal_by_kind_age": received_nominal_by_kind_age,
         "received_real_by_kind_age": received_real_by_kind_age,
+        "nominal_anchor_by_index": dict(nominal_anchors),
     }
     return new_path, event_meta, income_meta
 
@@ -676,6 +749,212 @@ def _life_event_meta_through_age(meta: dict, max_age: int) -> dict:
 # ============================================================
 # FIX F-4 · GK rule with corrected inflation-freeze basis
 # ============================================================
+def ss_payable_share(calendar_year: int, depletion_year: int,
+                    payable_at_depletion: float, payable_2100: float) -> float:
+    """The share of a SCHEDULED benefit actually payable in a given year.
+
+    1.0 until reserves run out, then the report's declining path. The Trustees
+    publish two endpoints -- the share at depletion and the share in 2100 --
+    and the straight line between them is THIS APP'S, not theirs. It is
+    disclosed as an interpolation in the rule pack's provenance and in the
+    limitations panel, because a reader looking at year 2060 is looking at a
+    number nobody published.
+
+    Deliberately NOT a flat step. A constant 78% would say the shortfall stops
+    growing, and the report's own endpoints say it does not.
+    """
+    if calendar_year < depletion_year:
+        return 1.0
+    if depletion_year >= 2100 or calendar_year >= 2100:
+        return payable_2100
+    fraction = (calendar_year - depletion_year) / float(2100 - depletion_year)
+    return payable_at_depletion + fraction * (payable_2100 - payable_at_depletion)
+
+
+@dataclass(frozen=True)
+class SSTrustFundParams:
+    """What happens to a benefit if Congress does nothing.
+
+    Roadmap 5.0 Phase 5 (idea-bank A11). The OASI trust fund's reserves are
+    projected to run out, and current law has no mechanism to borrow: at that
+    point benefits are paid from incoming payroll tax alone, which is less
+    than what is scheduled. Every plan in this app has so far paid Social
+    Security in full for fifty years, which is a legislative prediction stated
+    as an arithmetic default.
+
+    **This does not predict legislation.** It models the mechanical
+    consequence of no action, which is what the Trustees publish and the only
+    thing anyone can source. Congress acting -- and it has, every prior time a
+    fund neared depletion -- is exactly what this cannot forecast, and the
+    disclosure says so.
+
+    **The numbers are the report's, not this dataclass's.** Depletion years and
+    payable shares live in the rule pack (`SSA_TRUST_FUND`) so they carry a
+    vintage and go stale on a schedule. Putting them here as defaults would
+    make an actuarial projection look like a constant.
+
+    **A calendar year is REQUIRED and never guessed.** This engine runs in
+    ages and years-from-start; it has no idea what year it is. Depletion is a
+    calendar event, so `plan_start_year` says which calendar year the plan's
+    year zero is. Left as `None` the module refuses to run and says why --
+    defaulting it to a hardcoded year would mis-time a federal event by
+    however many years the user's plan is offset, silently, and defaulting it
+    to the clock would make the same plan produce different answers in
+    different years and break every archived replay.
+    """
+    enabled: bool = False
+    #: Calendar year of the plan's year zero. REQUIRED when enabled.
+    plan_start_year: Optional[int] = None
+    #: "intermediate" uses the Trustees' best estimate. "range" samples across
+    #: the three published alternatives -- which is the report's OWN range,
+    #: not a spread invented here.
+    scenario: str = "intermediate"
+    #: Annual divergence between the plan's CPI and the COLA the benefit
+    #: actually receives. CPI-E, the experimental elderly index, has generally
+    #: run ABOVE CPI-W, so a positive value here is the case where benefits
+    #: keep up better than the plan's inflation assumes. 0.0 is "no
+    #: divergence", which is what the engine has always assumed.
+    cola_delta_annual: float = 0.0
+    #: Offset for this module's own generator; see BlockySpendingParams.
+    seed_offset: int = 90_002
+
+
+@dataclass(frozen=True)
+class HumanCapitalParams:
+    """Wages that do not grow along a line, and a door back in that narrows.
+
+    Roadmap 6.0 (idea-bank A13). "Can I afford to quit" is half a question
+    about markets and half a question about whether you could get back in.
+    This engine answered neither: wages compounded at a fixed rate on every
+    path, and a layoff cost a flat four months at any age.
+
+    Both gaps were measured before this was written. Changing
+    `contributions.salary_growth_pre` shifts the whole curve on every path,
+    and `LayoffParams.gap_months` is a constant with no age term.
+
+    **The shock decomposition is the point, not the volatility.** A permanent
+    shock is a level change you carry for the rest of your career; a transitory
+    one is a bad year you recover from. A single "wage volatility" number
+    treats a lost promotion and a one-off missed bonus as the same event, and
+    they are not remotely the same for a plan.
+
+    Off by default and bit-identical when off: no draw is taken, so the shared
+    stream is untouched. Drawn from a separate child generator for the same
+    reason as the other 6.0 modules -- and note the registry entry, which says
+    plainly that treating a career independently of markets is almost
+    certainly untrue and will not be fixed by inventing a coefficient.
+    """
+    enabled: bool = False
+    #: Standard deviation of the PERMANENT annual shock to log wages: the part
+    #: you do not recover from. Zero by default so switching this on is opt-in
+    #: per component.
+    permanent_sigma: float = 0.08
+    #: Standard deviation of the TRANSITORY shock: a bad year that reverses.
+    transitory_sigma: float = 0.05
+    #: The return-to-work half of A13 lives on `LayoffParams`, NOT here.
+    #:
+    #: It was briefly on both. The mechanism reads the layoff copy, so the
+    #: three fields here were a second set of boxes for one fact -- the fourth
+    #: time in a day, and caught by the attribution pin like the previous
+    #: three. The search-decay dials are `layoff.gap_months_per_year_of_age`,
+    #: `layoff.decay_from_age` and `layoff.max_gap_months`, beside the layoff
+    #: probability they modify.
+    seed_offset: int = 90_017
+
+
+@dataclass(frozen=True)
+class HousePriceProcess:
+    """A house whose value is uncertain, for the two places that can use it.
+
+    Roadmap 6.0 Phase 3 (idea-bank A12). Measuring before building changed
+    what this is. The idea bank said the engine had Monte Carlo switched off
+    for half the balance sheet; it turned out the house's VALUE is not on the
+    balance sheet at all, and that is deliberate and disclosed -- the control
+    is literally named "home equity (excluded from sim)" because it is
+    illiquid and you live in it.
+
+    So this does not quietly put the house on the balance sheet. User ruling
+    2026-08-17: do both, and default to today's behaviour.
+
+    ``enabled`` draws a real price path. It reaches results through two doors,
+    both of which stay shut unless asked:
+
+    * ``sale_age``/``sale_base_real`` -- proceeds from a planned sale scale
+      with the drawn path instead of being a point estimate. This is the
+      decision-relevant uncertainty for most plans: not what the house is
+      worth on paper, but what you actually get when you downsize.
+    * ``include_in_net_worth`` -- OFF by default. When on, the house's drawn
+      value is reported, and reported SEPARATELY from spendable wealth,
+      because the reason it was excluded has not stopped being true.
+
+    Off by default and bit-identical when off: no draw is taken, so the shared
+    stream is untouched and every existing plan reproduces.
+
+    Drawn from a separate child generator, for the same two reasons as blocky
+    spending: house prices are not the market's draw sequence, and taking them
+    from the shared stream would mean switching this on reshuffled mortality
+    and returns too.
+    """
+    enabled: bool = False
+    #: Annual real volatility of home prices. Deliberately not defaulted from
+    #: any index -- see the limitations text. A user with a view sets it.
+    sigma_real: float = 0.10
+    #: Real drift, and it defaults to ZERO on purpose.
+    #:
+    #: The first version defaulted to the deterministic module's 1% and moved
+    #: the median terminal wealth 29% on a plan that only asked for
+    #: uncertainty -- thirty-five years of compounding that the flat
+    #: today's-dollar figure the user typed never had. Switching a module on
+    #: must make the spread appear, not walk the central case somewhere else,
+    #: or its measured effect is a mixture of this module and a silent raise.
+    #: A user who believes in real appreciation sets it deliberately, and the
+    #: limitations text says what that does.
+    drift_real: float = 0.0
+    #: Off: the existing "excluded from sim" promise is unchanged.
+    include_in_net_worth: bool = False
+    #: Share of the sale price lost to commission, repairs and timing.
+    #: Zero by default for the same reason drift is: a module switched on must
+    #: add uncertainty, not quietly make the plan poorer.
+    liquidity_discount: float = 0.0
+    sale_age: Optional[int] = None
+    sale_base_real: float = 0.0
+    equity_base_real: float = 0.0
+    seed_offset: int = 90_011
+
+
+@dataclass(frozen=True)
+class BlockySpendingParams:
+    """Spending that arrives in lumps rather than smoothly.
+
+    Roadmap 5.0 Phase 4 (idea-bank A14), the half that is not the sticky cut.
+    A roof, a car, a wedding, a medical excess: real spending is not the flat
+    annual line every path here draws. Smooth spending understates sequence
+    risk, because a lump landing in a bad decade is exactly the event a plan
+    survives or does not.
+
+    OFF by default and bit-identical when off -- no draw is taken at all,
+    so the shared generator's sequence is untouched and every existing plan
+    reproduces.
+
+    When ON, the draws come from a SEPARATE generator seeded from the run's
+    own seed. Two reasons, and the second is the load-bearing one: a lump
+    arriving is independent of what the market did, and drawing from the
+    shared stream would shift every later draw so that switching this on
+    would change mortality and returns too -- making its measured effect a
+    mixture of this module and a reshuffle.
+    """
+    enabled: bool = False
+    #: Chance per retirement year that a lump lands. 0.15 is roughly "once
+    #: every seven years", which is a placeholder and says so in the panel:
+    #: this is not calibrated against anybody's spending history.
+    annual_probability: float = 0.15
+    #: Size as a fraction of that year's planned spending.
+    size_fraction: float = 0.35
+    #: Draws are offset from the run seed so this module cannot consume from
+    #: the shared stream.
+    seed_offset: int = 90_001
+
+
 @dataclass
 class GuytonKlingerRuleV98(GuytonKlingerRule):
     """GK with the freeze deflator anchored to cpi_at_init (F-4 fix).
@@ -724,7 +1003,17 @@ class GuytonKlingerRuleV98(GuytonKlingerRule):
 
         current_implied_swr = tentative / max(portfolio_nominal, 1.0)
         if current_implied_swr > initial_swr * (1 + self.upper_guardrail):
-            tentative *= (1 - self.adjustment_pct)
+            # The cut, times how much of it actually happens.
+            #
+            # `cut_realisation` is inherited from the v9.1 rule; this
+            # generation OVERRIDES the method, so changing it there alone had
+            # no effect on any live run. The chain's layering is documented in
+            # AGENTS.md and this is what it costs: the same arithmetic exists
+            # in two generations and only the newest one runs.
+            #
+            # At the default of 1.0 the expression is exactly
+            # `tentative * (1 - adjustment_pct)`, bit for bit.
+            tentative *= (1 - self.adjustment_pct * self.cut_realisation)
             triggers += 1
         elif current_implied_swr < initial_swr * (1 - self.lower_guardrail):
             tentative *= (1 + self.adjustment_pct)
@@ -805,6 +1094,24 @@ def fund_shock_or_purchase_v98(
 # ============================================================
 # v9.8 RETIREMENT SIMULATOR (F-1A + F-2 + F-3 + F-14)
 # ============================================================
+def compose_annual_medical_target(target_nominal: float,
+                                  initial_nonmedical_share: float,
+                                  components: dict,
+                                  enabled: bool) -> float:
+    """Replace the legacy medical share with this year's complete basket.
+
+    ``target_nominal`` has already passed through the rule and any lifestyle
+    scaling.  Therefore only its non-medical share remains discretionary; the
+    current medical basket is added once and is never scaled with it.
+    """
+    if not enabled:
+        return target_nominal
+    return (target_nominal * initial_nonmedical_share
+            + components['routine']
+            + components['premium_full']
+            + components['oop'])
+
+
 def simulate_retirement_v98(
     starting_accounts: AccountStack,
     starting_age: int,
@@ -824,6 +1131,20 @@ def simulate_retirement_v98(
     ftc: FTCParams,
     eldercare_events: list,
     inheritance_event: Optional[tuple],
+    ltc_events: Optional[list] = None,
+    # 4.0 Phase 2 · the parent lifecycle. Two lists rather than one because the
+    # two sides land in different places: the plan's share of a parent's care
+    # is an outflow funded exactly as the eldercare shock is, and a bequest is
+    # an inflow credited exactly as the legacy inheritance is. They are named
+    # apart from those two so a caller can tell which module produced a number
+    # -- and so the zero-bequest honesty check has something to zero.
+    # `None` (not `[]`) means the module never ran, and draws nothing.
+    parent_care_events: Optional[list] = None,
+    parent_bequests: Optional[list] = None,
+    #: What the accumulation phase already anchored, `{stream index: CPI}`.
+    #: `None` means there was no accumulation phase (direct retirement or
+    #: backtest callers), not that nothing was anchored.
+    income_nominal_anchors: Optional[dict] = None,
     state: State = None,
     tax_us: TaxParams = None,
     tax_cn: TaxParamsChina = None,
@@ -836,6 +1157,10 @@ def simulate_retirement_v98(
     tax_true: Optional[TrueTaxParams] = None,
     primary_alive_at_start: bool = True,
     spouse_alive_at_start: bool = True,
+    blocky_rng: Optional[np.random.Generator] = None,
+    blocky_spending: Optional["BlockySpendingParams"] = None,
+    ss_trust_fund: Optional["SSTrustFundParams"] = None,
+    ss_trust_fund_depletion_year: Optional[int] = None,
 ) -> dict:
     state = state or STATE
     tax_us = tax_us or TAX_US
@@ -863,12 +1188,32 @@ def simulate_retirement_v98(
         spouse_ss = replace(ss, pia_monthly_y0=_hh.spouse_pia_monthly_y0,
                             claim_age=_hh.spouse_claim_age)
 
+    def _medical_household(p_alive, s_alive):
+        """The per-person medical split for this year, or `None`.
+
+        `None` covers both ways a plan can decline to split: no household at
+        all, and a household whose share was never measured. Neither is a
+        50/50 assumption, and neither reaches the per-person code path.
+        """
+        share = getattr(medical, "household_share_primary", None)
+        if share is None or not household_on:
+            return None
+        return MedicalHousehold(
+            share_primary=float(share),
+            spouse_age_offset=_hh.spouse_age_offset,
+            primary_alive=bool(p_alive),
+            spouse_alive=bool(s_alive),
+        )
+
     initial_components = compute_medical_components(
         year_in_simulation=starting_age - state.start_age,
         age=starting_age, in_retirement=True,
         med=medical, cpi_cumulative=fire_year_cpi_cumulative,
+        household=_medical_household(primary_alive, spouse_alive),
     )
     initial_full_premium = initial_components['premium_full']
+    annual_medical_trajectory = bool(getattr(
+        medical, 'annual_trajectory_enabled', False))
 
     starts_in_china = (
         relocation.relocation_age is not None
@@ -900,6 +1245,15 @@ def simulate_retirement_v98(
             + initial_components['oop']
         )
 
+    # The enabled annual trajectory lets the withdrawal rule continue to
+    # govern only the discretionary/non-medical share.  The zero-total branch
+    # is explicit: a zero budget has no non-medical share, rather than an
+    # epsilon that could turn an unmeasured zero into a plausible number.
+    if annual_medical_trajectory:
+        initial_nonmedical_share = (
+            initial_components['non_medical'] / initial_total_expenses
+            if initial_total_expenses > 0 else 0.0)
+
     initial_swr = initial_total_expenses / max(starting_accounts.total, 1.0)
     # FIX F-4 activation: pass the true CPI at rule initialization.
     rule_state = _init_rule(rule, starting_accounts.total,
@@ -928,30 +1282,79 @@ def simulate_retirement_v98(
 
     seasoning_queue: list = []
     total_conversions = 0.0
+    # Per-year record of what was ACTUALLY converted, not what was
+    # requested. The two differ whenever the engine's caps bite -- the
+    # pretax balance running out, or the 4x taxable buffer -- and a
+    # schedule table that reported the request would be showing the user
+    # a plan the engine did not run.
+    conversion_by_age: list[tuple[int, float]] = []
     ss_payments_received_real = 0.0
     total_wd_received = 0.0
     total_ss_applied = 0.0
     ss_surplus_credited = 0.0
     total_income_received = 0.0
+    # Per-year record of the income actually received, nominal. The
+    # totals beside it were never enough for a guardrail: a policy about
+    # income being INTERRUPTED needs to see the year it stopped, and a
+    # lifetime total cannot show that. Without this series the
+    # income-interruption trigger was correctly reported as
+    # unobservable, which is honest and is not the same as closed.
+    income_received_path: list[float] = []
     total_income_applied = 0.0
     income_surplus_credited = 0.0
     income_received_by_kind = {}
     income_applied_by_kind = {}
     income_surplus_by_kind = {}
-    _income_anchor_by_index = {
-        idx: float(stream.nominal_anchor_cpi)
-        for idx, stream in enumerate(income_streams)
-        if stream.nominal_anchor_cpi is not None
-    }
-    eldercare_total_real = 0.0
-    eldercare_count = 0
+    # Seeded with whatever the accumulation phase already anchored. Without
+    # this a stream paid before FIRE and after it would be anchored twice --
+    # re-based at the first retirement payment -- and a fixed annuity would
+    # silently grow with inflation across the FIRE boundary, which is the one
+    # thing a fixed annuity does not do.
+    _income_anchor_by_index = dict(income_nominal_anchors or {})
+    # No re-seeding from `stream.nominal_anchor_cpi` here. The original code
+    # built this dict from the spec anchors, and a mutation removing that
+    # changed nothing measurable — `_income_nominal` already prefers a spec
+    # anchor over anything handed to it, and nothing else reads this dict. A
+    # line whose removal no test can notice is a line that reads as load-
+    # bearing and is not.
+    # `None` (not `[]`) means the caller never modelled eldercare, and the
+    # totals stay None so an unmeasured zero cannot print as a measured one.
+    # The backtest passed `[]` and so reported 0.0 spent on a parent it had
+    # never simulated; the LTC channel beside it already used None correctly.
+    eldercare_on = eldercare_events is not None
+    eldercare_total_real = 0.0 if eldercare_on else None
+    eldercare_count = 0 if eldercare_on else None
     inheritance_received_real = 0.0
     sh_property_purchased_nominal = 0.0
     total_early_wd_penalty = 0.0
 
     eldercare_by_age = {}
-    for age, amt in eldercare_events:
+    for age, amt in (eldercare_events or []):
         eldercare_by_age.setdefault(age, []).append(amt)
+
+    # 4.0 Phase 2 long-term care. `None` means the module did not run, and the
+    # totals below stay None to say so: a 0.0 printed for "care cost" is
+    # indistinguishable from care that was modelled and happened to be free,
+    # and this project has already paid for that confusion once.
+    ltc_on = ltc_events is not None
+    ltc_by_age = {}
+    for age, amt in (ltc_events or []):
+        ltc_by_age.setdefault(int(age), []).append(float(amt))
+    ltc_total_real = 0.0 if ltc_on else None
+    ltc_years_paid = 0 if ltc_on else None
+
+    # Parent lifecycle. `None` means the module never ran, and the totals stay
+    # None so a caller cannot read "0 paid toward a parent's care" as a
+    # measurement when nothing was measured.
+    parents_on = parent_care_events is not None or parent_bequests is not None
+    parent_care_by_age = {}
+    for age, amt in (parent_care_events or []):
+        parent_care_by_age.setdefault(int(age), []).append(float(amt))
+    parent_bequest_by_age = {}
+    for age, amt in (parent_bequests or []):
+        parent_bequest_by_age.setdefault(int(age), []).append(float(amt))
+    parent_care_total_real = 0.0 if parents_on else None
+    parent_bequests_received_real = 0.0 if parents_on else None
 
     # v9.8+ opt-in life events (None/empty => zero ops). Outflows use the same
     # funding machinery as eldercare (outside the consumption identity, so the
@@ -969,11 +1372,41 @@ def simulate_retirement_v98(
     tt_tax_total = 0.0
     tt_tax_total_real = 0.0
     tt_flow_err_max = 0.0
+    # Aggregate cost basis of the taxable bucket. `taxable_gain_fraction` is no
+    # longer applied to every withdrawal as though the money had just been
+    # bought at that gain; it seeds the OPENING basis, and from there the basis
+    # is carried: growth does not raise it, a withdrawal retires it pro rata,
+    # and anything deposited back (RMD/SS excess, income surplus) arrives with
+    # full basis because it was already taxed on the way in.
+    #
+    # `None` when the true-tax path is off, and it stays None -- a 0.0 here
+    # would read as "measured, and the whole bucket is gain".
+    # Last year's ordinary taxable income and filing status, used to price
+    # THIS year's distributions. The drag is charged at the top of the year,
+    # before the year's own solve exists, so a lookback is the only honest
+    # option -- the same shape as IRMAA's statutory t-2 lookback already
+    # modelled here. `None` until the first solve completes, and while it is
+    # `None` the flat derived rate applies rather than a guessed bracket.
+    _tt_prior_income = None
+    taxable_basis = (max(0.0, accounts.taxable)
+                     * (1.0 - float(tax_true.taxable_gain_fraction))
+                     if _tt_on else None)
+    tt_gain_fraction_last = None
     # IRMAA administrative lookback is intentionally a function-local ledger:
     # each retirement path owns its modeled tax-year records, and no prior
     # MAGI state can leak across paths, chunks, or calls.  Values are written
     # only after the year's final TRUE-tax solve below.
     irmaa_history = {}
+
+    # 4.0 E6 · end-of-life spending peak, once per death (ruling R3). Consumes
+    # no new randomness: it reads the mortality draws the loop already takes.
+    # `None` when unpriced or when nothing can die; `0` once armed means the
+    # sampler ran and this path produced no death inside the horizon, which is
+    # a measurement rather than an absence.
+    _eol_peak_real = getattr(medical, "eol_peak_real", None)
+    eol_armed = _eol_peak_real is not None and mortality.enabled
+    eol_peaks_charged = 0 if eol_armed else None
+    eol_total_real = 0.0 if eol_armed else None
 
     for year_idx, (eq_r, bd_r, inf) in enumerate(
         zip(equity_returns, bond_returns, inflations)
@@ -989,29 +1422,71 @@ def simulate_retirement_v98(
         accounts.pretax_401k *= (1 + r_eff)
         accounts.roth_ira *= (1 + r_eff)
         accounts.hsa *= (1 + r_eff)
-        accounts.taxable *= (1 + r_eff - tax_us.drag_taxable)
+        # Bracket-aware when the true-tax engine is on: qualified distributions
+        # stack on last year's ordinary income through the real 0/15/20 rates,
+        # the non-qualified remainder is ordinary. Off, or before the first
+        # solve, the flat derived rate stands. A retiree living on basis lands
+        # in the 0% bracket and pays no drag at all -- which the single
+        # hardcoded number could not say.
+        taxable_drag = tax_us.drag_taxable
+        # An explicit `drag_taxable` outranks the brackets. Without this the
+        # override silently stops working the moment the true-tax engine is
+        # on -- and a plan saved with both would no longer reproduce, which
+        # is the one guarantee the override exists to provide.
+        if (_tt_on and not getattr(tax_us, 'drag_taxable_explicit', False)
+                and _tt_prior_income is not None and accounts.taxable > 0.0):
+            _prior_ordinary, _prior_mfj = _tt_prior_income
+            _dividends_real = ((accounts.taxable / cpi_cumulative)
+                               * tax_us.dividend_yield)
+            taxable_drag = tax_us.dividend_yield * dividend_drag_rate_real(
+                _dividends_real, tax_us.dividend_qualified_fraction,
+                _prior_ordinary, _prior_mfj)
+        accounts.taxable *= (1 + r_eff - taxable_drag)
 
         seasoning_queue, roth_locked = update_seasoning_queue(
             seasoning_queue, current_age, r_eff,
             roth_ladder.senior_age_threshold, roth_ladder.seasoning_years,
         )
 
+        deaths_this_year = 0
         if household_on:
             spouse_age = current_age + _hh.spouse_age_offset
             if primary_alive and rng.random() < annual_mortality_rate(current_age, mortality):
                 primary_alive = False
+                deaths_this_year += 1
             if spouse_alive and rng.random() < annual_mortality_rate(max(1, spouse_age), spouse_mort):
                 spouse_alive = False
-            if not primary_alive and not spouse_alive:
-                age_at_death = current_age
-                portfolio_path.append(accounts.total)
-                break
+                deaths_this_year += 1
+            terminal = not primary_alive and not spouse_alive
         elif mortality.enabled:
-            q = annual_mortality_rate(current_age, mortality)
-            if rng.random() < q:
-                age_at_death = current_age
-                portfolio_path.append(accounts.total)
-                break
+            if rng.random() < annual_mortality_rate(current_age, mortality):
+                deaths_this_year = 1
+            terminal = deaths_this_year > 0
+        else:
+            terminal = False
+
+        if terminal:
+            age_at_death = current_age
+            # The loop is about to end, and until this slice a terminal year
+            # recorded no consumption at all -- the break happens before the
+            # spending block. So the peak has to move real money here and be
+            # recorded here, or `total_wd_received_nominal` and
+            # `sum(nominal_consumption_path)` stop agreeing.
+            if eol_armed and deaths_this_year:
+                accounts, received_eol, _penalty = withdraw_with_seasoning_v94(
+                    accounts,
+                    deaths_this_year * _eol_peak_real * cpi_cumulative,
+                    tax_us, roth_locked, current_age)
+                total_wd_received += received_eol
+                eol_peaks_charged += deaths_this_year
+                eol_total_real += received_eol / cpi_cumulative
+                real_consumption_path.append(received_eol / cpi_cumulative)
+                nominal_consumption_path.append(received_eol)
+                lifestyle_real_path.append(
+                    received_eol / (col_effective if in_china else 1.0)
+                    / cpi_cumulative)
+            portfolio_path.append(accounts.total)
+            break
 
         # Relocation event
         if (relocation.relocation_age is not None and not relocation_done
@@ -1052,6 +1527,16 @@ def simulate_retirement_v98(
                 accounts.taxable += inh_amount_y0 * cpi_cumulative
                 inheritance_received_real += inh_amount_y0
 
+        # A parent's bequest, credited the same way and in the same place, so
+        # the two modules cannot disagree about what receiving money means.
+        # Counted into its own total: a plan needs to be able to ask "how much
+        # of this rests on inheriting", and a figure merged with the legacy
+        # module's could not answer it.
+        if current_age in parent_bequest_by_age:
+            for amt_y0 in parent_bequest_by_age[current_age]:
+                accounts.taxable += amt_y0 * cpi_cumulative
+                parent_bequests_received_real += amt_y0
+
         if current_age in eldercare_by_age:
             for amt_y0 in eldercare_by_age[current_age]:
                 shock_nominal = amt_y0 * cpi_cumulative
@@ -1061,6 +1546,32 @@ def simulate_retirement_v98(
                 total_early_wd_penalty += penalty
                 eldercare_total_real += amt_y0
                 eldercare_count += 1
+
+        # The plan's share of a parent's care, funded through the very same
+        # call as the eldercare shock above — it is the same event, arriving
+        # from a module that knows which parent it belongs to and when they
+        # die. Kept in its own total for the same reason the bequest is.
+        if current_age in parent_care_by_age:
+            for amt_y0 in parent_care_by_age[current_age]:
+                care_nominal = amt_y0 * cpi_cumulative
+                accounts, paid, penalty = fund_shock_or_purchase_v98(
+                    accounts, care_nominal, tax_us, current_age, roth_locked,
+                )
+                total_early_wd_penalty += penalty
+                parent_care_total_real += amt_y0
+
+        # Long-term care, funded exactly as the eldercare shock is: a mandatory
+        # outflow met from the account stack, outside the consumption identity,
+        # so the cash-conservation invariant reads the same with the module on.
+        if current_age in ltc_by_age:
+            for amt_y0 in ltc_by_age[current_age]:
+                care_nominal = amt_y0 * cpi_cumulative
+                accounts, paid, penalty = fund_shock_or_purchase_v98(
+                    accounts, care_nominal, tax_us, current_age, roth_locked,
+                )
+                total_early_wd_penalty += penalty
+                ltc_total_real += amt_y0
+                ltc_years_paid += 1
 
         if current_age in life_by_age:
             for amt_y0 in life_by_age[current_age]:
@@ -1094,11 +1605,21 @@ def simulate_retirement_v98(
             if not _income_schedule_active(
                     stream, current_age, retirement_start_age=starting_age):
                 continue
-            if (stream.kind == "pension" and not stream.cola
-                    and stream_idx not in _income_anchor_by_index):
+            if not stream.cola and stream_idx not in _income_anchor_by_index:
                 # Direct retirement/backtest callers may not have a pre-FIRE
                 # path. Anchor at the first scheduled modeled payment, even if
                 # owner death suppresses that payment.
+                #
+                # Keyed on `cola`, not on `kind == "pension"` — the other half
+                # of the same fix as `_income_nominal`. Anchoring only pensions
+                # while paying every non-COLA stream off an anchor meant a
+                # fixed annuity hit "missing its CPI anchor" and the run died;
+                # had the read side been left keyed on kind too, it would
+                # instead have been paid as though inflation-linked, which is
+                # the quiet version of the same bug. Anchoring at the first
+                # payment is right for an annuity for the same reason it is
+                # right for a pension: the quote is fixed in the dollars of the
+                # year the money starts arriving.
                 _income_anchor_by_index[stream_idx] = cpi_cumulative
             if not _income_owner_is_alive(
                     stream.owner, household_on,
@@ -1119,6 +1640,9 @@ def simulate_retirement_v98(
             accounts, seasoning_queue, current_age, sim_year, roth_ladder,
         )
         total_conversions += conversion_this_year
+        if conversion_this_year > 0:
+            conversion_by_age.append((int(current_age),
+                                      float(conversion_this_year)))
         roth_locked += conversion_this_year
         if _tt_on and not in_china and conversion_this_year > 0:
             # refund the ladder's flat tax — the true engine taxes the
@@ -1129,10 +1653,21 @@ def simulate_retirement_v98(
         components = compute_medical_components(
             year_in_simulation=sim_year, age=current_age, in_retirement=True,
             med=medical, cpi_cumulative=cpi_cumulative,
+            household=_medical_household(primary_alive, spouse_alive),
         )
         full_premium = components['premium_full']
+        # Only the exchange-priced part of the basket is eligible for a
+        # marketplace subsidy. On every single-anchor pre-Medicare year this
+        # IS the whole premium, so nothing moves there; it diverges only once
+        # one member is on Medicare while another is still on the bridge, and
+        # in that year charging the subsidy against the whole basket would let
+        # the affordability cap pay down a Medicare premium.
+        aca_priced_premium = components['premium_aca_portion']
+        current_medical_gross = (
+            components['routine'] + full_premium + components['oop'])
 
         # ---- FIX F-1A · target computation ----
+        _trajectory_relocation_year = False
         if in_china and not gk_reseeded:
             # Relocation year: last US-basis GK call, translate, RE-SEED.
             target_us, rule_state = rule.compute_target_withdrawal(
@@ -1142,10 +1677,20 @@ def simulate_retirement_v98(
             )
             china_health_nominal = china_healthcare_cost_nominal(
                 current_age, cpi_cumulative, china_healthcare)
-            us_health = (components['routine'] + full_premium
-                         + components['oop'])
-            L = (max(0.0, target_us - us_health) * col_effective
-                 + china_health_nominal)
+            us_health = current_medical_gross
+            if annual_medical_trajectory:
+                _trajectory_relocation_year = True
+                nonmedical_us = target_us * initial_nonmedical_share
+                if getattr(state, "spending_decline", 0.0) > 0.0 and year_idx > 0:
+                    nonmedical_us *= max(
+                        getattr(state, "spending_decline_floor", 0.55),
+                        (1.0 - state.spending_decline) ** year_idx)
+                if household_on and not (primary_alive and spouse_alive):
+                    nonmedical_us *= _hh.survivor_spending_frac
+                L = nonmedical_us * col_effective + china_health_nominal
+            else:
+                L = (max(0.0, target_us - us_health) * col_effective
+                     + china_health_nominal)
             fx_ratio = fx_rate / max(fx_at_relocation, 1e-9)
             prev_triggers = rule_state.get('guardrail_triggers', 0)
             rule_state = _init_rule(
@@ -1187,14 +1732,35 @@ def simulate_retirement_v98(
         # is applied AFTER the GK rule call, so guardrails keep evaluating the
         # UNSCALED budget against the portfolio — a mildly conservative bias
         # by construction (disclosed in the app's limitations panel).
-        if getattr(state, "spending_decline", 0.0) > 0.0 and year_idx > 0:
+        if (not _trajectory_relocation_year
+                and getattr(state, "spending_decline", 0.0) > 0.0
+                and year_idx > 0):
             _decay = max(getattr(state, "spending_decline_floor", 0.55),
                          (1.0 - state.spending_decline) ** year_idx)
             target_nominal *= _decay
 
         # ---- household: after the first death, spend drops to survivor level ----
-        if household_on and not (primary_alive and spouse_alive):
+        if (not _trajectory_relocation_year and household_on
+                and not (primary_alive and spouse_alive)):
             target_nominal *= _hh.survivor_spending_frac
+
+        if annual_medical_trajectory and not in_china:
+            # The rule and lifestyle modifiers own only the initial
+            # non-medical share.  The current US medical basket is mandatory:
+            # replace the legacy medical share rather than adding a second
+            # basket, and let ACA reduce only its full-price premium below.
+            target_nominal = compose_annual_medical_target(
+                target_nominal, initial_nonmedical_share, components, True)
+
+        # ---- blocky spending: a lump, or nothing ----
+        # Placed AFTER the medical basket and the survivor adjustment so it
+        # scales with what this year actually costs, and BEFORE Social
+        # Security so the income side sees the real need. It is spending, so
+        # it flows through the same withdrawal it always did -- nothing here
+        # invents a new cash channel for the attribution to miss.
+        if blocky_rng is not None and blocky_spending is not None:
+            if blocky_rng.random() < blocky_spending.annual_probability:
+                target_nominal *= (1.0 + blocky_spending.size_fraction)
 
         # ---- Social Security (haircut when in China) ----
         spouse_age = (current_age + _hh.spouse_age_offset
@@ -1219,6 +1785,27 @@ def simulate_retirement_v98(
             ss_income_gross = compute_ss_annual_income(
                 current_age, cpi_at_ss_claim or cpi_cumulative, cpi_cumulative, ss,
             )
+        # ---- trust fund depletion + COLA divergence ----
+        # Applied to the GROSS scheduled benefit, before the China
+        # withholding haircut: a reduced benefit is what the program pays,
+        # and withholding is taken from what is actually paid. Reversing the
+        # order would withhold tax on money nobody received.
+        if ss_trust_fund is not None and ss_trust_fund.enabled:
+            if ss_trust_fund.cola_delta_annual:
+                # COLAs accrue from age 62 whether or not claiming is
+                # delayed, so the divergence compounds from 62 rather than
+                # from the claim age.
+                cola_years = max(0, current_age - 62)
+                ss_income_gross *= ((1.0 + ss_trust_fund.cola_delta_annual)
+                                    ** cola_years)
+            if ss_trust_fund_depletion_year is not None:
+                calendar_year = (ss_trust_fund.plan_start_year
+                                 + (current_age - state.start_age))
+                ss_income_gross *= ss_payable_share(
+                    calendar_year, ss_trust_fund_depletion_year,
+                    float(SSA_TRUST_FUND["oasi_payable_at_depletion_intermediate"]),
+                    float(SSA_TRUST_FUND["oasi_payable_2100_intermediate"]))
+
         if in_china:
             ss_income = ss_income_gross * (1 - ss_nra.haircut_fraction)
         else:
@@ -1239,10 +1826,10 @@ def simulate_retirement_v98(
                 pretax_401k_wd_nominal=_provisional_portfolio_need * 0.3,
             ) + conversion_this_year
             aca_paid = compute_aca_premium_paid(
-                full_premium, magi_proxy, cpi_cumulative, aca,
+                aca_priced_premium, magi_proxy, cpi_cumulative, aca,
                 household_size=_aca_household_size,
             )
-            premium_savings = full_premium - aca_paid
+            premium_savings = aca_priced_premium - aca_paid
             adjusted_target = max(0.0, target_nominal - premium_savings)
         else:
             adjusted_target = target_nominal  # F-14: no ACA machinery at 65+
@@ -1250,6 +1837,21 @@ def simulate_retirement_v98(
         if in_china and sh_property.enabled and sh_property.rental_income_y0 > 0:
             rental_nominal = sh_property.rental_income_y0 * cpi_cumulative
             adjusted_target = max(0.0, adjusted_target - rental_nominal)
+
+        # ---- 4.0 E6 · end-of-life peak for a death that did NOT end the run --
+        # Only a couple reaches this: the first death leaves a survivor, so the
+        # loop carries on and the peak is an ordinary line in this year's cash
+        # need. It is added AFTER the ACA adjustment on purpose -- terminal care
+        # is not a marketplace premium, and running it through the affordability
+        # cap would let a subsidy pay down a funeral. It is also deliberately
+        # not scaled by the destination cost of living: the figure is the one
+        # the user typed, and re-pricing it by geography would be a relationship
+        # they never stated. Both are disclosed in the limitations panel.
+        if eol_armed and deaths_this_year:
+            _eol_nominal = deaths_this_year * _eol_peak_real * cpi_cumulative
+            adjusted_target += _eol_nominal
+            eol_peaks_charged += deaths_this_year
+            eol_total_real += _eol_nominal / cpi_cumulative
 
         # ---- FIX F-2 · SS offsets withdrawals in both regions ----
         material_true_tax_shortfall = False
@@ -1266,17 +1868,28 @@ def simulate_retirement_v98(
             income_applied_1 = min(
                 annual_income_available, need1_total)
             need1 = max(0.0, need1_total - income_applied_1)
+            # Measured once, from the balance both solves start from. The
+            # second solve re-runs from this same `accounts`, so taking the
+            # fraction after the first would price the re-solve off a bucket
+            # that was never actually drawn down.
+            _tax_before = max(0.0, accounts.taxable)
+            _gain_frac = (0.0 if _tax_before <= 0.0 else
+                          max(0.0, min(1.0,
+                                       (_tax_before - taxable_basis)
+                                       / _tax_before)))
             res_tt = solve_retirement_year(
                 accounts, need1, ss_income, conversion_this_year,
                 roth_locked, current_age, cpi_cumulative, tax_true_year,
-                rmd_balance_prior_year_end=pretax_prior_year_end)
+                rmd_balance_prior_year_end=pretax_prior_year_end,
+                gain_fraction=_gain_frac)
             if current_age < medical.medicare_age:
                 # ACA: re-derive the subsidy from TRUE MAGI (one extra pass)
                 aca_paid_true = compute_aca_premium_paid(
-                    full_premium, res_tt["magi_aca_nominal"], cpi_cumulative, aca,
+                    aca_priced_premium, res_tt["magi_aca_nominal"],
+                    cpi_cumulative, aca,
                     household_size=_aca_household_size)
                 need2_total = max(
-                    0.0, target_nominal - (full_premium - aca_paid_true))
+                    0.0, target_nominal - (aca_priced_premium - aca_paid_true))
             else:
                 need2_total = need1_total
                 if tax_true_year.irmaa_enabled:
@@ -1308,7 +1921,8 @@ def simulate_retirement_v98(
                 res_tt = solve_retirement_year(
                     accounts, need2, ss_income, conversion_this_year,
                     roth_locked, current_age, cpi_cumulative, tax_true_year,
-                    rmd_balance_prior_year_end=pretax_prior_year_end)
+                    rmd_balance_prior_year_end=pretax_prior_year_end,
+                    gain_fraction=_gain_frac)
             # Store the final result, after any ACA/IRMAA-driven re-solve, so
             # the exact t−2 record carries both its final MAGI and tax-year
             # filing status into a future premium year.
@@ -1327,8 +1941,35 @@ def simulate_retirement_v98(
             )
             adjusted_target = need2_total
             accounts = res_tt["accounts"]
+            # Retire basis in the same proportion as the shares sold, then
+            # credit what came back in. `deposit_back` is RMD/SS money that has
+            # already been taxed as ordinary income, and `income_surplus` is
+            # earned income -- taxing either again as gain when it is later
+            # withdrawn would be the double-count this slice exists to remove.
+            #
+            # MEASURED, so nobody has to trust the paragraph above: of the
+            # four bookkeeping steps here, only the pro-rata retirement is
+            # observable today. Deleting the `deposit_back` credit, the
+            # `income_surplus` credit, or the clamp leaves every output
+            # bit-identical across a plain true-tax run, an RMD-heavy one that
+            # deposits 5.6M back, and one seeded at 100% gain. They are kept
+            # because they are correct -- money that was taxed on the way in
+            # carries basis on the way out -- and because the dividend/interest
+            # drag slice will make later taxable withdrawals routine, which is
+            # when they start to bite. They are NOT covered by mutation, and
+            # saying so here is cheaper than a reader assuming they are.
+            _w_tax = float(res_tt["taxable_wd"])
+            if _tax_before > 0.0 and _w_tax > 0.0:
+                taxable_basis -= taxable_basis * min(1.0, _w_tax / _tax_before)
+            taxable_basis += float(res_tt["deposit_back"])
+            tt_gain_fraction_last = _gain_frac
+            _tt_prior_income = (float(res_tt["ordinary_taxable_real"]),
+                                bool(tax_true_year.filing_jointly))
             if income_surplus > 0:
                 accounts.taxable += income_surplus
+                taxable_basis += income_surplus
+            taxable_basis = min(max(0.0, taxable_basis),
+                                max(0.0, accounts.taxable))
             tt_tax_total += res_tt["tax_total"]
             tt_tax_total_real += res_tt["tax_total"] / cpi_cumulative
             tt_flow_err_max = max(tt_flow_err_max, res_tt["flow_err"])
@@ -1380,6 +2021,12 @@ def simulate_retirement_v98(
             total_wd_received += received
             total_ss_applied += ss_applied
 
+        # Appended every year, INCLUDING years with no income and plans with
+        # no streams at all. A shorter series would make "this household
+        # receives nothing" indistinguishable from "nobody looked", and the
+        # reader downstream reports the second as unmeasured.
+        income_received_path.append(float(annual_income_available)
+                                    if _income_on else 0.0)
         if _income_on:
             annual_applied_by_kind, annual_surplus_by_kind = (
                 _allocate_income_by_kind(
@@ -1458,13 +2105,33 @@ def simulate_retirement_v98(
             float(np.mean(lifestyle_real_path)) if lifestyle_real_path else 0.0
         ),
         'total_roth_conversions_nominal': total_conversions,
+        'roth_conversion_by_age': conversion_by_age,
         'ss_total_received_real': ss_payments_received_real,
         'total_wd_received_nominal': total_wd_received,
         'total_ss_applied_nominal': total_ss_applied,
         'ss_surplus_credited_nominal': ss_surplus_credited,
         'final_roth_locked': roth_locked if seasoning_queue else 0.0,
         'eldercare_total_real': eldercare_total_real,
+        # `None` = the peak was never priced, or nothing in this run can die.
+        # `0` = the sampler ran and this path reached the horizon alive, which
+        # is a reading rather than a missing one.
+        'eol_peaks_charged': eol_peaks_charged,
+        'eol_total_real': eol_total_real,
+        # The taxable bucket's cost basis at the end of the run, for pricing
+        # what is left. `None` when the true-tax engine was off: no basis was
+        # tracked, so there is nothing measured to report, and a 0 here would
+        # say "all of it is gain" -- the most expensive possible guess stated
+        # as a fact.
+        'taxable_basis_end': taxable_basis,
         'eldercare_event_count': eldercare_count,
+        # None, not 0.0, when the module did not run. See where these are
+        # initialised: an unmeasured zero and a measured zero must not print
+        # the same.
+        'ltc_total_real': ltc_total_real,
+        'ltc_years_paid': ltc_years_paid,
+        # Same rule, same reason: None until the parent module actually ran.
+        'parent_care_total_real': parent_care_total_real,
+        'parent_bequests_received_real': parent_bequests_received_real,
         'life_event_out_real': life_event_out_real,
         'life_event_in_real': life_event_in_real,
         'life_event_shortfalls': life_event_shortfalls,
@@ -1478,6 +2145,11 @@ def simulate_retirement_v98(
         'glide_path_name': glide_path.name,
         'col_reduction_applied': dynamic_col_reduction if sh_property.enabled else 0.0,
         'lifetime_success': survived_financially and not life_event_shortfalls,
+        # Outside the `_income_on` block on purpose. A plan with no income
+        # streams receives zero every year -- that is a measurement -- and
+        # hiding the key would make it indistinguishable from a run that never
+        # recorded one, which is what the guardrail study would then report.
+        'income_received_path_nominal': list(income_received_path),
     }
     if _income_on:
         result.update({
@@ -1616,7 +2288,13 @@ def simulate_lifecycle_v98(
     obbba: OBBBAParams = None,
     eldercare: EldercareShockParams = None,
     inheritance: InheritanceParams = None,
+    ltc: Optional["LTC.LtcParams"] = None,
+    parents: Optional["PARENTS.ParentsParams"] = None,
     sh_property: ShanghaiPropertyParams = None,
+    blocky_spending: BlockySpendingParams = None,
+    house_price: HousePriceProcess = None,
+    human_capital: HumanCapitalParams = None,
+    ss_trust_fund: SSTrustFundParams = None,
     initial: AccountStack = None,
     state: State = None,
     tax_us: TaxParams = None,
@@ -1642,9 +2320,117 @@ def simulate_lifecycle_v98(
     fixes in this engine revision may intentionally change historical arithmetic.
     returns_x: optional fire_returns_x.ReturnsXParams — E4 returns 2.0
     (markov regime switching / historical block bootstrap). None or
-    enabled=False => the v7 sampler runs untouched (bit-identical)."""
+    enabled=False => the v7 sampler runs untouched (bit-identical).
+    ltc: optional ltc_model.LtcParams — the user's OWN long-term care, drawn on
+    its own stream (params.rng) so the shared stream keeps its draw order.
+    None or mode='off' => not one draw is taken and the run is bit-identical."""
     config = config or V7Config()
     promo_params = promo_params or PromotionParams()
+
+    # Blocky spending draws from a generator of its own, derived from the
+    # shared generator's state AT ENTRY -- before anything has drawn.
+    #
+    # Reading `.state` consumes nothing, which is what lets this stay
+    # bit-identical when off: an unbuilt or unused generator cannot shift the
+    # shared stream, so every existing plan reproduces exactly.
+    #
+    # Derived at entry rather than at the retirement call so this module's
+    # numbers depend on the run's seed alone. Derived later, they would depend
+    # on how many draws accumulation happened to take -- and then editing an
+    # unrelated module would silently reshuffle this one.
+    # One root for every module that wants a stream of its own, read from the
+    # shared generator's state AT ENTRY -- before anything has drawn. Reading
+    # `.state` consumes nothing, which is what lets each of these modules stay
+    # bit-identical when off: an unbuilt generator cannot shift the shared
+    # stream, so every existing plan reproduces exactly.
+    #
+    # Read at entry rather than at each use so a module's numbers depend on
+    # the run's seed alone. Read later, they would depend on how many draws
+    # accumulation happened to take -- and then editing an unrelated module
+    # would silently reshuffle this one.
+    _child_seed_root = None
+    if rng is not None:
+        _entry_state = rng.bit_generator.state
+        _child_seed_root = int(
+            _entry_state.get("state", {}).get("state", 0)
+            if isinstance(_entry_state, dict) else 0)
+
+    # The trust fund's depletion year is ONE draw for the whole path, not one
+    # per year. It is a single systemic event: drawing it annually would turn
+    # a date into a per-year coin flip, which is a different -- and wrong --
+    # model of the same words.
+    _sstf = ss_trust_fund or SSTrustFundParams()
+    _sstf_year = None
+    if _sstf.enabled:
+        if _sstf.plan_start_year is None:
+            raise ValueError(
+                "ss_trust_fund is enabled but plan_start_year is unset. "
+                "Reserve depletion is a CALENDAR event and this engine runs "
+                "in ages, so the year the plan's year zero represents has to "
+                "be stated. It is not defaulted: a hardcoded year would "
+                "mis-time a federal event by however far the plan is offset, "
+                "and reading the clock would make the same plan answer "
+                "differently in different years.")
+        if _sstf.scenario == "range" and _child_seed_root is not None:
+            # The three alternatives are the REPORT'S range. Weighting them
+            # equally is this app's choice, not the report's -- the Trustees
+            # attach no probability to any alternative -- and the limitations
+            # panel says exactly that.
+            _sstf_rng = np.random.default_rng(
+                (_child_seed_root + _sstf.seed_offset) % (2 ** 63))
+            _sstf_year = int(_sstf_rng.choice([
+                SSA_TRUST_FUND["oasi_depletion_year_high_cost"],
+                SSA_TRUST_FUND["oasi_depletion_year_intermediate"],
+                SSA_TRUST_FUND["oasi_depletion_year_low_cost"]]))
+        else:
+            _sstf_year = int(SSA_TRUST_FUND["oasi_depletion_year_intermediate"])
+
+    # The house price's own generator, derived the same way and for the same
+    # reasons as blocky spending's: at entry, from state that reading does not
+    # consume, so switching this on cannot reshuffle any other module.
+    _hc = human_capital or HumanCapitalParams()
+    _hc_factors = None
+    _hc_rng = None
+    if _hc.enabled and rng is not None:
+        _hc_entry = rng.bit_generator.state
+        _hc_root = (_hc_entry.get("state", {}).get("state", 0)
+                    if isinstance(_hc_entry, dict) else 0)
+        _hc_rng = np.random.default_rng(
+            (int(_hc_root) + _hc.seed_offset) % (2 ** 63))
+        # Permanent shocks accumulate; transitory ones do not. That split is
+        # the whole point: a lost promotion and a one-off missed bonus are the
+        # same number to a single "wage volatility" dial and nothing like the
+        # same event to a plan. Median-anchored (loc=0) so switching this on
+        # adds spread without walking the career's central case, the rule the
+        # house price module had to learn the hard way.
+        _hc_years = max(1, int(state.accum_years) + 1)
+        _perm = _hc_rng.normal(loc=0.0, scale=_hc.permanent_sigma,
+                               size=_hc_years) if _hc.permanent_sigma else None
+        _tran = _hc_rng.normal(loc=0.0, scale=_hc.transitory_sigma,
+                               size=_hc_years) if _hc.transitory_sigma else None
+        _factors = []
+        _level = 0.0
+        for _k in range(_hc_years):
+            if _perm is not None:
+                _level += float(_perm[_k])
+            _shock = _level + (float(_tran[_k]) if _tran is not None else 0.0)
+            _factors.append(float(np.exp(_shock)))
+        _hc_factors = tuple(_factors)
+
+    _house = house_price or HousePriceProcess()
+    _house_rng = None
+    if _house.enabled and rng is not None:
+        _h_entry = rng.bit_generator.state
+        _h_root = (_h_entry.get("state", {}).get("state", 0)
+                   if isinstance(_h_entry, dict) else 0)
+        _house_rng = np.random.default_rng(
+            (int(_h_root) + _house.seed_offset) % (2 ** 63))
+
+    _blocky = blocky_spending or BlockySpendingParams()
+    _blocky_rng = None
+    if _blocky.enabled and _child_seed_root is not None:
+        _blocky_rng = np.random.default_rng(
+            (_child_seed_root + _blocky.seed_offset) % (2 ** 63))
     rule = rule or FixedRealRule()
     glide_path = glide_path or GLIDE_ALL_EQUITY
     bond_params = bond_params or DEFAULT_BOND_PARAMS
@@ -1690,6 +2476,39 @@ def simulate_lifecycle_v98(
     resolved_housing_events = resolve_housing_mortgage_events(
         housing_mortgage, state.start_age, all_inflations)
     effective_life_events = list(life_events or ())
+
+    # ---- the house's own price path, when this plan asked for one ----
+    # Placed here because this is where per-path event resolution already
+    # happens; the mortgage above resolves against this path's inflation for
+    # the same structural reason. A lognormal real path with the module's own
+    # drift, so switching it on leaves the MEAN where the deterministic curve
+    # put it and only adds spread -- a plan that turns this on should see
+    # uncertainty appear, not its central case move.
+    _house_value_factor = None
+    if _house_rng is not None:
+        _n_house_years = max(1, len(all_inflations))
+        # `loc` is the drift itself, not drift minus half the variance: that
+        # correction centres the MEAN, and every number this model reports is
+        # a percentile. Anchoring the MEDIAN is what makes "drift zero leaves
+        # p50 where it was" exactly true rather than nearly true.
+        _shocks = _house_rng.normal(loc=_house.drift_real,
+                                    scale=_house.sigma_real,
+                                    size=_n_house_years)
+        _house_value_factor = tuple(
+            float(np.exp(np.sum(_shocks[:k + 1]))) for k in range(_n_house_years))
+
+        # A planned sale scales with the path rather than being a point.
+        if _house.sale_age is not None and _house.sale_base_real:
+            _sale_k = int(_house.sale_age) - int(state.start_age)
+            if 0 <= _sale_k < _n_house_years:
+                # The discount applies to the DRAWN value, not to the
+                # typed one: what a seller loses to commission and repairs is
+                # a share of what the place turned out to be worth.
+                _drawn = (_house.sale_base_real * _house_value_factor[_sale_k]
+                          * (1.0 - _house.liquidity_discount))
+                # Negative is an inflow in this event convention.
+                effective_life_events.append((int(_house.sale_age), -_drawn))
+
     if resolved_housing_events:
         effective_life_events.extend(resolved_housing_events)
         effective_life_events.sort(key=lambda item: (int(item[0]), float(item[1])))
@@ -1713,14 +2532,23 @@ def simulate_lifecycle_v98(
         )
         alive_by_year = _accum_mortality_schedule.alive_at_start
 
-    accum_path = project_stratified_v93(
-        accum_returns, accum_inflations,
-        promo_year, bonus_pcts,
-        initial, contrib_params, promo_params,
-        tax_us, state, friction=config.friction_accum,
-        obbba=obbba,
-        alive_by_year=alive_by_year,
-    )
+    # A13's wage factors are per PATH, so they are set here rather than in the
+    # adapter's per-RUN layoff context. Same module-global idiom as `_LAYOFF`,
+    # and restored in a finally so a raised path cannot leak its career into
+    # the next one -- which would be a correlation nobody registered.
+    _wage_prev = fire_v8_model._WAGE_FACTORS
+    fire_v8_model._WAGE_FACTORS = _hc_factors
+    try:
+        accum_path = project_stratified_v93(
+            accum_returns, accum_inflations,
+            promo_year, bonus_pcts,
+            initial, contrib_params, promo_params,
+            tax_us, state, friction=config.friction_accum,
+            obbba=obbba,
+            alive_by_year=alive_by_year,
+        )
+    finally:
+        fire_v8_model._WAGE_FACTORS = _wage_prev
 
     _ev_meta = {
         "underfunded_years": 0, "underfunded_ages": [],
@@ -1826,20 +2654,82 @@ def simulate_lifecycle_v98(
     )
     inheritance_event = sample_inheritance(rng, inheritance)
 
+    # Long-term care. Sampled here, before the withdrawal loop, on the same
+    # shape as eldercare above — and on its OWN generator, so `rng` reaches the
+    # loop having advanced by exactly as many draws as it did before this
+    # module existed. Off takes this function no further than its first line.
+    # The window opens at fire_age + 1, not fire_age: the withdrawal loop's
+    # first modelled year is fire_age + 1, so an onset drawn at fire_age itself
+    # would lose its first year of cost without saying so.
+    ltc_events, ltc_meta = LTC.sample_ltc_events(
+        ltc, fire_age + 1, fire_age + state.retire_horizon,
+        anchor_age=state.start_age,
+        calibration=(
+            LTC.calibration_for(
+                (lambda age: annual_mortality_rate(age, mortality))
+                if mortality.enabled else (lambda age: 0.0),
+                risk=float(ltc.lifetime_risk), cap_age=int(mortality.cap_age),
+                onset_age=ltc.onset_age, onset_spread=ltc.onset_spread)
+            if (ltc is not None and ltc.mode == LTC.STOCHASTIC
+                and ltc.lifetime_risk > 0.0) else None),
+    )
+
+    # Parents. Sampled here for the same reasons as long-term care above — once,
+    # before the withdrawal loop, on its OWN generator so `rng` reaches the loop
+    # having advanced by exactly as many draws as it did before this module
+    # existed. The window is the plan holder's retirement, expressed in their
+    # ages; a parent who dies outside it is reported rather than clamped into it.
+    # Each parent on their own table, resolved by their stated sex, with the
+    # plan's own `enabled` and `cap_age` still governing: a plan that has
+    # switched mortality off is not a plan where other people stop dying, but
+    # it IS one where this engine models nobody dying, and the parents module
+    # must not quietly reintroduce it.
+    def _parent_death_rate(sex):
+        if not mortality.enabled:
+            return lambda age: 0.0
+        # No fallback: the adapter refuses a sex this engine has no table for,
+        # so reaching here with one would mean that check was removed. A quiet
+        # default would run somebody's mother on the plan holder's lifespan.
+        table = {"male": MORTALITY_MALE, "female": MORTALITY_FEMALE}[str(sex)]
+        return lambda age: annual_mortality_rate(age, table)
+
+    parent_care_events, parent_bequests, parents_meta = PARENTS.sample_parents(
+        parents, _parent_death_rate,
+        first_age=fire_age + 1, last_age=fire_age + state.retire_horizon,
+        anchor_age=state.start_age, cap_age=int(mortality.cap_age))
+
     wd_equity = all_equity_returns[fire_year_idx:fire_year_idx + state.retire_horizon]
     wd_bond = all_bond_returns[fire_year_idx:fire_year_idx + state.retire_horizon]
     wd_inflations = all_inflations[fire_year_idx:fire_year_idx + state.retire_horizon]
 
+    # Whichever accumulation overlay ran recorded the first-payment price
+    # level for every non-COLA stream it paid. Handing it forward keeps ONE
+    # anchor per stream across the FIRE boundary.
+    _income_nominal_anchors = (_income_accum_meta or {}).get(
+        "nominal_anchor_by_index") or {}
     wd_result = simulate_retirement_v98(
         starting_accounts=fire_step['accounts'],
         starting_age=fire_age,
         fire_year_cpi_cumulative=cpi_cum_at_fire,
+        income_nominal_anchors=_income_nominal_anchors,
         equity_returns=wd_equity, bond_returns=wd_bond, inflations=wd_inflations,
         rule=rule, glide_path=glide_path,
         relocation=relocation, sh_property=sh_property,
         medical=medical, aca=aca, mortality=mortality,
         roth_ladder=roth_ladder, ss=ss, ftc=ftc,
+        blocky_rng=_blocky_rng, blocky_spending=_blocky,
+        ss_trust_fund=_sstf, ss_trust_fund_depletion_year=_sstf_year,
         eldercare_events=eldercare_events, inheritance_event=inheritance_event,
+        # None when the module did not run, so the totals it returns can be
+        # None too. An empty list would make "off" and "no care drawn" report
+        # the same 0.0.
+        ltc_events=(ltc_events if ltc_meta["mode"] != LTC.OFF else None),
+        # None, not [], when the module is off: the retirement function reads
+        # `is not None` to decide whether it measured anything at all.
+        parent_care_events=(parent_care_events
+                            if parents_meta["mode"] != PARENTS.OFF else None),
+        parent_bequests=(parent_bequests
+                         if parents_meta["mode"] != PARENTS.OFF else None),
         state=state, tax_us=tax_us, tax_cn=tax_cn,
         friction=config.friction_retire, rng=rng,
         china_healthcare=china_healthcare, ss_nra=ss_nra,
@@ -1856,6 +2746,16 @@ def simulate_lifecycle_v98(
         'died_during_accum': False,
         'reached_fire': True,
         'fire_age': fire_age,
+        # Reported SEPARATELY from spendable wealth and never added into it.
+        # The reason the house was excluded -- illiquid, you live in it -- has
+        # not stopped being true because a plan asked to see its value, and a
+        # figure folded into the portfolio would read as money that could have
+        # been spent. `None` when unasked-for, so a reader can tell "this plan
+        # did not model it" from "it modelled out at zero".
+        'terminal_home_value_real': (
+            float(_house.equity_base_real * _house_value_factor[-1])
+            if (_house.include_in_net_worth and _house_value_factor
+                and _house.equity_base_real) else None),
         'fire_balance': fire_step['total'],
         'fire_accounts': fire_step['accounts'].copy(),
         'fire_expenses': fire_step['expenses'],
@@ -1868,6 +2768,14 @@ def simulate_lifecycle_v98(
         'glide_path_name': glide_path.name,
         'eldercare_events_sampled': eldercare_events,
         'inheritance_event_sampled': inheritance_event,
+        # Both, always. The events alone cannot say whether an empty list means
+        # "no care was drawn" or "the module never ran", and those read the same
+        # in a report while meaning opposite things.
+        'ltc_events_sampled': ltc_events,
+        'ltc_meta': ltc_meta,
+        'parent_care_events_sampled': parent_care_events,
+        'parent_bequests_sampled': parent_bequests,
+        'parents_meta': parents_meta,
         'censored_no_fire': False,
         'censor_age': None,
         'accum_life_event_meta': _life_event_meta_through_age(_ev_meta, fire_age),

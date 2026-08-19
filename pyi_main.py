@@ -76,7 +76,7 @@ if _FROZEN_SMOKE:
     import tempfile as _tempfile
     import time as _time
 
-    import engine_v98 as _engine
+    import engine_adapter as _engine
     import numpy as _numpy
 
     _summary = _engine.summary(_engine.default_config(), 16, 96000, False)

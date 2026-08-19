@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 
-import engine_v98 as ENG
+import engine_adapter as ENG
 
 SWEEP_CAP = 8000                    # per-point cap for sweeps
 
@@ -100,23 +100,42 @@ class _GsCancelled(Exception):
     pass
 
 
+def _gs_number(value, what: str) -> float:
+    """`float(...)` that fails as a ValueError naming the field.
+
+    Bare `float(goal.get("value"))` raises TypeError on a missing key, and the
+    route catches only ValueError — so a request that simply omitted a field
+    came back 500 instead of being told which field. Same shape as the
+    partial-config defects: an answerable request reported as a server fault.
+    """
+    if value is None:
+        raise ValueError("%s is required" % what)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("%s must be a number, got %r" % (what, value)) from exc
+
+
 def _gs_validate(goal: dict, levers: list):
     """Shared request validation — raises ValueError on bad input. Called
     synchronously by the route (so bad requests 400) AND by run_goalseek."""
     metric = str(goal.get("metric"))
     if metric not in GOALSEEK_METRICS:
         raise ValueError(f"unknown goal metric: {metric!r}")
-    target = float(goal.get("value"))
+    target = _gs_number(goal.get("value"), "goal.value")
     if len(levers) != 2:
         raise ValueError("exactly two levers required")
     keys, los, his = [], [], []
     for lv in levers:
+        if not isinstance(lv, dict):
+            raise ValueError("each lever must be an object with key/min/max, "
+                             "got %r" % (lv,))
         k = str(lv.get("key"))
         if k not in GOALSEEK_LEVERS:
             raise ValueError(f"unknown lever: {k!r}")
         keys.append(k)
-        los.append(float(lv["min"]))
-        his.append(float(lv["max"]))
+        los.append(_gs_number(lv.get("min"), "lever %r min" % k))
+        his.append(_gs_number(lv.get("max"), "lever %r max" % k))
     if keys[0] == keys[1]:
         raise ValueError("levers must differ")
     return metric, target, keys, los, his
@@ -271,9 +290,23 @@ def run_frontier(cfg: dict, paths: int, seed: int, grid: int = 7,
 
 def run_sensitivity(cfg: dict, paths: int, seed: int) -> dict:
     """Tornado of terminal-real-P50 swings for ±perturbations of each key
-    assumption (common random numbers: same seed everywhere), plus a return-μ
-    uncertainty band (the whole regime mixture shifted ±1.5pp). One parameter is
-    perturbed at a time on the home-only scenario."""
+    assumption, plus a return-μ uncertainty band (the whole regime mixture
+    shifted ±1.5pp). One parameter is perturbed at a time on the home-only
+    scenario.
+
+    NOT common random numbers, despite every run using the same seed. This
+    docstring claimed they were until Phase 3 measured it: several of the
+    engine's samplers are conditional -- `sample_inheritance` returns early
+    when the occurrence draw does not fire, `sample_eldercare_events` draws
+    severity only inside the branch -- so two configs at one seed consume
+    different numbers of draws and every later draw shifts. See `ensemble.py`
+    and `tests/test_attribution_crn.py`, which pin both facts against the
+    engine source.
+
+    The consequence for reading this tornado: each row is the parameter's
+    effect PLUS whatever the streams did after they desynchronised. Large rows
+    are still informative; small ones should not be read as small
+    sensitivities, because sampler drift alone is that size."""
     n = max(500, min(int(paths), SENS_CAP))
     base = ENG.summary(_base_cfg(cfg), n, seed, relocation_on=False)
     center = base["terminal_real_p50"]
@@ -327,7 +360,7 @@ def run_sensitivity(cfg: dict, paths: int, seed: int) -> dict:
 
 def run_backtest(cfg: dict, retire_age, seed: int) -> dict:
     """Deterministic sequence-of-returns stress test via the v9.8 retirement
-    engine (see engine_v98.backtest). Stylized adverse openings, NOT literal
+    engine (see engine_adapter.backtest). Stylized adverse openings, NOT literal
     index data."""
     return ENG.backtest(cfg, retire_age, seed)
 
