@@ -87,11 +87,17 @@ for confirmation. Then double-clicking works normally.
 
 ## What this release is (and is not)
 
-This is a **pre-Phase-2 candidate**, not a promise of universal equivalence,
-tax advice, investment advice, or a GA/enterprise release. It is the frozen
-universal2 candidate corresponding to the behavior-neutral pre-Phase-2 source
-split. The candidate was built and smoke-tested in an isolated disposable
-worktree; it was not used to replace the maintainer's installed app.
+This is a **public candidate**, not a promise of universal equivalence, tax
+advice, investment advice, or a GA/enterprise release. It is the frozen
+universal2 candidate built from the private `main`, four development versions
+on from the v3.0 snapshot.
+
+Every module added since then that changes what a plan predicts ships **off by
+default**, so a plan saved under an earlier build reproduces its numbers after
+upgrading. What those modules add is the ability to ask harder questions --
+lumpy spending, a Social Security trust-fund cut, a house price that is not a
+smooth line, a career that does not grow at a constant rate -- not a quiet
+change to the answers you already have.
 
 The model remains an approximation. Tax, ACA/IRMAA, Social Security, mortality,
 housing, China/US relocation, and return assumptions have explicit limits in
@@ -109,9 +115,12 @@ The public source contains the runtime and build inputs used by the candidate:
   identity/build helpers;
 - a small set of regression, JavaScript, frozen-bundle, and UI smoke checks.
 
-The public snapshot is intentionally squashed onto the repository's initial
-MIT-licensed commit. Internal development history and operational documents
-remain outside this public repository.
+The public file set is computed from the built candidate's runtime manifest --
+the exact files the application loads -- rather than from a hand-maintained
+list, plus a small set of regression, JavaScript, frozen-bundle and UI smoke
+checks. Internal development history and operational documents (workstream
+logs, handoffs, roadmaps, audits, prompts) remain outside this public
+repository.
 
 ## Building from source (maintainer-oriented)
 
@@ -200,9 +209,15 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 
 ### 这次发布是什么（以及不是什么）
 
-这是 3.0 的 **pre-Phase-2 候选版本**，不是 GA，也不是财务、税务、法律或投资建议，
-更不是对未来结果的保证。模型仍然是情景分析：税务、ACA/IRMAA、Social Security、
-死亡率、住房、跨地区搬迁和收益率假设都有明确边界。
+这是一个**公开候选版**，不是通用等价性的承诺，也不是税务建议、投资建议或 GA/企业版。
+它是从私有 `main` 构建的冻结 universal2 候选，相对 v3.0 快照已经过了四个开发版本。
+
+自那以后新增的、会改变计划预测的模块**一律默认关闭** —— 所以在旧版本下保存的计划，
+升级后数字逐位复现。这些模块带来的是**问更难的问题的能力**：块状支出、社保削减、
+不是一条平滑曲线的房价、不按固定速率增长的职业收入 —— 而不是悄悄改变你已有的答案。
+
+模型仍然是近似。税、ACA/IRMAA、社保、死亡率、住房、中美搬迁与收益假设在 App 内
+都有明确的局限说明。结果是情景分析，不是预测或建议。
 
 ### 源码快照
 
