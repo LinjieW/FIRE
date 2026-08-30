@@ -52,7 +52,13 @@ from fire_rule_pack import CONTRIBUTION_LIMIT_RULES, US_FEDERAL_RULES
 @dataclass
 class State:
     start_age: int = 27
-    contrib_growth: float = 0.035
+    # `contrib_growth` was removed by Roadmap 10.0 Phase 0 (ruling U28).
+    # It was defined here, read NOWHERE in the repository, and yet reached
+    # `default_config()["state"]` as an editable leaf and was counted in the
+    # attribution inventory -- a control that promised to move contributions
+    # and moved nothing (lesson #14, fifth instance). `salary_growth_pre`
+    # already does the job this appeared to offer. `_mk` ignores unknown
+    # keys, so a plan saved before this removal still loads.
     inflation: float = 0.030          # US inflation
     inflation_cn: float = 0.025       # China inflation (historical avg ~2-2.5%)
     expenses_y0: float = 40_440
@@ -75,6 +81,56 @@ class State:
 #: server package to define its own data shape, and a country pack adds its
 #: accounts through `AccountStack.hold()` rather than by editing this.
 US_STACK_FIELDS = ("pretax_401k", "roth_ira", "hsa", "taxable")
+
+
+def declared_account_types(withdrawal_order=None):
+    """The declared account types in draw order, plus the schema module.
+
+    Imported lazily so the engine keeps no import-time dependency on the
+    server package. It lives HERE, beside `AccountStack`, because four engine
+    generations and the tax solver all need the same two things from the
+    declaration and each copy of the path fixup is a place the answer can
+    diverge.
+    """
+    import os
+    import sys
+    server = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "server")
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    import account_schema as SCHEMA
+    return SCHEMA.ordered_types(withdrawal_order), SCHEMA
+
+
+def grow_every_account(accounts, factor: float, gain_factor: float) -> None:
+    """Apply market growth to EVERY account the stack holds, in place.
+
+    OPEN_ITEMS E37, and the worst instance of the shape E34 named. The growth
+    step listed four field names, so a fifth account -- held, funded, counted
+    in net worth, drawn correctly -- simply never compounded. Measured on a
+    plan with $150,000 in a governmental 457(b): median consumption came out
+    LOWER than the same money in a 401(k), which is the opposite of what the
+    account's own tax treatment predicts, because that $150,000 sat still for
+    twenty years while everything around it grew.
+
+    It takes MULTIPLIERS rather than rates, and that is not a style choice.
+    The call sites wrote `(1 + r_eff - drag)`, which is `(1 + r_eff) - drag`;
+    rebuilding it here as `1 + (r_eff - drag)` is a different float and would
+    move every taxable balance in its last bits. The expression moves across
+    verbatim, exactly as `map_balances` requires of its own callers.
+
+    `gain_factor` applies to capital-gain accounts, whose dividend and
+    interest drag the caller has already worked into it; `factor` is for
+    everything else. Which account is which comes from the declaration, not
+    from a name.
+    """
+    _order, SCHEMA = declared_account_types()
+    gain_fields = {account.field for account in _order
+                   if account.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN}
+    for field_name, value in accounts.balances().items():
+        setattr(accounts, field_name,
+                value * (gain_factor if field_name in gain_fields
+                         else factor))
 
 
 class AccountStack:
@@ -150,6 +206,29 @@ class AccountStack:
     def balances(self) -> dict:
         return dict(self._balances)
 
+    def __getattr__(self, name: str) -> float:
+        """A held account reads back by name, like the four built-in ones.
+
+        Roadmap 10.0 Phase 2, OPEN_ITEMS E34. `hold()` made a fifth account
+        real for `total` and for nothing else: every consumer reaches balances
+        with `getattr(accounts, field)`, so a held account read as zero and
+        `withdraw_with_seasoning_v94` -- the schema-driven withdrawal, the one
+        this generalisation was built for -- returned $0 against a $100,000
+        balance while leaving it untouched. Money that counts toward net worth
+        and can never be spent is worse than money that is missing: it makes
+        the FIRE date better on funds that are not there.
+
+        Only ever consulted for names Python could not resolve normally, so
+        the four properties above still win and nothing changes for them.
+        """
+        balances = object.__getattribute__(self, "_balances")
+        if name in balances:
+            return balances[name]
+        raise AttributeError(
+            "%r is not an account this stack holds. Use hold(%r) first -- "
+            "reading it as zero would hide the balance rather than report it."
+            % (name, name))
+
     def __setattr__(self, name: str, value) -> None:
         if name in US_STACK_FIELDS:
             object.__getattribute__(self, "_balances")[name] = value
@@ -157,10 +236,24 @@ class AccountStack:
         if name == "_balances":
             object.__setattr__(self, name, value)
             return
+        # An account that has been HELD may be written, for the same reason it
+        # may be read: `hold()` is this class's way of saying an account
+        # exists. The refusal below is still there for names nobody declared,
+        # which is the case it was written for.
+        balances = object.__getattribute__(self, "_balances")
+        if name in balances:
+            balances[name] = value
+            return
         raise AttributeError(
             "%r is not an account this stack holds. Use hold(%r) first -- "
             "attaching it silently would leave it out of `total`, which is "
             "the defect this class was rewritten to remove." % (name, name))
+
+    def balance(self, key: str) -> float:
+        """The held balance, or zero. For callers that legitimately ask about
+        an account a given jurisdiction may not have -- unlike attribute
+        access, which refuses, because a typo there is a bug."""
+        return object.__getattribute__(self, "_balances").get(str(key), 0.0)
 
     @property
     def total(self) -> float:
@@ -190,6 +283,26 @@ class AccountStack:
                 raise AttributeError(
                     "%r is not an account this stack holds" % (key,))
             clone._balances[key] = value
+        return clone
+
+    def map_balances(self, fn) -> "AccountStack":
+        """A new stack with `fn` applied to every balance this one holds.
+
+        Roadmap 10.0 Phase 2, the E37 prerequisite. Two call sites scaled a
+        stack -- a layoff prorating a year's contributions, a stress scenario
+        resizing the opening balances -- and both had to write the four US
+        names out to do it, so a fifth account silently did not scale. That is
+        worse than losing it outright: the stack still looks complete and one
+        bucket is simply the wrong size.
+
+        It takes a FUNCTION rather than a factor because the arithmetic has to
+        move across unchanged. `x / tot * target` and `x * (target / tot)` are
+        not the same float, and the call sites are pinned bit for bit.
+        """
+        clone = self.copy()
+        balances = object.__getattribute__(clone, "_balances")
+        for key in list(balances):
+            balances[key] = fn(balances[key])
         return clone
 
     def copy(self) -> "AccountStack":
@@ -509,7 +622,11 @@ def project_stratified(returns: Sequence[float], initial: AccountStack = None,
 
 def find_fire_crossing(path, swr=STATE.swr_pref):
     for step in path:
-        if step['total'] >= step['expenses'] / swr:
+        # Roadmap 10.0 Phase 4, user choice A: an unpaid student balance is a
+        # reserve requirement, not spendable wealth and not an assumed payoff
+        # at the crossing.  Older paths carry no key and remain identical.
+        liability = max(0.0, float(step.get('fire_liability_nominal', 0.0)))
+        if step['total'] >= step['expenses'] / swr + liability:
             return step
     return None
 

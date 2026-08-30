@@ -48,9 +48,75 @@ SEED = 96_000
 # values kept so the change stays legible rather than merely overwritten:
 #   GOLDEN_TERMINAL        2_607_287.5967222806   (delta +50.73)
 #   GOLDEN_LEGACY_TERMINAL 2_557_596.4512437508   (delta +26.35)
-GOLDEN_TERMINAL = 2_607_338.325309041          # 2026 pack · 800 paths · seed 96000
+# Moved by Roadmap 10.0 Phase 1's Roth income phase-out, and moved DELIBERATELY
+# rather than re-recorded to whatever the code now emits. The default plan
+# clears the phase-out range from the promotion year onward, so it had been
+# booking $7,500 a year of Roth contributions it could not legally make, for
+# twenty-two years. Removing them costs about 0.9% of terminal wealth and
+# leaves the FIRE age untouched.
+#
+#   GOLDEN_TERMINAL         2_607_338.325309041 -> 2_585_088.7343856404
+#   GOLDEN_LEGACY_TERMINAL  2_557_622.7997192703 -> 2_569_692.2375139785
+#
+# The legacy figure moved UP, which is worth a second look rather than a
+# shrug: it runs a lower `annual_spending_now`, so more of the residual lands
+# in taxable, and the taxable account is not subject to the phase-out.
+#
+# ---- moved again 2026-08-23 by the income-dependent tax schedule ----
+#
+#   GOLDEN_TERMINAL         2_585_088.7343856404 -> 2_503_932.6062371284  (-3.1%)
+#   GOLDEN_LEGACY_TERMINAL  2_569_692.2375139785 -> 2_468_563.6714911424  (-3.9%)
+#
+# BOTH FELL, and that is the opposite of what this plan's own tax bill does,
+# so it was chased rather than recorded. What the measurement found:
+#
+#   * Accumulation gets RICHER. On this plan the schedule charges less than
+#     the flat 28% in every post-promotion year, and the cash it frees is
+#     +$131,167 nominal of extra taxable contributions across thirty years.
+#   * Turning the true-tax engine ON flips the sign: 2,280,798 -> 2,466,076,
+#     up 8.1%. Same accumulation, opposite outcome.
+#
+# So the fall is not in the accumulation phase at all. It is in the SIMPLE
+# retirement model these goldens run with `tax_true` off, which applies
+# `withdrawal_tax_taxable` to the whole withdrawal from the taxable bucket --
+# basis included (`fire_v6_model.withdraw_from_stack`). Every extra dollar
+# routed into taxable is therefore taxed a second time on the way out, and
+# past a point that outweighs having the dollar. The true-tax engine carries
+# a basis fraction and does not do this, which is exactly why it flips.
+#
+# That is a real defect in the simple model, it is older than this slice, and
+# it is registered rather than fixed here (OPEN_ITEMS E32).
+#
+# ---- E32 fixed, 2026-08-24, and the prediction above held ----
+#
+#   GOLDEN_TERMINAL         2_503_932.6062371284 -> 2_520_307.6117290156  (+0.65%)
+#   GOLDEN_LEGACY_TERMINAL  2_468_563.6714911424 -> 2_498_241.4284693627  (+1.20%)
+#
+# The simple retirement path now charges the taxable rate on the GAIN, which
+# is what that rate has meant here since the 2026-08-14 step-up ruling. Both
+# goldens moved UP, in the direction this block predicted -- and the legacy
+# plan, which routes more into taxable, moved further, which is the same
+# ordering the paragraph above reasoned to. A prediction written down before
+# the fix and confirmed after it is the strongest evidence this file carries
+# about WHY these numbers are what they are.
+#
+# They do not climb all the way back: -3.1% then +0.65% is not a round trip,
+# and claiming the schedule slice was "really" neutral would be reading more
+# into this than was measured. What is measured is that the SIGN of the
+# schedule's effect on the simple path was an artefact of E32, not that its
+# magnitude was.
+#
+# One correction while re-deriving: the paragraph above names
+# `fire_v6_model.withdraw_from_stack`. That function has the same shape but is
+# not on the live path -- the retirement leg calls
+# `fire_v9_4_model.withdraw_with_seasoning_v94`, which is where the fix went.
+# 2026-08-29: strict HSA eligibility removed the old unverified $4,400
+# contribution from the shipped default. These were re-measured on the same
+# 800-path/seed-96000 protocol; the direction is expected (cash remains in
+# taxable rather than being credited to an HSA nobody established).
+GOLDEN_TERMINAL = 2_588_805.679528568          # 2026 pack · 800 paths · seed 96000
 GOLDEN_FIRE_P50 = 38.0
-GOLDEN_LEGACY_TERMINAL = 2_557_622.7997192703  # 2026 pack · annual_spending_now=40440
+GOLDEN_LEGACY_TERMINAL = 2_537_724.427904837   # 2026 pack · annual_spending_now=40440
 
 
 def cfg0():
@@ -265,9 +331,26 @@ class TestDirectionality(unittest.TestCase):
 
 class TestMortalityAndMandatoryEvents(unittest.TestCase):
     def _never_fi(self):
+        """A plan that accumulates normally but can never reach FI.
+
+        The FI number is `expenses_y0 / swr`, so a billion-dollar
+        `expenses_y0` puts it permanently out of reach. Until Roadmap 10.0
+        that same field ALSO drove the accumulation-phase living cost, so the
+        fixture happened to describe someone spending a billion a year --
+        harmless while contributions were filled to the IRS limits regardless
+        of income.
+
+        Phase 1 made contributions affordable-only, so that reading would now
+        mean this household contributes nothing at all, and these tests would
+        be exercising an empty plan rather than a never-FI one. Setting
+        `annual_spending_now` explicitly keeps the two apart: an unreachable
+        FI target, and a household that still saves on the way to not
+        reaching it -- which is what every test below actually needs.
+        """
         c = cfg0()
         c["state"].update({"start_age": 30, "accum_years": 8,
                            "expenses_y0": 1_000_000_000})
+        c["contributions"]["annual_spending_now"] = 42_000.0
         c["initial"] = {k: 0 for k in c["initial"]}
         c["other_assets"].update({"cash": 0, "other_liquid": 0})
         c["mortality"].update({"enabled": True, "cap_age": 31})
@@ -275,15 +358,27 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
 
     def test_no_fi_path_samples_death_and_censors_milestones(self):
         c = self._never_fi()
-        c["milestones"] = [50_000]
+        # 150k rather than 50k since Roadmap 10.0 Phase 1. The fixture used to
+        # spend a billion a year, so it accumulated almost nothing and 50k was
+        # comfortably past death. Now that contributions are affordable-only,
+        # `_never_fi` spends a realistic amount and saves accordingly, so the
+        # balance clears 50k in the death year itself and the milestone would
+        # be reached BEFORE death -- testing nothing.
+        c["milestones"] = [150_000]
         raw = ENG._run(c, 1, SEED, False)[0]
         self.assertTrue(raw["died_during_accum"])
         self.assertEqual(raw["age_at_death"], 31)
-        self.assertGreater(raw["accum_path"][2]["total"], 50_000,
+        # Both sides, because "only after death" needs both. The previous
+        # version asserted only that the milestone WAS crossed by step 2 and
+        # never that it was still unreached at death, so a fixture that
+        # crossed it early would have passed while testing nothing.
+        self.assertLess(raw["accum_path"][1]["total"], 150_000,
+                        "fixture must not reach the milestone before death")
+        self.assertGreater(raw["accum_path"][2]["total"], 150_000,
                            "fixture must cross only after death")
         s = ENG.run_scenarios(c, 1, SEED)["home"]
         self.assertEqual(s["died_during_accum_rate"], 1.0)
-        self.assertEqual(s["milestones"]["50000"]["reach_probability"], 0.0)
+        self.assertEqual(s["milestones"]["150000"]["reach_probability"], 0.0)
 
     def test_household_censors_only_at_last_survivor(self):
         c = self._never_fi()
@@ -308,7 +403,14 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
                 "hsa_limit_y1": 0.0,
                 "irs_limit_growth": 0.0,
                 "match_rate": 0.0,
-                "annual_spending_now": 1_000_000_000.0,
+                # Modest, so the primary's $100 limit is AFFORDABLE. It was
+                # a billion until Roadmap 10.0 Phase 1, which was harmless
+                # while contributions ignored income -- but under the
+                # affordability waterfall a billion-dollar spender
+                # contributes nothing, and this test would have been
+                # asserting that death stops contributions that were never
+                # happening. The expected series below is unchanged.
+                "annual_spending_now": 1_000.0,
             })
             c["promotion"]["enabled"] = False
             c["tax_us"]["drag_taxable"] = 0.0
@@ -321,6 +423,18 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
             c["household"].update({
                 "enabled": True,
                 "spouse_age_offset": spouse_age_offset,
+                # $5,000 of pay, so the spouse's $1,000 contribution is
+                # AFFORDABLE -- the same repair the primary's spending line
+                # got one slice earlier, for the same reason. Until Roadmap
+                # 10.0 E31 the spouse's amounts were filled regardless of the
+                # spouse's income, and this fixture left the salary at its
+                # 0.0 default: it was asserting that death stops $1,000 a year
+                # of contributions being made out of an income of zero. With
+                # the waterfall that spouse contributes nothing, so the spouse
+                # half of the claim would have gone vacuously true. The
+                # expected series below is unchanged.
+                "spouse_base_salary_pre": 5_000.0,
+                "spouse_salary_growth_pre": 0.0,
                 "spouse_pretax_401k_limit_y1": 1_000.0,
                 "spouse_roth_ira_limit_y1": 0.0,
                 "spouse_hsa_limit_y1": 0.0,
@@ -396,6 +510,12 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
             "match_rate": 0.0,
             "marginal_tax_pre": 0.0,
             "annual_spending_now": 40.0,
+            # This fixture is about expenses being charged ONCE across the
+            # four alive states, and it says so with arithmetic small enough
+            # to read: 100 + 80 - 40. The income-dependent schedule would put
+            # $13.77 of payroll tax in the middle of that and prove nothing
+            # extra, so the fixture states a zero flat rate and means it.
+            "tax_model": "flat",
         })
         c["promotion"]["enabled"] = False
         c["household"].update({
@@ -434,7 +554,8 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
 
             # Expenses must be charged against the pooled household residual.
             # The old primary-first floor returned $80 here: it exhausted only
-            # the primary's $20, then let the spouse keep all $80.
+            # the primary's $20, then let the spouse keep all $80. Since U27
+            # both branches return 60.0 -- see the legacy assertion below.
             c["contributions"]["base_salary_pre"] = 20.0
             kw = ENG.build_kwargs(c, False)
             pooled = V8.compute_contributions_for_year(
@@ -453,8 +574,18 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
                 pool_household_expenses=False,
             )
             self.assertEqual(
-                legacy.taxable, 80.0,
-                "mortality-off household callers retain their frozen behavior",
+                legacy.taxable, 60.0,
+                "U27 (2026-08-22, user ruling: model it the truthful way) made "
+                "the two household branches agree. This asserted 80.0 while "
+                "the shortfall was floored at zero: the primary's $20 was "
+                "exhausted, the remaining $20 of the bill vanished, and the "
+                "spouse kept all $80. The pooled branch above already returned "
+                "60.0, so ONE household with ONE expense had two answers "
+                "depending on whether mortality happened to be on. Drawing the "
+                "shortfall instead of eating it collapses that divergence. "
+                "This is a real behavior change for household-on / "
+                "mortality-off plans and is recorded as such, not waved "
+                "through as a frozen legacy.",
             )
 
         with self.assertRaisesRegex(ValueError, "accumulation horizon"):
@@ -2251,8 +2382,8 @@ class TestDataVintage(unittest.TestCase):
                          limits["pretax_401k_limit_y1"])
         self.assertEqual(V8.V8ContributionParams().roth_ira_limit_y1,
                          limits["roth_ira_limit_y1"])
-        self.assertEqual(V8.V8ContributionParams().hsa_limit_y1,
-                         limits["hsa_limit_y1"])
+        self.assertEqual(V8.V8ContributionParams().hsa_limit_y1, 0.0)
+        self.assertEqual(limits["hsa_limit_y1"], 4_400.0)
         self.assertEqual(V91.ACAParams().fpl_single_y0,
                          aca["fpl_single_y0"])
         self.assertEqual(V91.ACAParams().cap_pct_pre_ira,
@@ -2656,7 +2787,7 @@ class TestTrueTaxEngine(unittest.TestCase):
             AccountStack(pretax_401k=1_000_000), need_after_tax_nominal=0,
             ss_gross_nominal=0, conversions_nominal=0, roth_locked=0,
             age=75, cpi=1.0, p=TrueTaxParams(enabled=True),
-            rmd_balance_prior_year_end=500_000)
+            rmd_bases_prior_year_end={"pretax_401k": 500_000})
         self.assertAlmostEqual(r["gross_wd"], 500_000 / 24.6, places=6)
 
     def test_off_is_bit_identical(self):
@@ -2682,17 +2813,43 @@ class TestTrueTaxEngine(unittest.TestCase):
         self.assertTrue(errs)
         self.assertLess(max(errs), 1e-6)
 
-    def test_rmd_age_moves_tax_and_after_tax_results(self):
+    def test_rmd_age_reaches_a_whole_run_and_the_solver(self):
+        # This half asserts the RMD age is WIRED INTO A WHOLE RUN, not just
+        # into the solver -- the direct check below covers the mechanism.
+        #
+        # It used to name one comparison age and has now rotted twice, once
+        # per Phase 1 slice, because which ages bind depends on the account
+        # mix and every slice moves the mix. 72 stopped binding when the Roth
+        # phase-out landed; 80 stopped binding when the tax schedule did.
+        # Chasing it a third time would just schedule a fourth. So the test
+        # SEARCHES for a binding age instead of asserting one, which is the
+        # claim it actually wanted: somewhere in a plausible range, moving
+        # this input has to move the answer. It still fails loudly if the
+        # input is dropped on the floor -- then nothing in the range moves it.
         c = cfg0(); c["tax_true"]["enabled"] = True
         a = ENG.summary(c, 600, SEED, False)
-        c2 = cfg0(); c2["tax_true"]["enabled"] = True; c2["tax_true"]["rmd_age"] = 72
-        b = ENG.summary(c2, 600, SEED, False)
         # The conditional pre-tax terminal P50 excludes failed/nonpositive
         # paths and may coincide when the successful population changes. The
         # RMD mechanism is instead pinned to tax and after-tax wealth effects.
-        self.assertNotEqual(a["true_tax_p50"], b["true_tax_p50"])
-        self.assertNotEqual(a["terminal_after_tax_real_p50"],
-                            b["terminal_after_tax_real_p50"])
+        numeric = sorted(k for k, v in a.items() if isinstance(v, (int, float)))
+        scan = {}
+        for rmd_age in (68, 72, 76, 80, 84, 88):
+            c2 = cfg0(); c2["tax_true"]["enabled"] = True
+            c2["tax_true"]["rmd_age"] = rmd_age
+            b = ENG.summary(c2, 600, SEED, False)
+            moved = [k for k in numeric if b[k] != a[k]]
+            if moved:
+                scan[rmd_age] = moved
+        self.assertTrue(scan,
+                        "no RMD age in 68..88 moved ANY summary metric, so "
+                        "the input is not reaching the run at all")
+        # Measured 2026-08-23: what it moves is `terminal_real_p50`, and only
+        # that. The median true-tax and median after-tax wealth are no longer
+        # sensitive -- under the schedule the median path's pre-tax balance
+        # does not reach the RMD, because the withdrawal order draws the
+        # (now larger) taxable bucket first. Asserting those two specifically
+        # is what rotted twice; asserting "something moves, and say what" is
+        # the claim that survives a change of account mix.
 
         from fire_tax_true import TrueTaxParams, solve_retirement_year
         from fire_v6_model import AccountStack
@@ -2784,7 +2941,7 @@ class TestTrueTaxEngine(unittest.TestCase):
 
         def fake_solver(accounts, need_after_tax_nominal, ss_gross_nominal,
                         conversions_nominal, roth_locked, age, cpi, params,
-                        rmd_balance_prior_year_end=None, gain_fraction=None,
+                        rmd_bases_prior_year_end=None, gain_fraction=None,
                         **_forward_compatible):
             # `gain_fraction` is named rather than swallowed because it is the
             # one Phase 3 added and these traces care what the solver is told.

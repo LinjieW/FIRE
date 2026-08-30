@@ -99,11 +99,15 @@ EARLY_WD_PENALTY_RATE = US_FEDERAL_RULES["early_withdrawal_rate"]
 
 
 def _schema_order(withdrawal_order=None):
-    """The declared account types, in the order this plan draws them.
+    """The declared account types in draw order, plus the schema module.
 
     Imported lazily so the engine keeps no import-time dependency on the
     server package -- the engine is the part with no third-party surface but
     numpy, and Phase 2 does not spend that.
+
+    The module comes back alongside the order because the withdrawal below
+    needs one of its constants as well, and reaching for it a second time
+    would mean two copies of this shim in one file.
     """
     import os
     import sys
@@ -112,8 +116,7 @@ def _schema_order(withdrawal_order=None):
     if server not in sys.path:
         sys.path.insert(0, server)
     import account_schema as SCHEMA
-    return [SCHEMA.BY_KEY[key]
-            for key in SCHEMA.resolve_order(withdrawal_order)]
+    return SCHEMA.ordered_types(withdrawal_order), SCHEMA
 
 
 def withdraw_with_seasoning_v94(
@@ -123,16 +126,39 @@ def withdraw_with_seasoning_v94(
     roth_locked_amount: float,
     current_age: float,
     withdrawal_order: "Optional[list]" = None,
+    gain_fraction: "Optional[float]" = None,
+    meta_out: "Optional[dict]" = None,
 ) -> tuple[AccountStack, float, float]:
     """
     v9.4 patched withdrawal. Adds 10% IRS early withdrawal penalty when
     pretax_401k is touched before age 59.5.
 
     Returns (new_accounts, actual_after_tax_received, penalty_paid_real_dollars).
+
+    `gain_fraction` is `(value - basis) / value` for the CAPITAL-GAIN accounts
+    this year (OPEN_ITEMS E32). Without it this function charged the taxable
+    rate on the whole withdrawal, principal included -- and principal in a
+    taxable account is money that was already taxed on the way in. That the
+    rate belongs on the gain alone is not a new reading: the 2026-08-14
+    step-up ruling settled it and `engine_adapter._terminal_values` has
+    shipped it since, computing `taxable - gain * tx`.
+
+    `None` means 1.0 -- everything is gain -- which is exactly what this
+    function did before the parameter existed. That default is deliberate:
+    three earlier engine generations still call this, and their numbers are
+    not in this slice's scope.
+
+    `meta_out` receives `capital_gain_withdrawal`, so a caller tracking basis
+    can retire it in proportion without re-deriving the draw from balance
+    differences -- which would be a second implementation of the ordering rule
+    right here.
     """
     accounts = accounts.copy()
     remaining = needed_after_tax
     total_penalty = 0.0
+    gain_frac = (1.0 if gain_fraction is None
+                 else max(0.0, min(1.0, float(gain_fraction))))
+    capital_gain_taken = 0.0
 
     # Roadmap 7.0 Phase 2: the order and the per-account rules come from the
     # declaration in `server/account_schema.py` rather than from four blocks
@@ -143,7 +169,8 @@ def withdraw_with_seasoning_v94(
     # `withdrawal_order` absent means the declared default, which is the order
     # this function has used across four engine generations. That is what
     # keeps this change bit-identical for every existing plan.
-    for account in _schema_order(withdrawal_order):
+    order, SCHEMA = _schema_order(withdrawal_order)
+    for account in order:
         if remaining <= 0:
             break
         balance = getattr(accounts, account.field, 0.0)
@@ -161,6 +188,12 @@ def withdraw_with_seasoning_v94(
         rate = 0.0
         if account.withdrawal_rate is not None:
             rate = getattr(tax, account.withdrawal_rate, 0.0)
+        # The rate applies to the GAIN, not to the whole sale. For every other
+        # account type `gain_frac` is not consulted at all, because "how much
+        # of this is profit" is only a question a capital-gain account can be
+        # asked -- a pre-tax dollar is taxed in full whatever its history.
+        if account.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
+            rate = rate * gain_frac
         penalised = (account.early_penalty_age is not None
                      and current_age < account.early_penalty_age)
         if penalised:
@@ -177,10 +210,14 @@ def withdraw_with_seasoning_v94(
         setattr(accounts, account.field,
                 getattr(accounts, account.field) - gross_take)
         remaining -= gross_take * (1 - rate)
+        if account.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
+            capital_gain_taken += gross_take
         if penalised:
             total_penalty += gross_take * account.early_penalty_rate
 
     actual = needed_after_tax - max(remaining, 0.0)
+    if meta_out is not None:
+        meta_out["capital_gain_withdrawal"] = capital_gain_taken
     return accounts, actual, total_penalty
 
 

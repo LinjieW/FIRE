@@ -144,6 +144,17 @@ IRMAA_RULES = {
 }
 CONTRIBUTION_LIMIT_RULES = dict(
     _component("contribution_limits")["values"])
+#: Roadmap 10.0: statutory amounts the accumulation side had been doing
+#: without. Separate components rather than fields on `contribution_limits`,
+#: because that component's peel test exists to catch an existing row edited
+#: under cover of an addition.
+RETIREMENT_CATCH_UP_RULES = dict(
+    _component("retirement_catch_up_limits")["values"])
+IRA_PHASE_OUT_RULES = dict(_component("ira_income_phase_outs")["values"])
+FICA_RULES = dict(_component("fica_payroll_tax")["values"])
+SECA_RULES = dict(_component("self_employment_tax")["values"])
+PLAN_SHAPE_RULES = dict(_component("plan_shape_limits")["values"])
+ESPP_RULES = dict(_component("espp_section_423")["values"])
 ACA_MARKETPLACE_RULES = dict(_component("aca_marketplace")["values"])
 SSA_RULES = {
     **_component("ssa_benefit_rules")["values"],
@@ -243,6 +254,7 @@ def _component_applicability(config: Mapping[str, Any]) -> dict[str, bool]:
             start_age + 1 < 65 and retire_horizon > 0),
         "ssa_benefit_rules": bool(ss.get("enabled", True)),
         "ssa_statement_import": False,
+        "espp_section_423": bool(contributions.get("espp_enabled")),
     }
 
 
@@ -289,6 +301,10 @@ def _value_evidence(
             for field in (
                     "pretax_401k_limit_y1", "roth_ira_limit_y1",
                     "hsa_limit_y1"):
+                if (field == "hsa_limit_y1"
+                        and contributions.get("hsa_coverage_tier", "none")
+                        == "none"):
+                    continue
                 key = "contributions." + field
                 configured[key] = contributions.get(field)
                 reference[key] = CONTRIBUTION_LIMIT_RULES[field]
@@ -296,6 +312,10 @@ def _value_evidence(
             for field in (
                     "pretax_401k_limit_y1", "roth_ira_limit_y1",
                     "hsa_limit_y1"):
+                if (field == "hsa_limit_y1"
+                        and household.get(
+                            "spouse_hsa_coverage_tier", "none") == "none"):
+                    continue
                 key = "household.spouse_" + field
                 configured[key] = household.get("spouse_" + field)
                 reference[key] = CONTRIBUTION_LIMIT_RULES[field]
@@ -418,6 +438,16 @@ def rule_pack_reference_defaults() -> dict[str, Any]:
         "pack_id": RULE_PACK_ID,
         "content_sha256": RULE_PACK_SHA256,
         "contribution_limits": copy.deepcopy(CONTRIBUTION_LIMIT_RULES),
+        # The quick estimate asks for HDHP coverage tier, so it needs that
+        # tier's ceiling. `contribution_limits.hsa_limit_y1` is the SELF-ONLY
+        # figure; capping a family plan at it would under-credit a user who
+        # had just said they have family coverage. Base amounts only -- the
+        # age-55 catch-up is deliberately not here, because the quick screen
+        # does not ask the question the catch-up turns on.
+        "hsa_tier_limits": {
+            "self_only": float(PLAN_SHAPE_RULES["hsa_limit_self_only"]),
+            "family": float(PLAN_SHAPE_RULES["hsa_limit_family"]),
+        },
     }
 
 

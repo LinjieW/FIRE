@@ -752,13 +752,15 @@ def _readonly_schema_preflight(conn: sqlite3.Connection) -> None:
     except sqlite3.Error as exc:
         raise PersistenceError("timeline database schema is unreadable") from exc
     current = versions[-1] if versions else 0
-    if current in (7, 8, 9, 10):
+    if current in (7, 8, 9, 10, 11, 12):
         expected_versions = list(range(1, current + 1))
         complete = {
             7: PersistenceStore._schema_v7_complete,
             8: PersistenceStore._schema_v8_complete,
             9: PersistenceStore._schema_v9_complete,
             10: PersistenceStore._schema_v10_complete,
+            11: PersistenceStore._schema_v11_complete,
+            12: PersistenceStore._schema_v12_complete,
         }[current](conn)
         if (versions != expected_versions or user_version != current
                 or not complete):
@@ -2216,6 +2218,319 @@ class PersistenceStore:
             """,
         ]
 
+    @staticmethod
+    def _v11_table_statements() -> list[str]:
+        """B15's one directed link and its immutable age evaluations."""
+        return [
+            "ALTER TABLE plans ADD COLUMN status_revision INTEGER NOT NULL "
+            "DEFAULT 0 CHECK (status_revision >= 0)",
+            """
+            CREATE TABLE parent_identity_links (
+              link_id TEXT PRIMARY KEY,
+              relation TEXT NOT NULL CHECK (relation='parent_identity'),
+              household_plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE RESTRICT,
+              parent_plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE RESTRICT,
+              created_at TEXT NOT NULL,
+              ended_at TEXT,
+              ended_reason TEXT,
+              CHECK (household_plan_id <> parent_plan_id),
+              CHECK ((ended_at IS NULL AND ended_reason IS NULL) OR
+                     (ended_at IS NOT NULL AND length(trim(ended_reason)) > 0))
+            )
+            """,
+            """
+            CREATE TABLE parent_identity_evaluations (
+              evaluation_id TEXT PRIMARY KEY,
+              link_id TEXT NOT NULL REFERENCES parent_identity_links(link_id)
+                  ON DELETE RESTRICT,
+              household_plan_version_id TEXT NOT NULL
+                  REFERENCES plan_versions(id) ON DELETE RESTRICT,
+              parent_plan_version_id TEXT NOT NULL
+                  REFERENCES plan_versions(id) ON DELETE RESTRICT,
+              household_status_revision INTEGER NOT NULL CHECK (household_status_revision >= 0),
+              parent_status_revision INTEGER NOT NULL CHECK (parent_status_revision >= 0),
+              parent_slot_index INTEGER NOT NULL CHECK (parent_slot_index >= 0),
+              parent_slot_label TEXT NOT NULL CHECK (length(trim(parent_slot_label)) > 0),
+              as_of_date TEXT,
+              as_of_basis TEXT CHECK (as_of_basis IS NULL OR
+                                      as_of_basis='user_confirmed_same_date'),
+              detector_version TEXT NOT NULL CHECK (detector_version='parent-age-v1'),
+              household_age INTEGER CHECK (household_age IS NULL OR
+                                           household_age BETWEEN 0 AND 130),
+              parent_age INTEGER CHECK (parent_age IS NULL OR parent_age BETWEEN 0 AND 130),
+              applicable INTEGER NOT NULL CHECK (applicable IN (0,1)),
+              finding TEXT CHECK (finding IS NULL OR
+                                  finding IN ('match','contradiction')),
+              delta_years INTEGER,
+              reason_code TEXT NOT NULL CHECK (length(trim(reason_code)) > 0),
+              reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+              created_at TEXT NOT NULL,
+              CHECK ((applicable=0 AND finding IS NULL AND delta_years IS NULL
+                       AND as_of_basis IS NULL AND as_of_date IS NULL) OR
+                     (applicable=1 AND household_age IS NOT NULL
+                       AND parent_age IS NOT NULL AND finding IS NOT NULL
+                       AND delta_years = parent_age - household_age
+                       AND as_of_date IS NOT NULL
+                       AND as_of_basis='user_confirmed_same_date'
+                       AND ((delta_years=0 AND finding='match') OR
+                            (delta_years<>0 AND finding='contradiction'))))
+            )
+            """,
+            "CREATE UNIQUE INDEX parent_identity_active_pair ON "
+            "parent_identity_links(household_plan_id,parent_plan_id) "
+            "WHERE ended_at IS NULL",
+            "CREATE INDEX parent_identity_links_household ON "
+            "parent_identity_links(household_plan_id,created_at,link_id)",
+            "CREATE INDEX parent_identity_links_parent ON "
+            "parent_identity_links(parent_plan_id,created_at,link_id)",
+            "CREATE INDEX parent_identity_evaluations_link ON "
+            "parent_identity_evaluations(link_id,created_at,evaluation_id)",
+        ]
+
+    @staticmethod
+    def _v11_trigger_statements() -> list[str]:
+        return [
+            """
+            CREATE TRIGGER plans_status_revision_guard
+            BEFORE UPDATE OF status,status_revision ON plans
+            WHEN (NEW.status IS NOT OLD.status AND
+                  NEW.status_revision IS NOT OLD.status_revision + 1)
+              OR (NEW.status IS OLD.status AND
+                  NEW.status_revision IS NOT OLD.status_revision)
+            BEGIN SELECT RAISE(ABORT,'plan status revision must advance exactly once'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_links_root
+            BEFORE INSERT ON parent_identity_links
+            WHEN NEW.relation != 'parent_identity'
+              OR NEW.household_plan_id = NEW.parent_plan_id
+              OR NOT EXISTS (SELECT 1 FROM plans p
+                             WHERE p.id=NEW.household_plan_id AND p.status='active')
+              OR NOT EXISTS (SELECT 1 FROM plans p
+                             WHERE p.id=NEW.parent_plan_id AND p.status='active')
+            BEGIN SELECT RAISE(ABORT,'parent identity link endpoints are invalid'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_links_no_delete
+            BEFORE DELETE ON parent_identity_links
+            BEGIN SELECT RAISE(ABORT,'parent identity links are retained'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_links_identity_immutable
+            BEFORE UPDATE ON parent_identity_links
+            WHEN NEW.link_id IS NOT OLD.link_id
+              OR NEW.relation IS NOT OLD.relation
+              OR NEW.household_plan_id IS NOT OLD.household_plan_id
+              OR NEW.parent_plan_id IS NOT OLD.parent_plan_id
+              OR NEW.created_at IS NOT OLD.created_at
+            BEGIN SELECT RAISE(ABORT,'parent identity link identity is immutable'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_links_end_once
+            BEFORE UPDATE ON parent_identity_links
+            WHEN OLD.ended_at IS NOT NULL OR NEW.ended_at IS NULL
+              OR NEW.ended_reason IS NULL OR length(trim(NEW.ended_reason)) = 0
+            BEGIN SELECT RAISE(ABORT,'parent identity link may be ended exactly once'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_evaluations_root
+            BEFORE INSERT ON parent_identity_evaluations
+            WHEN NOT EXISTS (
+              SELECT 1 FROM parent_identity_links l
+              JOIN plans hp ON hp.id=l.household_plan_id
+              JOIN plans pp ON pp.id=l.parent_plan_id
+              WHERE l.link_id=NEW.link_id AND l.ended_at IS NULL
+                AND hp.status='active' AND pp.status='active'
+                AND hp.status_revision=NEW.household_status_revision
+                AND pp.status_revision=NEW.parent_status_revision
+                AND EXISTS (SELECT 1 FROM plan_versions hv
+                            WHERE hv.id=NEW.household_plan_version_id
+                              AND hv.plan_id=l.household_plan_id
+                              AND NOT EXISTS (SELECT 1 FROM plan_versions hc
+                                              WHERE hc.parent_version_id=hv.id))
+                AND EXISTS (SELECT 1 FROM plan_versions pv
+                            WHERE pv.id=NEW.parent_plan_version_id
+                              AND pv.plan_id=l.parent_plan_id
+                              AND NOT EXISTS (SELECT 1 FROM plan_versions pc
+                                              WHERE pc.parent_version_id=pv.id))
+                AND 1=(SELECT COUNT(*) FROM plan_versions ht
+                       WHERE ht.plan_id=l.household_plan_id
+                         AND NOT EXISTS (SELECT 1 FROM plan_versions hc
+                                         WHERE hc.parent_version_id=ht.id))
+                AND 1=(SELECT COUNT(*) FROM plan_versions pt
+                       WHERE pt.plan_id=l.parent_plan_id
+                         AND NOT EXISTS (SELECT 1 FROM plan_versions pc
+                                         WHERE pc.parent_version_id=pt.id))
+            )
+            BEGIN SELECT RAISE(ABORT,'parent identity evaluation root is not current'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_evaluations_no_update
+            BEFORE UPDATE ON parent_identity_evaluations
+            BEGIN SELECT RAISE(ABORT,'parent identity evaluations are immutable'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_evaluations_no_delete
+            BEFORE DELETE ON parent_identity_evaluations
+            BEGIN SELECT RAISE(ABORT,'parent identity evaluations are retained'); END
+            """,
+        ]
+
+    @classmethod
+    def _schema_v11_complete(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._schema_v10_complete(conn):
+            return False
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(plans)")}
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        triggers = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        indexes = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")}
+        return ("status_revision" in columns
+                and {"parent_identity_links",
+                     "parent_identity_evaluations"}.issubset(tables)
+                and {"plans_status_revision_guard",
+                     "parent_identity_links_root",
+                     "parent_identity_links_no_delete",
+                     "parent_identity_links_identity_immutable",
+                     "parent_identity_links_end_once",
+                     "parent_identity_evaluations_root",
+                     "parent_identity_evaluations_no_update",
+                     "parent_identity_evaluations_no_delete"}.issubset(triggers)
+                and "parent_identity_active_pair" in indexes)
+
+    @classmethod
+    def install_v11_schema(cls, conn: sqlite3.Connection, *,
+                           app_release_id: str) -> None:
+        """Add B15 parent identity evidence without rewriting v10 rows."""
+        if cls._schema_v11_complete(conn):
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 11:
+                raise PersistenceError("v11 archive user_version mismatch")
+            return
+        if (int(conn.execute("PRAGMA user_version").fetchone()[0]) != 10
+                or not cls._schema_v10_complete(conn)):
+            raise PersistenceError("v10 archive is incomplete before v11 migration")
+        cls._validate_state_rows(conn)
+        for statement in cls._v11_table_statements():
+            conn.execute(statement)
+        for statement in cls._v11_trigger_statements():
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at, app_release_id) "
+            "VALUES (11, ?, ?)", (utc_now(), app_release_id))
+        conn.execute("PRAGMA user_version = 11")
+
+    @staticmethod
+    def _v12_table_statements() -> list[str]:
+        """Additive sex evidence paired to an existing immutable age row."""
+        return [
+            """
+            CREATE TABLE parent_identity_sex_evaluations (
+              sex_evaluation_id TEXT PRIMARY KEY,
+              age_evaluation_id TEXT NOT NULL UNIQUE
+                  REFERENCES parent_identity_evaluations(evaluation_id)
+                  ON DELETE RESTRICT,
+              link_id TEXT NOT NULL REFERENCES parent_identity_links(link_id)
+                  ON DELETE RESTRICT,
+              household_plan_version_id TEXT NOT NULL
+                  REFERENCES plan_versions(id) ON DELETE RESTRICT,
+              parent_plan_version_id TEXT NOT NULL
+                  REFERENCES plan_versions(id) ON DELETE RESTRICT,
+              household_status_revision INTEGER NOT NULL CHECK (household_status_revision >= 0),
+              parent_status_revision INTEGER NOT NULL CHECK (parent_status_revision >= 0),
+              parent_slot_index INTEGER NOT NULL CHECK (parent_slot_index >= 0),
+              parent_slot_label TEXT NOT NULL CHECK (length(trim(parent_slot_label)) > 0),
+              detector_version TEXT NOT NULL CHECK (detector_version='parent-sex-v1'),
+              household_sex TEXT CHECK (household_sex IS NULL OR
+                                        household_sex IN ('male','female')),
+              parent_sex TEXT CHECK (parent_sex IS NULL OR
+                                     parent_sex IN ('male','female')),
+              applicable INTEGER NOT NULL CHECK (applicable IN (0,1)),
+              finding TEXT CHECK (finding IS NULL OR
+                                  finding IN ('match','contradiction')),
+              reason_code TEXT NOT NULL CHECK (length(trim(reason_code)) > 0),
+              reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+              created_at TEXT NOT NULL,
+              CHECK ((applicable=0 AND finding IS NULL) OR
+                     (applicable=1 AND household_sex IS NOT NULL
+                      AND parent_sex IS NOT NULL AND finding IS NOT NULL
+                      AND ((household_sex=parent_sex AND finding='match') OR
+                           (household_sex<>parent_sex AND finding='contradiction'))))
+            )
+            """,
+            "CREATE INDEX parent_identity_sex_evaluations_link ON "
+            "parent_identity_sex_evaluations(link_id,created_at,sex_evaluation_id)",
+        ]
+
+    @staticmethod
+    def _v12_trigger_statements() -> list[str]:
+        return [
+            """
+            CREATE TRIGGER parent_identity_sex_evaluations_root
+            BEFORE INSERT ON parent_identity_sex_evaluations
+            WHEN NOT EXISTS (
+              SELECT 1 FROM parent_identity_evaluations a
+              WHERE a.evaluation_id=NEW.age_evaluation_id
+                AND a.link_id=NEW.link_id
+                AND a.household_plan_version_id=NEW.household_plan_version_id
+                AND a.parent_plan_version_id=NEW.parent_plan_version_id
+                AND a.household_status_revision=NEW.household_status_revision
+                AND a.parent_status_revision=NEW.parent_status_revision
+                AND a.parent_slot_index=NEW.parent_slot_index
+                AND a.parent_slot_label=NEW.parent_slot_label
+            )
+            BEGIN SELECT RAISE(ABORT,'parent identity sex evaluation root is invalid'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_sex_evaluations_no_update
+            BEFORE UPDATE ON parent_identity_sex_evaluations
+            BEGIN SELECT RAISE(ABORT,'parent identity sex evaluations are immutable'); END
+            """,
+            """
+            CREATE TRIGGER parent_identity_sex_evaluations_no_delete
+            BEFORE DELETE ON parent_identity_sex_evaluations
+            BEGIN SELECT RAISE(ABORT,'parent identity sex evaluations are retained'); END
+            """,
+        ]
+
+    @classmethod
+    def _schema_v12_complete(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._schema_v11_complete(conn):
+            return False
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        triggers = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        indexes = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")}
+        return ("parent_identity_sex_evaluations" in tables
+                and {"parent_identity_sex_evaluations_root",
+                     "parent_identity_sex_evaluations_no_update",
+                     "parent_identity_sex_evaluations_no_delete"}.issubset(triggers)
+                and "parent_identity_sex_evaluations_link" in indexes)
+
+    @classmethod
+    def install_v12_schema(cls, conn: sqlite3.Connection, *,
+                           app_release_id: str) -> None:
+        """Add sex evidence without altering or rebuilding the v11 age table."""
+        if cls._schema_v12_complete(conn):
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 12:
+                raise PersistenceError("v12 archive user_version mismatch")
+            return
+        if (int(conn.execute("PRAGMA user_version").fetchone()[0]) != 11
+                or not cls._schema_v11_complete(conn)):
+            raise PersistenceError("v11 archive is incomplete before v12 migration")
+        cls._validate_state_rows(conn)
+        for statement in cls._v12_table_statements():
+            conn.execute(statement)
+        for statement in cls._v12_trigger_statements():
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at, app_release_id) "
+            "VALUES (12, ?, ?)", (utc_now(), app_release_id))
+        conn.execute("PRAGMA user_version = 12")
+
     @classmethod
     def _schema_v10_complete(cls, conn: sqlite3.Connection) -> bool:
         if not cls._schema_v9_complete(conn):
@@ -2848,7 +3163,7 @@ class PersistenceStore:
             versions = [int(row[0]) for row in rows]
             current = versions[-1] if versions else 0
             user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if current in (7, 8, 9, 10):
+            if current in (7, 8, 9, 10, 11, 12):
                 # A post-cutover archive carries the formal migration's
                 # additive v7/v8 schema, from Phase 2 the v9 CheckIn ledger,
                 # and from Phase 4 the v10 decision record.  It is accepted
@@ -2866,6 +3181,8 @@ class PersistenceStore:
                     8: self._schema_v8_complete,
                     9: self._schema_v9_complete,
                     10: self._schema_v10_complete,
+                    11: self._schema_v11_complete,
+                    12: self._schema_v12_complete,
                 }[current](conn)
                 if (versions != list(range(1, current + 1))
                         or user_version != current or not complete):

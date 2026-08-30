@@ -125,8 +125,17 @@
     "beq.title": ["这个计划靠继承吗", "Does this plan lean on an inheritance?"],
     "beq.kicker": ["把计划原样跑一遍，再用同一个种子跑一遍「遗产没到账」，只差这一件事。看的是中位消费而不是成功率——护栏会靠砍消费吸收损失，所以成功率可能一动不动而生活水平掉一截。",
       "Runs the plan as configured, then again at the same seed with the bequest never credited — one difference, nothing else. It reads median consumption rather than the success rate, because the guardrail absorbs a lost inheritance by spending less: the success rate can sit still while your standard of living drops."],
+    "cb.title": ["继续工作，还是休这一段假", "Keep working, or take the break"],
+    "cb.kicker": ["同一个计划、同一个种子跑两遍，只差「休不休」这一件事。先看 FIRE 时间和几笔具体的钱——成功率在这个引擎上通常两边都是 100%，因为提取规则靠砍消费吸收损失，看它会以为休假没有代价。",
+                  "The same plan at the same seed, run both ways, differing only in whether you take the break. Read the FIRE date and the dollar figures first: the success rate is usually 100% on both sides here, because the withdrawal rule absorbs the loss by cutting spending — reading it would tell you a break is free."],
+    "cb.run": ["▶ 比较：继续工作 vs 计划休假", "▶ Compare: keep working vs take the break"],
+    "cb.running": ["正在把计划跑两遍…", "Running the plan both ways…"],
     "beq.run": ["▶ 检查是否依赖继承", "▶ Check for inheritance dependence"],
     "beq.running": ["正在把计划跑两遍…", "Running the plan twice…"],
+    "exec.title": ["80 岁后，计划还能不能照做", "Can the plan still be executed after 80?"],
+    "exec.kicker": ["同一批人生按路径隔离后再跑一次：从 80 岁第一笔退休付款起，只保留固定实际提取、不再新增 Roth 转换、冻结未来股债目标变化。它测执行复杂度，不预测认知衰退；当前引擎仍按目标股比隐式再平衡，所以不是字面上的「不再平衡」。本刀固定跑未搬迁的 base-location 臂，计划里的搬迁设置不在这次差异里。", "Runs the same path-isolated sampled lives again. From the first retirement payment at age 80: fixed-real withdrawals, no new Roth conversions, and no further allocation-target changes. This tests execution complexity, not cognitive decline. The engine still implicitly rebalances to the frozen target, so this is not literal no-rebalancing. This slice fixes the study to the no-relocation, base-location arm; any relocation setting in the plan is outside this comparison."],
+    "exec.run": ["▶ 跑 80 岁执行简化压力测试", "▶ Stress-test simpler execution at 80"],
+    "exec.running": ["正在逐路径配对跑两遍…", "Running paired paths twice…"],
     "concl.kicker": ["以下每条都由你这次跑出的数字生成，随输入改变；均为教育性质的情景解读，非个人化投资建议。计算越多板块（敏感性/SWR/搬迁），解读越完整。",
       "Each statement below is generated from your numbers and changes with inputs — educational scenario readings, not personalized investment advice. Compute more panels for a fuller set."],
     "concl.method": ["方法与诚实度", "Method & honesty"],
@@ -149,11 +158,21 @@
     "quick.age": ["当前年龄", "Age"], "quick.income": ["税前年收入 $", "Gross income $"],
     "quick.spend": ["当前年开销 $", "Spending now $"], "quick.port": ["现有可投资产 $", "Investable assets $"],
     "quick.ret": ["退休后年支出 $", "Retirement spend $"], "quick.spouse": ["配偶税前收入 $（可选）", "Spouse income $ (optional)"], "quick.go": ["速估 →", "Estimate →"],
+    "quick.hsa": ["HSA（需 HDHP）", "HSA (needs an HDHP)"],
+    "quick.hsa.none": ["不缴 / 没有 HDHP", "No HSA / no HDHP"],
+    "quick.hsa.self": ["仅本人 HDHP", "Self-only HDHP"],
+    "quick.hsa.family": ["家庭 HDHP", "Family HDHP"],
+    "quick.hsa.ded": ["HDHP 免赔额 $", "HDHP deductible $"],
+    "quick.hsa.oop": ["HDHP 自付上限 $", "HDHP out-of-pocket max $"],
+    "quick.hsa.through": ["HSA 资格保持到几岁", "HSA eligible through age"],
+    "quick.hsa.clear": ["无其他保障 / 非 Medicare / 非 dependent", "No other coverage / no Medicare / not a dependent"],
+    "quick.hsa.need": ["选了 HDHP 就要填免赔额、自付上限、不早于当前年龄的资格截止年龄，并勾上那三项都不成立。这些是法定资格事实，本 App 不替你假设。", "An HDHP needs its deductible, its out-of-pocket maximum, an eligibility end age no earlier than your current age, and the three disqualifying answers ticked as false. Those are statutory eligibility facts; this app does not assume them for you."],
     "quick.import": ["导入朋友的配置…", "Import a friend's config…"],
     "prec.seed": ["随机种子", "Random seed"],
     "prec.seed.hint": ["同种子同精度=完全可复现；换个种子重跑是最朴素的稳健性检查", "Same seed & precision = exact reproducibility; re-running with a new seed is the simplest robustness check"],
     "persona.head": ["或从一个像你的人开始：", "Or start from someone like you:"],
     "plans.head": ["我的计划：", "My plans:"],
+    "family.head": ["家庭计划关联：", "Family plan links:"],
     "plans.save": ["存为计划", "Save plan"], "plans.open": ["打开", "Open"],
     "results.saveA": ["存为 A", "Save A"], "results.saveB": ["存为 B", "Save B"],
     "plans.dup": ["复制", "Duplicate"], "plans.del": ["删除", "Delete"],
@@ -247,7 +266,10 @@
     { id: "earning", title: ["还在工作的那些年", "While you are still working"],
       blurb: ["工资怎么长、会不会升职、会不会失业 —— 积累期的全部输入。",
               "How pay grows, whether a promotion lands, whether a layoff does."],
-      blocks: ["contributions", "promotion", "layoff", "human_capital"] },
+      blocks: ["contributions", "promotion", "second_promotion", "spouse_promotion", "spouse_second_promotion", "layoff", "human_capital",
+               "career_break", "spouse_career_break", "spouse_human_capital",
+               "spouse_layoff", "student_debt",
+               "lifestyle_creep", "disability"] },
     { id: "income", title: ["退休后的收入", "Income after you stop"],
       blurb: ["养老金、租金、年金 —— 不靠卖资产就有的钱。",
               "Pensions, rent, annuities: money that arrives without selling anything."],
@@ -367,23 +389,135 @@
     "initial.roth_ira": ["Roth 账户今日余额（合规提取免税）。", "Today's Roth balance (qualified withdrawals tax-free)."],
     "initial.hsa": ["HSA 今日余额（医疗用途免税）。", "Today's HSA balance (tax-free for medical)."],
     "initial.taxable": ["普通券商/应税账户今日余额（提取按资本利得计税）。", "Today's taxable brokerage balance (capital-gains taxed)."],
+    "contributions.gov_457b_y1": ["你今年实际缴进<b>政府 457(b)</b> 的税前金额（不是法定上限）。它的限额与 401(k)/403(b) <b>各算各的</b>，两边可以都缴满。<b>模型不给它补缴额度</b>：457(b) 允许 50 岁补缴，但「同时参加两个计划时能不能各补一次」在 IRS 一手页面上没有明说，所以这里少算而不是多算。留 0 表示没有。", "What you actually defer into a <b>governmental 457(b)</b> this year (not the statutory cap). Its limit is <b>separate</b> from the 401(k)/403(b) one, so both can be filled. <b>No catch-up is credited here</b>: a governmental 457(b) may allow the age-50 catch-up, but whether someone in both plans gets one in each is not stated on any first-party IRS page this was checked against, so the model under-credits rather than invents room. Leave 0 if you have none."],
+    "initial.gov_457b": ["<b>政府 457(b)</b> 今日余额。它和税前 401(k) 出口税一样，但<b>离职后任何年龄提取都没有 10% 提前提取罚金</b>——这是提前退休最在意的那一点，所以它单独一个桶。缴款限额也和 401(k)/403(b) <b>各算各的</b>。非政府（tax-exempt）457(b) 不是这个：它是雇主的一般财产，本 App 不建模，请不要填在这里。", "Today's <b>governmental 457(b)</b> balance. Taxed like a pre-tax 401(k) on the way out, but with <b>no 10% early-withdrawal penalty at any age once you have separated</b> — which is precisely what an early retirement cares about, so it gets its own bucket. Its contribution limit is <b>separate</b> from the 401(k)/403(b) one too. A non-governmental (tax-exempt) 457(b) is NOT this: it remains the employer's general asset and is not modelled — do not enter it here."],
     "other_assets.cash": ["现金、活期/定期存款、货币基金。会并入应税桶参与模拟。", "Cash, savings/CDs, money-market funds. Folded into the taxable bucket for simulation."],
     "other_assets.other_liquid": ["其他随时可变现的资产：加密货币、另一家券商、股票期权已归属部分等。并入应税桶。", "Other liquid holdings: crypto, another brokerage, vested equity, etc. Folded into taxable."],
     "other_assets.home_equity": ["自住房市值减按揭余额。默认不计入 FI 组合（非流动、要住），只做记录——除非你计划出售。", "Home value minus mortgage. Excluded from the FI portfolio by default (illiquid; you live in it) — unless you plan a sale."],
     "other_assets.sell_home_enabled": ["勾选后，出售净得会在指定年龄作为一次性收入进入模拟（缩表/搬家场景）。", "If checked, sale proceeds enter the simulation as a one-time inflow at the chosen age (downsizing/relocating)."],
     "other_assets.sell_home_age": ["计划出售的年龄。", "Age at which you plan to sell."],
     "other_assets.sell_home_net_real": ["扣除税费、中介、还贷后的净得，今日美元。", "Net of taxes, fees and payoff, in today's dollars."],
-    "contributions.base_salary_pre": ["税前基础年薪，不含奖金/加班。", "Pre-tax base salary, excl. bonus/overtime."],
-    "contributions.bonus_pre": ["税前年终奖预估。没有就填 0。", "Estimated pre-tax annual bonus. 0 if none."],
+    "contributions.base_salary_pre": ["W-2 时是税前基础年薪；自雇/1099 时，它与下面的奖金、额外收入合计为本模型的一笔预期年度净利润。", "For W-2 this is pre-tax base salary. For self-employed/1099 it combines with bonus and extra income below into the model's one expected annual net-profit figure."],
+    "contributions.bonus_pre": ["W-2 固定奖金/佣金的年度金额。选择百分比区间后此项不读取；自雇时它仍只是预期净利润合计的一部分。", "Annual W-2 fixed bonus/commission. It is not read when the percentage range is selected; for self-employment it remains one component of expected net profit."],
+    "contributions.bonus_mode_pre": ["W-2 晋升前奖金/佣金：沿用固定金额，或让每年奖金占当年基础工资的比例在你填写的区间内独立均匀抽样。晋升后仍用晋升模块自己的奖金设置。", "Pre-promotion W-2 bonus/commission: keep the fixed amount, or independently draw each year's share of that year's base salary uniformly within your bounds. Post-promotion bonus still uses the promotion module."],
+    "contributions.bonus_pct_min_pre": ["W-2 年度奖金/佣金占基础工资的下限。必须来自你的薪酬方案，不是行业默认。", "Lower bound for annual W-2 bonus/commission as a share of base pay. Use your compensation plan; no industry default is supplied."],
+    "contributions.bonus_pct_max_pre": ["W-2 年度奖金/佣金占基础工资的上限。每年在上下界内独立均匀抽样。", "Upper bound for annual W-2 bonus/commission as a share of base pay. Each year is drawn independently and uniformly within the bounds."],
+    "contributions.self_employed_profit_mode": ["自雇/1099 的整笔年度净利润保持平滑，或每年乘一个你填写区间内的独立均匀因子。它不是 W-2 奖金百分比。", "Keep total annual self-employed/1099 net profit smooth, or multiply the whole amount each year by an independent uniform factor within your bounds. This is not a W-2 bonus percentage."],
+    "contributions.self_employed_profit_factor_min": ["年度净利润相对平滑路径的最低倍数。0 表示允许零利润；本刀不建模负利润/亏损。", "Lowest annual net-profit multiple relative to the smooth path. Zero permits zero profit; negative profit/loss is not modelled in this slice."],
+    "contributions.self_employed_profit_factor_max": ["年度净利润相对平滑路径的最高倍数。每年独立抽样，不含客户、行业或经济周期相关性。", "Highest annual net-profit multiple relative to the smooth path. Annual draws are independent and do not model client, industry, or business-cycle correlation."],
+    "contributions.rsu_vest_enabled": ["勾选后，RSU 归属按归属当年的普通 W-2 工资计：交所得税与 FICA、进入可负担缴款与雇主缴款口径、并累积社保 covered earnings。它与「股权收入流」那条税后现金互斥，不能同时开。", "When checked, RSU vesting is counted as ordinary W-2 wages in the vest year: income tax and FICA are charged, contribution affordability and employer money see it, and it builds Social Security covered earnings. It is mutually exclusive with the after-tax \"equity income stream\"."],
+    "contributions.rsu_vest_schedule_real": ["从积累第 1 年起，每年归属的价值，今日美元，用逗号分隔（例：60000, 60000, 45000, 30000）。数字来自你自己的授予文件，本模型不猜授予规模、股价或归属惯例。表填到第几年就到第几年，其后各年归属为 0。本刀假设归属即卖出，不建持有后的单只股票风险。", "Vest value for each year starting from accumulation year 1, in today's dollars, comma-separated (e.g. 60000, 60000, 45000, 30000). These come from your own grant paperwork; no grant size, share price or vesting convention is supplied. The schedule ends where you end it and later years vest 0. This slice assumes sale at vest and does not model holding a single stock afterwards."],
+    "contributions.rsu_retained_enabled": ["把部分已归属股票留着不卖。留下的钱在当年离开分散组合，到卖出年龄再按你填的倍数回来 —— 这个差额就是集中的代价。本项不问波动率，它是你自述的情景，不是概率。", "Keep some vested shares instead of selling. The kept money leaves the diversified portfolio in that year and comes back at your sale age multiplied by the figure you state — that difference is the cost of concentration. No volatility is asked for: this is a scenario you state, not a probability."],
+    "contributions.rsu_retained_schedule_real": ["每个归属年你留下没卖的金额，今日美元，逗号分隔。每年不能超过那年的归属价值。", "How much of each vest year you kept in shares rather than selling, in today's dollars, comma-separated. No year may exceed that year's vest value."],
+    "contributions.rsu_retained_sale_age": ["你打算卖掉这些股票的年龄。必须晚于最后一个保留年。", "The age at which you plan to sell these shares. Must be later than the last year you kept any."],
+    "contributions.rsu_retained_value_multiple": ["卖出时这笔钱相当于投进去的多少倍，按实际购买力。1 = 打平，0.4 = 跌掉六成，2 = 翻一倍。这是你要试的情景，模型不猜它的概率。", "What the kept money is worth when you sell, as a multiple of what went in, in real purchasing power. 1 = flat, 0.4 = down 60%, 2 = doubled. This is the scenario you want to test; the model does not guess its likelihood."],
+    "contributions.rsu_retained_sigma_enabled": ["改成抽一条 lognormal 实际路径，而不是用一个固定倍数。开启后上面那个倍数不再被读取（所以它会隐藏起来）。注意：drift = 0 锚的是股票路径自己的中位数，而 lognormal 多年复利右尾很长，所以打开它有可能把计划的中位数抬高 —— 那是分布在说话，不是「拿着更划算」。", "Draw a lognormal real path instead of applying one fixed multiple. The multiple above is no longer read (so it is hidden). Note: drift = 0 anchors the median of the stock's own path, and a lognormal compounded over years has a long right tail, so switching this on can raise your plan's median — that is the distribution speaking, not evidence that holding is better."],
+    "contributions.rsu_retained_sigma_real": ["单只股票的年化实际波动率，是你自己的数字。本模型不发布任何股票的波动率，也没有默认值 —— 填 0 不是「低风险」，那只是把固定情形套上一层机器。", "Annual real volatility of the single stock — your own figure. This model publishes no volatility for any stock and supplies no default. Zero is not a low-risk position; it is the flat case with extra machinery."],
+    "contributions.rsu_retained_drift_real": ["年化实际漂移。0 表示不表态：它让股票路径自己的中位数停在「打平」，只增加离散度。", "Annual real drift. Zero means no view: it leaves the median of the stock's own path at flat and only adds spread."],
+    "contributions.espp_enabled": ["开启一份 annual §423 ESPP。每行代表同一公历年授予并购买的一批股票；跨年度 offering 不在本合同内。普通收入只交所得税，不进入 FICA、社保积分、雇主匹配或工资缴款空间。", "Enable an annual §423 ESPP. Each row is one lot granted and purchased in the same calendar year; multi-year offerings are outside this contract. Ordinary income pays income tax but does not enter FICA, Social Security credits, employer match, or wage-based contribution room."],
+    "contributions.espp_disposition_mode": ["立即卖出按 disqualifying disposition 处理；qualifying hold 必须至少晚于最后一批两年，并在积累期内卖出。", "Immediate sale is a disqualifying disposition. A qualifying hold must sell at least two annual model steps after the last lot and still during accumulation."],
+    "contributions.espp_grant_fmv_schedule_nominal": ["每批股票在 grant date 的总公允价值，名义美元，来自 offering/Form 3922；每年最多 $25,000。不是 payroll deduction。", "Aggregate grant-date fair market value for each lot, nominal dollars, from the offering/Form 3922; capped at $25,000 per year. This is not the payroll deduction."],
+    "contributions.espp_exercise_fmv_schedule_nominal": ["同一批股票在购买/行权日的总公允价值，名义美元。它与 grant-date 列必须逐年一一对应。", "Aggregate exercise/purchase-date fair market value for the same lots, nominal dollars. It must align year by year with the grant-date list."],
+    "contributions.espp_discount_rate": ["计划折扣，最高 15%。购买价按计划是否有 lookback，取 exercise FMV 或 grant/exercise 较低者，再乘 (1−折扣)。", "Plan discount, at most 15%. Purchase price uses exercise FMV or the lesser of grant/exercise FMV when lookback applies, multiplied by (1−discount)."],
+    "contributions.espp_lookback_enabled": ["你的计划是否按 grant 与 exercise 两个价格中的较低者计算折扣。以 offering 文件为准。", "Whether your plan applies the discount to the lower of grant-date and exercise-date value. Use the offering document."],
+    "contributions.espp_qualifying_sale_age": ["所有批次一起卖出的年龄。必须满足 2 年 grant / 1 年 transfer 的较晚门槛；年度模型据此要求最后一批之后至少两步，且仍在积累期。", "Age when all lots are sold. It must clear the later of two years from grant and one year from transfer; at annual grain this means at least two steps after the final lot and still during accumulation."],
+    "contributions.espp_qualifying_sale_value_schedule_nominal": ["出售时每一批实际/情景价值，名义美元，逐批填写。模型不猜公司股价或波动率。亏损可填 0 或较低值，但资本损失抵扣/carryforward 不计。", "Nominal sale value for each lot at disposition. The model does not guess company-stock prices or volatility. A loss may be entered, but capital-loss deductions/carryforwards are not credited."],
+    "household.spouse_bonus_mode_pre": ["配偶晋升前的奖金沿用固定金额，或按配偶自己的基础工资百分比在你填的区间内逐年抽样。配偶晋升后改读其晋升合同里的奖金设置。", "Before the spouse's promotion, keep their bonus as a fixed amount or draw it each year as a share of their own base pay within your bounds. After promotion, the spouse promotion contract supplies the bonus."],
+    "household.spouse_bonus_pct_min_pre": ["配偶年度奖金占其基础工资的下限。来自配偶自己的薪酬方案，不是行业默认值。", "Lower bound for the spouse's annual bonus as a share of their base pay. From their own compensation plan; no industry default is supplied."],
+    "household.spouse_bonus_pct_max_pre": ["配偶年度奖金占其基础工资的上限。每年独立抽样；两个人的奖金现实里当然相关，模型不猜那个系数。", "Upper bound for the spouse's annual bonus as a share of their base pay. Drawn independently each year; two people's bonuses are of course correlated in reality, and the model guesses no coefficient."],
+    "spouse_layoff.enabled": ["给配偶自己的失业风险。坏年景（同一年市场回报低于阈值）会同时抬高两人的概率 —— 这一层是结构，不是猜的系数；但给定那一年之后，两人是否真的被裁是各自独立抽的。现实里同一个家庭的两次失业还会通过行业、雇主、地区进一步相关，那一层没有建模。", "Gives the spouse their own layoff risk. A bad year — the same year's market return below the threshold — lifts both people's probabilities; that layer is structure, not a guessed coefficient. Given that year, whether each is actually let go is drawn independently. Two layoffs in one household are further correlated in reality through industry, employer and region; that layer is not modelled."],
+    "spouse_layoff.p_annual": ["配偶在普通年份的年失业概率。你自己的判断，模型不提供行业默认值。", "The spouse's annual layoff probability in an ordinary year. Your own judgement; no industry default is supplied."],
+    "spouse_layoff.return_threshold": ["低到什么程度算配偶的「坏年景」，按当年市场实际回报。", "How bad a year has to be to count as a bad year for the spouse, measured on that year's actual market return."],
+    "spouse_layoff.bad_year_multiplier": ["坏年景里配偶失业概率乘几倍。与主申报人各自设定，可以不同 —— 行业不同，抗周期能力也不同。", "How much the spouse's layoff probability is multiplied in a bad year. Set separately from yours; different industries ride cycles differently."],
+    "spouse_layoff.p_cap": ["配偶年失业概率的上限，防止倍数把概率推到不合理的高度。", "A ceiling on the spouse's annual layoff probability, so the multiplier cannot push it somewhere unreasonable."],
+    "spouse_layoff.gap_months": ["配偶被裁后找到下一份工作的月数。收入按空窗占全年的比例缩减。", "Months the spouse spends finding the next job. Pay is reduced by the share of the year the gap covers."],
+    "spouse_layoff.gap_months_per_year_of_age": ["配偶每大一岁，找工作多花几个月。0 = 不随年龄变化。", "Extra months of search per year of the spouse's age. Zero means no age effect."],
+    "spouse_layoff.decay_from_age": ["配偶从几岁开始，找工作时间随年龄变长。", "The spouse's age from which the search starts taking longer."],
+    "spouse_layoff.max_gap_months": ["配偶空窗的月数上限（不超过 12）。", "Ceiling on the spouse's gap in months (never above 12)."],
+    "spouse_human_capital.enabled": ["给配偶自己的工资冲击，与你的那一套走各自独立的随机流 —— 打开一边不会改变另一边的抽样。现实里夫妻收入冲击当然相关（同一个经济、常在同一行业），模型刻意不猜那个系数。", "Gives the spouse wage shocks of their own, drawn on a separate random stream — switching one on does not change the other's draws. A couple's income shocks are of course correlated in reality (one economy, often one industry); the model deliberately does not guess that coefficient."],
+    "spouse_human_capital.permanent_sigma": ["配偶永久性工资冲击的年度标准差：它会累积，像升职没拿到或换了赛道那样留下痕迹。", "Standard deviation of the spouse's permanent annual wage shocks. These accumulate — a promotion missed or a track changed leaves a mark."],
+    "spouse_human_capital.transitory_sigma": ["配偶一次性工资冲击的年度标准差：只影响当年，不累积，比如某年奖金落空。", "Standard deviation of the spouse's transitory annual wage shocks. These hit one year only and do not accumulate — a bonus that did not land."],
+    "spouse_career_break.enabled": ["配偶自己的计划休假，与你的那一段是两个独立决定：可以各自发生、同时发生，或都不发生。", "The spouse's own planned break. It is independent of yours: either, both or neither can happen."],
+    "spouse_career_break.start_age": ["按配偶自己的年龄填，不是你的年龄。模型用「配偶年龄差」把它换算成模拟年份。", "Enter the spouse's own age, not yours. The model converts it using the spouse age offset."],
+    "spouse_career_break.years": ["配偶离开工作岗位的年数。", "How many years the spouse is away from work."],
+    "spouse_career_break.income_fraction": ["休假期间配偶还拿到的薪酬比例。0 = 完全无收入。基础工资与奖金同比例缩减。", "Share of the spouse's pay still earned during the break. 0 means no income at all. Base pay and bonus scale together."],
+    "spouse_career_break.return_wage_factor": ["配偶复工时相对于原本轨迹的薪资比例，此后永久生效 —— 这就是「休假会留下痕迹」的含义。", "The spouse's pay on return, relative to the path they were on, applied permanently from then on — that is what it means for a break to leave a mark."],
+    "spouse_promotion.enabled": ["给配偶建模一次独立晋升。默认关闭；打开后所有数字都来自配偶自己的薪酬方案，本 App 不复制你的晋升参数，也不提供行业默认。", "Model one promotion for the spouse on an independent stream. Off by default; every active figure must come from the spouse's own compensation plan. Your promotion inputs are not copied and no industry defaults are supplied."],
+    "spouse_promotion.timing_mode": ["晋升时间是固定年份、在一个整数年份区间内抽样，或明确永不发生。", "Choose a fixed promotion year, an integer-year window, or explicitly never."],
+    "spouse_promotion.timing_min": ["配偶晋升最早在积累期第几年发生。仅区间模式读取。", "Earliest accumulation year for the spouse's promotion. Read only in range mode."],
+    "spouse_promotion.timing_max": ["配偶晋升最晚在积累期第几年发生。区间内均匀抽一个整数年。", "Latest accumulation year for the spouse's promotion. One integer year is drawn uniformly within the window."],
+    "spouse_promotion.timing_fixed": ["配偶固定在积累期第几年晋升。仅固定模式读取。", "The fixed accumulation year in which the spouse is promoted. Read only in fixed mode."],
+    "spouse_promotion.base_salary_post": ["配偶晋升后的今日美元基础年薪。必须来自其 offer、薪酬带或你自己的情景，不是行业估计。", "The spouse's post-promotion base salary in today's dollars. Use their offer, compensation band or your own scenario; this is not an industry estimate."],
+    "spouse_promotion.base_growth_post": ["配偶晋升后的年薪增长率。晋升前先沿原有增长率走到晋升年，此后改用这一条。", "Annual salary growth after the spouse's promotion. The pre-promotion curve runs to the promotion year, then this rate takes over."],
+    "spouse_promotion.bonus_mode": ["配偶晋升后的奖金是固定工资百分比，或每年在你填的区间内独立抽样。", "After promotion, use either a fixed bonus share of spouse base pay or an independently redrawn annual share within your bounds."],
+    "spouse_promotion.bonus_pct_min": ["配偶晋升后奖金占基础工资的下限，仅区间模式读取。", "Lower bound for the spouse's post-promotion bonus as a share of base pay; read only in range mode."],
+    "spouse_promotion.bonus_pct_max": ["配偶晋升后奖金占基础工资的上限，仅区间模式读取。", "Upper bound for the spouse's post-promotion bonus as a share of base pay; read only in range mode."],
+    "spouse_promotion.bonus_pct_fixed": ["配偶晋升后固定奖金占基础工资的比例。", "Fixed post-promotion bonus as a share of the spouse's base pay."],
+    "spouse_promotion.bonus_resampled_each_year": ["区间模式下，勾选表示每年重抽；不勾表示晋升时抽一次并沿用。", "In range mode, redraw every year when checked; otherwise draw once at promotion and keep that share."],
+    "spouse_promotion.marginal_tax_post": ["只在税务方式为平率时读取：配偶晋升后的边际税率。真实税表模式会用家庭税表，不读这一项。", "Read only under the flat tax model: the spouse's post-promotion marginal rate. The schedule model uses the household tax schedule instead."],
+    "second_promotion.enabled": ["给主申报人建模第二次晋升。必须先启用第一次；默认关闭，不复制第一次的薪酬数字。", "Model a second promotion for the primary earner. The first must be enabled. Off by default; it does not copy the first promotion's compensation figures."],
+    "second_promotion.timing_mode": ["第二次晋升仍按积累期绝对年份填写；可固定、在整数年份区间抽样，或明确永不发生。", "The second promotion still uses an absolute accumulation year: fixed, drawn within an integer-year window, or explicitly never."],
+    "second_promotion.timing_min": ["第二次晋升最早年份。它必须严格晚于第一次晋升可能发生的最晚年份。", "Earliest year for the second promotion. It must be strictly later than the latest year in which the first promotion could occur."],
+    "second_promotion.timing_max": ["第二次晋升最晚年份；区间内均匀抽一个整数年。", "Latest year for the second promotion; one integer year is drawn uniformly within the window."],
+    "second_promotion.timing_fixed": ["第二次晋升固定发生的积累期年份，必须晚于第一次的整个时间窗口。", "Fixed accumulation year for the second promotion; it must follow the first promotion's entire timing window."],
+    "second_promotion.base_salary_post": ["第二次晋升后的今日美元基础年薪，来自你自己的薪酬情景，不是行业默认。", "Today's-dollar base salary after the second promotion, from your own compensation scenario rather than an industry default."],
+    "second_promotion.base_growth_post": ["第二次晋升后的年薪增长率；此前先走第一次晋升后的增长曲线。", "Annual salary growth after the second promotion; the first post-promotion curve runs until then."],
+    "second_promotion.bonus_mode": ["第二次晋升后的奖金使用固定工资百分比，或在你填的区间内抽样。", "After the second promotion, use a fixed bonus share of base pay or draw within your bounds."],
+    "second_promotion.bonus_pct_min": ["第二次晋升后奖金占基础工资的下限，仅区间模式读取。", "Lower bound for the post-second-promotion bonus share; read only in range mode."],
+    "second_promotion.bonus_pct_max": ["第二次晋升后奖金占基础工资的上限，仅区间模式读取。", "Upper bound for the post-second-promotion bonus share; read only in range mode."],
+    "second_promotion.bonus_pct_fixed": ["第二次晋升后的固定奖金占基础工资比例。", "Fixed bonus share of base pay after the second promotion."],
+    "second_promotion.bonus_resampled_each_year": ["区间模式下每年重抽；不勾则在第二次晋升时抽一次并沿用。", "In range mode, redraw each year; otherwise draw once at the second promotion and keep it."],
+    "second_promotion.marginal_tax_post": ["只在平率税务方式读取的第二次晋升后边际税率。", "Marginal rate after the second promotion, read only under the flat tax model."],
+    "spouse_second_promotion.enabled": ["给配偶建模第二次晋升。必须先启用配偶第一次晋升；默认关闭。", "Model a second spouse promotion. The spouse's first promotion must be enabled. Off by default."],
+    "spouse_second_promotion.timing_mode": ["配偶第二次晋升仍按积累期绝对年份填写。", "The spouse's second promotion also uses an absolute accumulation year."],
+    "spouse_second_promotion.timing_min": ["配偶第二次晋升最早年份，必须严格晚于配偶第一次晋升可能的最晚年份。", "Earliest spouse second-promotion year; it must be strictly later than the spouse's latest possible first-promotion year."],
+    "spouse_second_promotion.timing_max": ["配偶第二次晋升最晚年份；区间内均匀抽一个整数年。", "Latest spouse second-promotion year; one integer year is drawn uniformly within the window."],
+    "spouse_second_promotion.timing_fixed": ["配偶第二次晋升固定发生的积累期年份。", "Fixed accumulation year for the spouse's second promotion."],
+    "spouse_second_promotion.base_salary_post": ["配偶第二次晋升后的今日美元基础年薪，必须来自其薪酬事实或你的情景。", "Today's-dollar base salary after the spouse's second promotion, supplied from their compensation facts or your scenario."],
+    "spouse_second_promotion.base_growth_post": ["配偶第二次晋升后的年薪增长率；此前走配偶第一次晋升后的曲线。", "Annual salary growth after the spouse's second promotion; the first post-promotion curve runs until then."],
+    "spouse_second_promotion.bonus_mode": ["配偶第二次晋升后的奖金采用固定比例或用户区间。", "Use a fixed share or user-supplied range for the spouse's bonus after the second promotion."],
+    "spouse_second_promotion.bonus_pct_min": ["配偶第二次晋升后奖金比例下限，仅区间模式读取。", "Lower bonus-share bound after the spouse's second promotion; range mode only."],
+    "spouse_second_promotion.bonus_pct_max": ["配偶第二次晋升后奖金比例上限，仅区间模式读取。", "Upper bonus-share bound after the spouse's second promotion; range mode only."],
+    "spouse_second_promotion.bonus_pct_fixed": ["配偶第二次晋升后的固定奖金比例。", "Fixed bonus share after the spouse's second promotion."],
+    "spouse_second_promotion.bonus_resampled_each_year": ["区间奖金每年重抽；不勾则第二次晋升时抽一次并沿用。", "Redraw the range bonus annually; otherwise draw once at the second promotion and keep it."],
+    "spouse_second_promotion.marginal_tax_post": ["只在平率税务方式读取的配偶第二次晋升后边际税率。", "Spouse marginal rate after the second promotion, read only under the flat tax model."],
     "contributions.ot_income_pre": ["税前加班/额外收入。没有就填 0。", "Pre-tax overtime/extra income. 0 if none."],
     "contributions.salary_growth_pre": ["常规年涨薪率（晋升单列在高级步）。例：3.5%。", "Routine annual raise rate (promotions are separate, in Advanced). e.g. 3.5%."],
     "contributions.pretax_401k_limit_y1": ["今年计划缴入 401(k) 的税前额，常按 IRS 上限。", "Planned pre-tax 401(k) contribution this year (often the IRS limit)."],
     "contributions.roth_ira_limit_y1": ["今年计划缴入 Roth IRA 的额度。", "Planned Roth IRA contribution this year."],
-    "contributions.hsa_limit_y1": ["今年计划缴入 HSA 的额度。2026 年 $4,400 是 self-only 参考值；本模型未建模 family HSA 上限。", "Planned HSA contribution this year. The 2026 $4,400 reference is self-only; this model does not model a family HSA cap."],
+    "contributions.hsa_limit_y1": ["今年计划缴入 HSA 的额度。默认 0；非零时必须填写下面的 HDHP 与资格事实。", "Planned HSA contribution this year. Default 0; a non-zero amount requires the HDHP and eligibility facts below."],
+    "contributions.hsa_coverage_tier": ["选择 self-only 或 family；none 不能缴 HSA。", "Choose self-only or family coverage; none cannot fund an HSA."],
+    "contributions.hsa_deductible_y1": ["保单第一年的年度 deductible，用来核对 2026 HDHP 下限。", "Policy deductible in year one, checked against the 2026 HDHP minimum."],
+    "contributions.hsa_out_of_pocket_max_y1": ["保单第一年的年度自付上限，用来核对 2026 HDHP 上限。", "Policy out-of-pocket maximum in year one, checked against the 2026 HDHP ceiling."],
+    "contributions.hsa_disqualifying_other_coverage": ["有会取消 HSA 资格的其他保障就勾选；勾选时不能缴款。", "Check if you have other disqualifying coverage; contributions are then refused."],
+    "contributions.hsa_medicare_enrolled": ["已经加入 Medicare 时不能再缴 HSA。", "You cannot contribute once enrolled in Medicare."],
+    "contributions.hsa_claimed_as_dependent": ["可被他人在税表上申报为 dependent 时不能缴 HSA。", "You cannot contribute if another taxpayer can claim you as a dependent."],
+    "contributions.hsa_eligible_through_age": ["你预计保持 HSA 资格到几岁（含该岁）；之后自动停止缴款。", "Last age through which you expect to remain HSA-eligible; contributions stop afterward."],
+    "contributions.childcare_schedule_real": ["从积累第 1 年开始逐年填写托育/育儿净新增成本，今日美元、逗号分隔；列表结束后为 0，不会抬高退休支出目标。", "Year-by-year net-new childcare costs from accumulation year 1, in today's dollars, comma-separated. After the list ends the cost is zero and does not raise retirement spending."],
+    "contributions.commuting_schedule_real": ["从积累第 1 年开始逐年填写通勤净新增成本，今日美元、逗号分隔；远程办公或结束通勤后填 0/结束列表。", "Year-by-year net-new commuting costs from accumulation year 1, in today's dollars, comma-separated. Use zero or end the list once the commute ends."],
+    "contributions.workplace_plan_type": ["普通计划沿用 401(k)/403(b) 的递延与补缴上限；SIMPLE 使用自己较低的基础限额和 50+、60–63 补缴额。选择 SIMPLE 不只是改标签。", "Standard uses the 401(k)/403(b) deferral and catch-up limits. SIMPLE uses its own lower base limit and its own age-50 and age-60–63 catch-ups; this is not a label-only choice."],
+    "contributions.simple_higher_limit": ["仅当你的 SIMPLE 计划文件确认适用较高基础递延限额时开启。模型不会从工资或公司规模猜。", "Enable only when your SIMPLE plan documents confirm the higher base deferral limit applies. The model does not infer it from salary or employer size."],
+    "contributions.catchup_403b_15yr_enabled": ["仅当你的 403(b) 计划允许、且你已满足同一合格雇主 15 年服务规则时开启。", "Enable only when your 403(b) plan permits it and you satisfy the 15-years-of-service rule with the same qualified employer."],
+    "contributions.catchup_403b_15yr_schedule_nominal": ["从积累第 1 年起逐年填写计划管理员或 IRS worksheet 算出的额外可用额度，名义美元、逗号分隔。模型不会从工资路径猜历史递延或服务年限；每年最多 $3,000，合计最多 $15,000。", "Starting with accumulation year 1, enter the extra room calculated by your plan administrator or IRS worksheet, in nominal dollars, comma-separated. The model does not infer prior deferrals or service from wages; each year is capped at $3,000 and the schedule at $15,000 lifetime."],
+    "contributions.catchup_403b_15yr_prior_used_nominal": ["本计划开始前你已经用过的 403(b) 15 年服务补缴终身额度。必须按计划记录填写；空白代表未知，不会当作 0。", "How much of the 403(b) 15-year lifetime catch-up you used before this plan starts. Enter it from plan records; blank means unknown and is not treated as zero."],
     "contributions.match_rate": ["雇主匹配比例（占匹配基数）。例：5%–6%。", "Employer match rate (of the match base). e.g. 5–6%."],
     "contributions.match_excludes_bonus": ["匹配基数是否不含奖金（多数公司如此）。", "Whether the match base excludes bonus (most companies do)."],
     "contributions.annual_spending_now": ["在职期间每年实际生活成本（今日$）——工资扣掉税、退休账户缴款和这笔开销后，剩余才进应税账户。留空＝与退休支出相同。这是决定储蓄率的关键数字。", "Your actual annual living cost while working (today's $) — salary minus taxes, retributions and THIS is what lands in taxable. Blank = same as retirement spending. This drives your savings rate."],
+    "student_debt.enabled": ["只建模一笔按固定名义月供偿还的学生贷款。开启后，未偿余额会提高 FIRE 门槛；达到 FIRE 后不会假装一次还清，而会继续按合同月供直到计划余额归零。关闭时结果逐位不变。", "Models one student loan with a fixed nominal monthly payment. When on, the outstanding balance raises the FIRE threshold. Reaching FIRE does not pretend the loan is paid off: scheduled payments continue until the modeled balance reaches zero. Off is bit-identical."],
+    "student_debt.balance": ["贷款账单上的当前未偿本金。它是 FIRE 门槛之外需要额外覆盖的负债，不会从投资账户里预先扣掉。", "Current outstanding principal from the loan statement. It is an additional liability at the FIRE threshold; it is not silently subtracted from the investment accounts."],
+    "student_debt.annual_rate": ["合同上的名义年利率。请填百分比；月度摊销按年利率除以 12。月供低于当月利息也允许，余额会如实增长。", "Nominal annual contract rate. Enter it as a percentage; monthly amortization uses the annual rate divided by 12. A payment below monthly interest is allowed and the balance will truthfully grow."],
+    "student_debt.monthly_payment": ["当前固定名义月供，不随通胀增长。若你用「填生活开销」模式，当前年生活开销必须已经包含这笔月供；引擎会用真实摊销表替换那条内含月供，避免重复计算，结清后释放的现金进入储蓄。", "Current fixed nominal monthly payment; it does not rise with inflation. In 'state my spending' mode, current annual spending must already include it. The engine replaces that embedded payment with the actual amortization schedule so it is not double-counted, and freed cash becomes saving after payoff."],
+    "lifestyle_creep.mode": ["积累期发生一次永久的真实生活开销上调。关闭时不创建随机流、结果逐位不变；固定模式使用你填的幅度，截断正态会围绕该幅度抽样并限制在 0 到上限之间。它同时抬高工作预算与 FIRE 支出目标，但不会放大学生贷款的固定名义月供。默认值继承旧引擎，没有外部校准。", "One permanent real-spending step during accumulation. Off creates no random stream and is bit-identical; fixed uses your stated magnitude, while clipped normal samples around it and bounds the result between zero and the cap. It raises both the working budget and FIRE spending target, but does not inflate a fixed nominal student-loan payment. Defaults are inherited from the old engine and are not externally calibrated."],
+    "lifestyle_creep.magnitude": ["固定模式的上调幅度，也是截断正态的中心。15% 是未校准的出厂假设，不是预测。", "The step in fixed mode and the center of clipped-normal mode. The 15% default is an uncalibrated shipped assumption, not a prediction."],
+    "lifestyle_creep.sd": ["只在截断正态模式使用：上调幅度的标准差。", "Used only in clipped-normal mode: the standard deviation of the spending step."],
+    "lifestyle_creep.cap": ["截断正态允许的最大上调；固定模式的幅度也不能高于它。", "Maximum step allowed in clipped-normal mode; fixed magnitude may not exceed it either."],
+    "lifestyle_creep.year_lo": ["事件最早发生在第几个工作年。第 1 年被拒绝，因为侧边栏的首年储蓄估算发生在抽样之前。", "Earliest working year for the event. Year 1 is refused because the sidebar's first-year saving estimate is computed before stochastic path sampling."],
+    "lifestyle_creep.year_hi": ["事件最晚发生在第几个工作年；必须落在积累期内。", "Latest working year for the event; it must remain inside accumulation."],
     "income_streams.pension_enabled": ["联邦/州雇员、军人、教师等的固定养老金或商业年金。请输入今日美元、税后可花金额；退休后先覆盖年度开销，剩余才进入应税组合。", "Defined-benefit pension or annuity (federal/state/military/teacher). Enter today's-dollar, after-tax spendable cash; in retirement it covers annual spending first and only the surplus enters taxable."],
+    "income_streams.pension_amount_mode": ["直接填写计划管理员给出的税后年额，或用传统 DB 公式计算：工龄 × 年度 accrual rate × final-average salary。", "Enter the administrator's after-tax annual amount directly, or calculate a traditional DB benefit as service years × annual accrual rate × final-average salary."],
+    "income_streams.pension_db_service_years": ["用于该养老金公式的计入工龄；请按计划记录填写，可含小数。模型不会从职业路径猜服务年限。", "Credited service used by this pension formula, from plan records; fractional years are allowed. The model does not infer service from your career path."],
+    "income_streams.pension_db_accrual_rate": ["计划文件规定的每服务年 accrual rate，例如 1.5%。不是投资回报率。", "The plan's accrual rate for each service year, such as 1.5%. This is not an investment return."],
+    "income_streams.pension_db_final_average_salary_real": ["计划公式使用的 final-average salary，按今日美元、税后可花口径填写。若管理员报价已含提前退休或遗属选择，优先用直接年额模式。", "Final-average salary used by the plan formula, in today's dollars on the app's spendable-after-tax basis. If an administrator quote already includes early-retirement or survivor elections, prefer the direct-amount mode."],
     "income_streams.pension_cola": ["有 COLA＝金额随通胀走（军人/联邦多数有）；无 COLA＝名义固定，购买力逐年缩水（多数私营年金）。", "With COLA = keeps pace with inflation (most federal/military); without = nominally fixed, so purchasing power erodes (most private annuities)."],
     "income_streams.rental_enabled": ["出租房的税后净现金流（租金 − 按揭/维护/空置/税）。房产本体价值请放在「其他资产」。", "After-tax net cash flow from rentals (rent − mortgage/upkeep/vacancy/tax). Put the property value itself under Other Assets."],
     "income_streams.parttime_enabled": ["Barista/Coast FIRE：只在实际退休后开始，起点是「录入的最早年龄」与「实际 FIRE 后第一年」中较晚者，并准确持续所填年数。", "Barista/Coast FIRE: starts only after actual retirement, at the later of the entered earliest age and the first year after actual FIRE, for exactly the entered number of years."],
@@ -392,12 +526,18 @@
     "income_streams.rental_owner": ["收入归属只决定成员死亡后是否继续；所有起止年龄始终按你的年龄轴。未选择归属或旧计划显示「未确认归属」并沿用末生存者语义，不代表共同所有；单人模式下所有有效选择都按本人。", "Ownership only controls whether cash continues after a member dies; every age remains on your age timeline. An unselected owner or old plan shows Unconfirmed ownership and retains last-survivor behavior, which does not mean shared ownership; in single-person mode every valid choice behaves as you."],
     "income_streams.parttime_owner": ["收入归属只决定成员死亡后是否继续；所有起止年龄始终按你的年龄轴。未选择归属或旧计划显示「未确认归属」并沿用末生存者语义，不代表共同所有；单人模式下所有有效选择都按本人。", "Ownership only controls whether cash continues after a member dies; every age remains on your age timeline. An unselected owner or old plan shows Unconfirmed ownership and retains last-survivor behavior, which does not mean shared ownership; in single-person mode every valid choice behaves as you."],
     "income_streams.equity_owner": ["收入归属只决定成员死亡后是否继续；所有起止年龄始终按你的年龄轴。未选择归属或旧计划显示「未确认归属」并沿用末生存者语义，不代表共同所有；单人模式下所有有效选择都按本人。", "Ownership only controls whether cash continues after a member dies; every age remains on your age timeline. An unselected owner or old plan shows Unconfirmed ownership and retains last-survivor behavior, which does not mean shared ownership; in single-person mode every valid choice behaves as you."],
-    "contributions.marginal_tax_pre": ["你目前的边际税率（联邦+州合计估）。例：24%–32%。", "Your current marginal tax rate (fed+state est.). e.g. 24–32%."],
+    "contributions.employer_nonelective_rate": ["雇主<b>不看你缴多少</b>也会给的那一份，按薪酬的百分比。<br>它和上面的「雇主匹配率」是两回事：匹配要你先缴，这一份不用。SEP-IRA、SIMPLE 的 2% 非选择性缴款、profit-sharing、以及 Solo 401(k) 的雇主那一半，<b>全都是这个形状</b> —— 在此之前本模型一份也表达不了，因为雇主的钱被写死成「不超过你自己缴的」。<br>大多数计划没有这一项，默认 0。<b>填多少要看你的计划文件</b>，没有「典型值」。<br><b>自雇的话有两点不同，都是法条</b>：① 你填 25%，实际算出来是净收入的 <b>20%</b>（`r/(1+r)`）—— 因为这笔钱本身要从它所占百分比的那个数里扣掉；② 这笔钱<b>是你自己的</b>，会和你自己的递延抢同一批可支配的钱，不是从外面掉下来的。<br>合计受 <b>415(c)</b> 上限约束（2026 年 $72,000，或你的薪酬，取小），补缴额不计入。",
+                                                "Employer money that arrives <b>whether or not you defer</b>, as a share of pay.<br>Different from the match rate above: a match requires you to contribute first, this does not. A SEP-IRA, a SIMPLE's 2% non-elective, profit-sharing, and the employer half of a Solo 401(k) are <b>all this shape</b> -- and none of them could be expressed before, because employer money was hardcoded as no more than you put in.<br>Most plans have none, so the default is 0. <b>What to enter is in your plan document</b>; there is no typical value.<br><b>Two things differ if you are self-employed, and both are statute</b>: (1) entering 25% gives <b>20%</b> of net earnings (r/(1+r)), because the contribution comes out of the very figure it is a percentage of; (2) the money is <b>yours</b> -- it competes for the same affordable dollars as your own deferral rather than arriving from outside.<br>The total is capped by <b>415(c)</b> ($72,000 for 2026, or your compensation if lower). Catch-up contributions sit outside it."],
+    "contributions.employment_type": ["你是拿 W-2 的雇员，还是自雇 / 1099？<br>拿 W-2 时雇主替你付掉一半工资税，你只看到自己那一半（社保 6.2% + 医保 1.45%）。<b>自雇的人两半都要自己付</b>（12.4% + 2.9%），这叫自雇税（SECA）。把自雇的人当雇员算，等于每年多给他一笔不存在的钱 —— 年利润 $45,000 时约 $2,916，$300,000 时约 $14,917。<br>算法按 IRS 2026 年的口径：先取净利润的 <b>92.35%</b> 作税基，社保那部分到 $184,500 封顶、医保那部分不封顶，然后<b>把自雇税的一半在算所得税前扣掉</b>。<br><b>它还不能给你雇主那一份</b>：Solo 401(k) 的雇主缴款和 SEP 都<b>不是</b>匹配（它们不看你自己缴了多少），本模型暂时表达不了。所以选了自雇之后，雇主匹配率必须填 0 —— 与其假装那笔钱是匹配、放错地方，不如先明说没有。",
+                                      "Are you on a W-2, or self-employed / 1099?<br>On a W-2 your employer pays half your payroll tax and you only ever see your half (6.2% Social Security + 1.45% Medicare). <b>Self-employed people owe both halves</b> (12.4% + 2.9%) -- that is self-employment tax, SECA. Modelling a 1099 earner as an employee hands them money they do not have: about $2,916 a year at $45,000 of net profit, and $14,917 at $300,000.<br>Computed the way the IRS does it for 2026: the base is <b>92.35% of net profit</b>, the Social Security half stops at $184,500 and the Medicare half does not, and <b>half the SE tax comes off before income tax</b>.<br><b>It does not yet give you the employer side</b>: a Solo 401(k) employer contribution and a SEP are <b>not</b> matches -- they do not depend on what you defer -- and this model cannot express them yet. So with self-employed selected the employer match rate must be 0. Better to say the money is missing than to put it in the wrong place."],
+    "contributions.tax_model": ["工作年份怎么交税。<br><b>按真实税表（默认）</b>：用随本 App 发布的 2026 联邦税率表 + FICA（社保 6.2% 到 $184,500 封顶、医保 1.45%、超 $200,000 再加 0.9%），<b>税率跟着你的收入走</b>。<br><b>我自己填一个平率</b>：恢复以前的做法 —— 不管收入多少都用同一个数。<br>以前那个 24% 不是随手写的，但它是<b>调在年收入 $150,000 上的</b>：在那个点上跟真实税负只差 $373/年，离开那个点两边都错 —— $45,000 处一年多算 $4,138 的税，$500,000 处<b>少算 $36,344</b>。少算的那一半更危险。<br><b>什么时候该选平率</b>：你手上有自己报税表算出来的实际税负比例。那是事实，比任何税表都准。<br><b>没算州税</b>：这两种方式都只有联邦 + FICA。退休阶段可以设州税，工作阶段还不能。",
+                                  "How the working years are taxed.<br><b>Real tax schedule (default)</b>: the 2026 federal brackets plus FICA shipped with this app (Social Security 6.2% up to $184,500, Medicare 1.45%, another 0.9% above $200,000), so <b>the rate follows your income</b>.<br><b>One flat rate I state myself</b>: the old behaviour, the same number at every income.<br>That old 24% was not careless, but it was <b>calibrated to $150,000 of gross</b>: within $373/yr of the real bill there, and wrong in both directions away from it -- $4,138/yr too much at $45,000, and <b>$36,344/yr too little</b> at $500,000. The optimistic half is the dangerous one.<br><b>When to pick flat</b>: you have your real effective rate off an actual return. That is a fact, and it beats any table.<br><b>No state tax</b>: both options are federal + FICA only. The retirement phase can model a state; the working years cannot yet."],
+    "contributions.marginal_tax_pre": ["只在上面选了「我自己填一个平率」时才生效。你目前的边际税率（联邦+州合计估）。例：24%–32%。", "Read only when the tax model above is set to flat. Your current marginal tax rate (fed+state est.). e.g. 24–32%."],
     "returns.return_distribution": ["股票收益的抽样分布。Student-t 尾部更厚（更真实的极端），正态更平滑。", "Equity-return distribution. Student-t = fatter tails (realistic extremes); Normal = smoother."],
     "returns.inflation_mu": ["收益模型内部的通胀均值，一般与上面的通胀一致。", "Mean inflation inside the return model; usually matches the inflation above."],
     "estate.exemption_real": ["选填。填一个数字，结论页就会告诉你有多少比例的路径终值超过它。这个数字由你自己填——它由立法决定、会变，而本 App 不联网、不携带税表，内置一个数字只会悄悄过期。留空＝不显示这一行。本 App 永远不建模遗产税：不做豁免额指数化、不做配偶可携带、不做州遗产税/继承税、不做信托或赠与安排。它只数路径，不算税。", "Optional. Enter a number and the conclusions page will tell you what fraction of paths end above it. This number is YOURS to enter: it is set by legislation, it moves, and this app makes no network requests and ships no tax tables — a bundled figure would age silently into a wrong one. Blank = the line is not shown. This app will NEVER model estate tax: no exemption indexing, no portability, no state estate or inheritance tax, no trusts or gifting. It counts paths; it does not compute a tax."],
     "social_security.enabled": ["是否把美国社保计入退休收入。", "Whether to include US Social Security as retirement income."],
-    "social_security.pia_monthly_y0": ["你在 FRA 领取时的估计月社保（PIA），今日美元。FRA 67 与 70%/100%/124% 示意适用于 1960 年及以后出生 cohort；较早 cohort 可能不同。可在 ssa.gov 查。", "Estimated monthly SS at FRA (your PIA), today's $. FRA 67 and the 70%/100%/124% illustration apply to the 1960-and-later birth cohort; earlier cohorts may differ. Check ssa.gov."],
+    "social_security.pia_monthly_y0": ["你在 FRA 领取时的估计月社保（PIA），今日美元。导入 SSA 记录后，模拟收入路径会动态重算它；手动改这个数字会清除导入的 35 年基础并切回常数模式。FRA 67 与 70%/100%/124% 示意适用于 1960 年及以后出生 cohort；较早 cohort 可能不同。", "Estimated monthly SS at FRA (your PIA), today's $. After an SSA import, the simulated earnings path recalculates it; editing this number clears the imported 35-year basis and switches back to constant mode. The FRA 67 and 70%/100%/124% illustration applies to the 1960-and-later cohort; earlier cohorts can differ."],
     "social_security.claim_age": ["开始领社保的年龄（62–70）。晚领每月更多。", "Age you start claiming SS (62–70). Later = higher monthly."],
     "medical.premium_aca": ["退休后到 65 岁前的自购医保未补贴全价：年度、家庭合计、今日美元。可用 healthcare.gov/see-plans/ 查询你当前地点与年龄的报价；本 App 不联网获取或核验。", "Unsubsidized full-price self-bought coverage before 65: annual, household total, today's dollars. You can quote your current location and age at healthcare.gov/see-plans/; this App does not fetch or verify it."],
     "medical.premium_aca_age_end": ["可选，且只在「逐年医疗轨迹」开启时有效：同一个县、同一个计划、同一覆盖家庭，把年龄改成 Medicare 年龄前一年之后的年度家庭全价报价（今日美元）。它只用来提供年龄效应：两个报价之比是纯年龄倍数，与通胀无关，App 按每年固定百分比在两个年龄之间取值，再与 CPI 和「保费超额通胀」相乘，不重复计入。留空 = 你没报过第二个年龄的价，属于「未测量」，保费维持单锚点行为；App 不会替你猜曲线，也不会把留空写成 $0。两个报价年龄之外不外推，按最近的报价持平。填了却关掉逐年轨迹会被明确拒绝，而不是被悄悄忽略。", "Optional, and only in effect when the Annual medical trajectory is on: the annual household full-price quote for the same county, plan and covered household, re-priced at the year before your Medicare age (today's dollars). Its only job is the AGE effect — the ratio of the two quotes is a pure age multiple with no inflation in it, and the App moves between the two ages at one fixed percentage a year before multiplying by CPI and the premium inflation spread, so nothing is double-counted. Blank means you never priced a second age: that is unmeasured, the premium keeps its single-anchor behaviour, and the App neither guesses a curve nor writes $0. Outside the two quoted ages it holds flat rather than extrapolating. Filling it in while the trajectory is off is refused by name rather than silently ignored."],
@@ -421,10 +561,15 @@
     "china_healthcare.cost_senior_real": ["目的地 65 岁以上的自费医疗年额，今日美元。", "Destination annual healthcare, 65+, today's $."],
     "ss_nra.haircut_fraction": ["海外领美国社保的折减比例，多数国家为 0。", "Haircut on US SS while abroad; 0 for most countries."],
     "tax_cn.withdrawal_tax_traditional": ["目的地对税前账户提取的有效税率，免税地填 0。", "Destination effective tax on pretax withdrawals; 0 for tax-free locales."],
-    "layoff.enabled": ["建模'某年失业几个月'：该年所有缴款按比例损失。坏市场年份概率放大（裁员与熊市相关）——这是积累期最被低估的风险。", "Models 'laid off for some months in a year': that year's contributions shrink proportionally. Probability multiplies in bad market years (layoffs correlate with bear markets) — the most underrated accumulation risk."],
+    "layoff.enabled": ["建模'某年失业几个月'：先按实际空窗缩主申报人工资，再从同一份收入重算税、生活费、缴款和社保收入记录；配偶工资不缩。坏市场年份概率放大（裁员与熊市相关）。", "Models 'laid off for some months in a year': primary pay is reduced for the actual gap first, then tax, living costs, saving and the Social Security earnings record are recomputed from that same income; spouse pay is not reduced. Probability multiplies in bad market years (layoffs correlate with bear markets)."],
     "layoff.p_annual": ["正常年份的失业概率。美国白领长期均值约 2–4%。", "Layoff probability in a normal year. US white-collar long-run ≈2–4%."],
     "layoff.return_threshold": ["多低的股市年算「坏年」。当年收益 ≤ 这个值时，失业概率会被放大（默认 3 倍，并有上限），因为裁员和熊市同时发生。", "How bad a market year counts as a 'bad year'. When the year's return is at or below this, layoff probability is multiplied (3x by default, capped) — layoffs and bear markets arrive together."],
-    "layoff.gap_months": ["失业后空窗多少个月。该年的全部缴款按 空窗月数/12 的比例损失（不只是工资部分）。", "Months out of work after a layoff. That year loses this fraction (months/12) of ALL contributions, not just the salary portion."],
+    "layoff.gap_months": ["失业后空窗多少个月。模型先按 1−空窗月数/12 缩主申报人工资，再重算当年税和能存下的钱；不是把算完的账户缴款事后乘比例。", "Months out of work after a layoff. The model first scales primary pay by 1 minus gap-months/12, then recomputes that year's tax and affordable saving; it does not prorate an already-computed contribution stack."],
+    "layoff.medical_premium_monthly_real": ["空窗期间每月净新增的家庭医保保费，今日美元。只填相对当前生活费里已有保费多出来的部分；引擎不会替你选择配偶计划、COBRA 或 Marketplace，也不算积累期 ACA 补贴。按该路径实际空窗月数收费。储蓄率模式仍以你填的比例为准，这笔钱占用残差生活费；默认生活费模式下它会先压低可负担储蓄。", "Net NEW monthly household health premium during the gap, in today's dollars. Enter only the amount above premiums already inside current living expenses. The engine does not choose a spouse plan, COBRA or Marketplace coverage and does not compute an accumulation-phase ACA subsidy. It is charged for the path's actual gap months. Savings-rate mode keeps your stated rate authoritative and absorbs this inside residual spending; in the default spending mode it reduces affordable saving first."],
+    "disability.enabled": ["按 SSA 2026 Trustees Report 的年龄×性别 disabled-worker award 发生率做压力测试。只适合已经具备 SSDI insured status 的主申报人；这不是一般疾病或短期伤残发生率。命中后，本首刀保守地假设主收入到计划退休前不恢复。", "Stress-test an SSA disabled-worker award using the age-by-sex incidence in the 2026 Trustees Report. Use only when the primary worker has SSDI insured status; this is not incidence for illness or short-term disability generally. After an award, this first slice conservatively assumes primary earnings do not recover before planned retirement."],
+    "disability.ssdi_monthly_real": ["你自己的 SSDI 月度 award 或 SSA 估算，按今日美元填写，并填扣税后真正可花的金额。引擎不会拿退休 PIA 猜残障 PIA。", "Your own monthly SSDI award or SSA estimate, in today's dollars and AFTER tax as spendable cash. The engine does not infer disability PIA from the retirement PIA."],
+    "disability.ltd_monthly_real": ["雇主 LTD 每月实际可花金额：已扣税，也已扣保单对 SSDI 的 offset。保单没有这项就填 0。", "Monthly spendable employer-LTD cash AFTER tax and AFTER the policy's SSDI offset. Enter 0 if the policy pays none."],
+    "disability.medical_premium_annual_real": ["伤残后失去在职覆盖而新增的年度家庭医保保费，今日美元。只在积累期伤残状态收取；不要把原本已在生活费里的保费再填一遍。", "Extra annual household health premium after losing working coverage, in today's dollars. Charged only while disabled during accumulation; do not re-enter premiums already inside living expenses."],
     "housing.enabled": ["把住房从「开销里的一个数字」升级为逐年现金流：租金、按揭、房产税、维护、房价升值分别建模。关闭 = 住房成本仍留在年开销里。", "Upgrades housing from one number inside expenses to modelled yearly cash flows: rent, mortgage, property tax, maintenance and appreciation each separately. Off = housing stays lumped in annual expenses."],
     "housing.replace_annual": ["你的年开销里已经包含多少住房成本。这笔钱会被退回，再换成下面这套逐年住房现金流 —— 填 0 会让住房被算两次。", "How much housing cost your annual expenses ALREADY contain. It is refunded and replaced by the modelled cash flows below — leaving it at 0 double-counts housing."],
     "housing.mode": ["长期租房，还是先租、到某个年龄买房。买房会在购房年产生首付支出并开始按揭。", "Rent for good, or rent until a chosen age and then buy. Buying creates a down-payment outflow in the purchase year and starts a mortgage."],
@@ -441,7 +586,7 @@
     "housing.refi_enabled": ["计划中途再融资。本模型只改利率并按剩余年限重新摊销，不建模手续费与结清成本。", "Plan a refinance. The model changes the rate and re-amortizes over the remaining term; it does not model fees or closing costs."],
     "housing.refi_age": ["再融资发生的年龄。当年年末按新利率重算月供。", "The age the refinance happens. The payment is recalculated at the new rate from the end of that year."],
     "housing.refi_rate": ["再融资后的名义年利率。", "Nominal annual rate after refinancing."],
-    "income_streams.pension_annual_real": ["今日美元的年领取额，税后可花金额。退休后先用来覆盖当年开销，有剩余才进入应税组合。", "Yearly amount in today's dollars, after tax and spendable. In retirement it covers that year's spending first; only the surplus enters the taxable portfolio."],
+    "income_streams.pension_annual_real": ["直接年额模式使用：今日美元、税后可花。退休后先覆盖当年开销，有剩余才进入应税组合。", "Used in direct-amount mode: today's dollars, after tax and spendable. In retirement it covers that year's spending first; only the surplus enters the taxable portfolio."],
     "income_streams.pension_start_age": ["开始领取的年龄。在此之前这笔收入不存在，不会提前帮你撑住提取。", "The age payments begin. Before it the income does not exist and cannot cushion withdrawals."],
     "income_streams.rental_annual_net_real": ["今日美元的净租金：已扣掉空置、维修、物业与税。填毛租金会高估这条现金流。", "NET rent in today's dollars — after vacancy, repairs, management and tax. Entering gross rent overstates this stream."],
     "income_streams.rental_start_age": ["这份租金收入从哪一年开始计入。", "The age this rental income starts counting."],
@@ -458,11 +603,23 @@
     "household.spouse_salary_growth_pre": ["配偶薪资的名义年增速。只影响积累期，退休后不再使用。", "Nominal annual growth of the spouse's salary. It affects accumulation only and is unused after retirement."],
     "household.spouse_pretax_401k_limit_y1": ["配偶第一年实际缴入 401k 的金额，不是法定上限。之后每年按 IRS 的指数化幅度增长。", "The amount the spouse ACTUALLY contributes to a 401k in year one — not the statutory cap. It grows each year with IRS indexation."],
     "household.spouse_roth_ira_limit_y1": ["配偶第一年实际缴入 Roth IRA 的金额，同样按 IRS 指数化逐年增长。", "The amount the spouse actually contributes to a Roth IRA in year one, likewise growing with IRS indexation."],
-    "household.spouse_hsa_limit_y1": ["配偶第一年实际缴入 HSA 的金额，同样按 IRS 指数化逐年增长。", "The amount the spouse actually contributes to an HSA in year one, likewise growing with IRS indexation."],
-    "household.spouse_marginal_tax_pre": ["配偶积累期收入的边际税率，用于估算他/她税后能存下多少。", "Marginal tax rate on the spouse's income during accumulation, used to estimate how much they can actually save."],
+    "household.spouse_hsa_limit_y1": ["配偶第一年实际缴入 HSA 的金额；非零时必须独立填写资格事实。", "The spouse's year-one HSA contribution; non-zero requires their own eligibility facts."],
+    "household.spouse_hsa_coverage_tier": ["配偶自己的 HDHP coverage tier。", "The spouse's own HDHP coverage tier."],
+    "household.spouse_hsa_deductible_y1": ["配偶保单第一年 deductible。", "Spouse policy deductible in year one."],
+    "household.spouse_hsa_out_of_pocket_max_y1": ["配偶保单第一年自付上限。", "Spouse policy out-of-pocket maximum in year one."],
+    "household.spouse_hsa_disqualifying_other_coverage": ["配偶是否有取消资格的其他保障。", "Whether the spouse has disqualifying other coverage."],
+    "household.spouse_hsa_medicare_enrolled": ["配偶是否已加入 Medicare。", "Whether the spouse is enrolled in Medicare."],
+    "household.spouse_hsa_claimed_as_dependent": ["配偶是否可被他人申报为 dependent。", "Whether another taxpayer can claim the spouse as a dependent."],
+    "household.spouse_hsa_eligible_through_age": ["配偶保持 HSA 资格的最后年龄（含）。", "Spouse's last HSA-eligible age, inclusive."],
+    "household.spouse_workplace_plan_type": ["配偶的计划独立选择；不会继承你的 SIMPLE 或普通计划。", "The spouse's workplace plan is selected independently and does not inherit yours."],
+    "household.spouse_simple_higher_limit": ["仅当配偶的 SIMPLE 计划文件确认较高基础限额适用时开启。", "Enable only when the spouse's SIMPLE plan documents confirm the higher base limit applies."],
+    "household.spouse_catchup_403b_15yr_enabled": ["配偶独立确认自己的 403(b) 计划与 15 年服务资格。", "The spouse independently confirms their own 403(b) plan and 15-years-of-service eligibility."],
+    "household.spouse_catchup_403b_15yr_schedule_nominal": ["配偶计划管理员或 IRS worksheet 算出的逐年额外额度，名义美元。", "The spouse's annual extra room from their plan administrator or IRS worksheet, in nominal dollars."],
+    "household.spouse_catchup_403b_15yr_prior_used_nominal": ["配偶在本计划开始前已用的终身额度；空白不会当作 0。", "The spouse's lifetime amount used before this plan starts; blank is not treated as zero."],
+    "household.spouse_marginal_tax_pre": ["只在税务方式选了平率时才生效。配偶积累期收入的边际税率，用于估算他/她税后能存下多少。", "Marginal tax rate on the spouse's income during accumulation, used to estimate how much they can actually save."],
     "household.spouse_claim_age": ["配偶开始领社保的年龄。62 最早但金额最低，70 最高；夫妻两人的领取年龄可以不同。", "The age the spouse claims Social Security. 62 is earliest and smallest, 70 is largest; the two of you can claim at different ages."],
-    "tax_true.state_archetype": ["按「类型」而不是按「州」选。选了它就取代下面那个平率，因为一个平率说不出三件真正决定「要不要为了税搬家」的事：普通收入与资本利得可能不同税率、社保福利在有些地方要再交一次州税、以及退休收入（养老金/IRA 提取）可能有一大笔免税额。这些是原型，不是任何一个州的税法：税率是为了把类型彼此分开而取的整数，不承诺复现任何一份真实报税表；App 也不会把任何一行标上州名。要精确到某个州，请咨询税务师。留空＝沿用下面的平率，与没有这个功能时逐位一致。", "Chosen by TYPE, not by state. Selecting one replaces the flat rate below, because a single flat rate cannot express the three things that actually decide whether moving is worth it: ordinary income and capital gains can be taxed differently, Social Security benefits are taxed again by some states, and retirement income (pensions, IRA withdrawals) can carry a large exemption. These are archetypes, not any state's tax code: the rates are round numbers chosen to separate one type from another, they do not reproduce any real filing, and the app never labels a row with a state name. For a specific state, ask a tax professional. Leaving it blank keeps the flat rate below and is bit-identical to before this existed."],
-    "tax_true.state_rate": ["真实税引擎里的州税平率，同时作用于普通收入与长期资本利得。无州所得税填 0。", "Flat state rate inside the true-tax engine, applied to both ordinary income and long-term capital gains. Enter 0 if your state has no income tax."],
+    "tax_true.state_archetype": ["按「类型」而不是按「州」选。选了它就取代下面那个平率，因为一个平率说不出三件真正决定「要不要为了税搬家」的事：普通收入与资本利得可能不同税率、社保福利在有些地方要再交一次州税、以及退休收入（养老金/IRA 提取）可能有一大笔免税额。这些是原型，不是任何一个州的税法：税率是为了把类型彼此分开而取的整数，不承诺复现任何一份真实报税表；App 也不会把任何一行标上州名。要精确到某个州，请咨询税务师。留空＝沿用下面的平率，与没有这个功能时逐位一致。<br><b>工作阶段也会用它</b>，但只用其中的「普通收入税率」那一项 —— 资本利得税率、社保是否征税、退休收入免税额都是退休期的概念，工资上没有对应物。", "Chosen by TYPE, not by state. Selecting one replaces the flat rate below, because a single flat rate cannot express the three things that actually decide whether moving is worth it: ordinary income and capital gains can be taxed differently, Social Security benefits are taxed again by some states, and retirement income (pensions, IRA withdrawals) can carry a large exemption. These are archetypes, not any state's tax code: the rates are round numbers chosen to separate one type from another, they do not reproduce any real filing, and the app never labels a row with a state name. For a specific state, ask a tax professional. Leaving it blank keeps the flat rate below and is bit-identical to before this existed.<br><b>The working years use it too</b>, but only its ordinary-income rate -- the gains rate, whether Social Security is taxed, and the retirement-income exemption are all retirement concepts with no counterpart on a paycheque."],
+    "tax_true.state_rate": ["州税平率。退休阶段同时作用于普通收入与长期资本利得；<b>工作阶段也用它</b>（乘以工资减去税前递延后的部分）—— 2026-08-23 之前工作阶段完全不收州税，同一个人在两个阶段被按不同税制对待。无州所得税填 0。<br>只在<b>真实税引擎打开</b>时生效；工作阶段的税务方式选了「我自己填一个平率」时也不再另加，因为那个数里已经含了州税。", "Flat state rate. In retirement it applies to both ordinary income and long-term capital gains; <b>the working years now use it too</b>, on wages net of pre-tax deferrals -- before 2026-08-23 the working years paid no state tax at all, so one person was taxed under two different systems. Enter 0 if your state has no income tax.<br>Active only when the true-tax engine is on, and not added on top of the flat working-years tax model, whose rate already contains your state's."],
     "rule.cut_realisation": ["护栏触发后，你实际砍下去的比例。默认 100% 是这个引擎一直以来的假设——触发即全额砍到位——而那个假设从没对照真实行为校准过。调到 100% 以下，模型就假设你砍不满；没砍掉的那部分留在支出里变成风险，这正是这个拨盘存在的意义。加息方向刻意不打折：该涨没涨是另一种行为、另一套文献，用一个数同时建模两者等于断言它们是一回事。", "How much of a triggered guardrail cut you actually make. The default of 100% is what this engine has always assumed — a triggered cut landing in full — and that assumption has never been checked against real behaviour. Below 100% the model assumes you do not cut all the way; the part you do not cut stays in your spending and shows up as risk, which is the point of the dial. Raises are deliberately not damped: failing to take a raise is a different behaviour with a different literature."],
     "blocky_spending.enabled": ["真实支出不是一条平线：屋顶、车、婚礼、医疗自付超额。开启后，每年按下面的概率落一次大额。平滑支出会低估顺序风险——大额落在坏十年里，正是一个计划撑住或撑不住的那个事件。默认关闭，关闭时结果与以前逐位相同。", "Real spending is not a flat line: a roof, a car, a wedding, a medical excess. With this on, a lump lands each year with the probability below. Smooth spending understates sequence risk, because a lump arriving in a bad decade is exactly the event a plan survives or does not. Off by default, and bit-identical when off."],
     "blocky_spending.annual_probability": ["每个退休年份落一次大额的概率。默认 15%（约七年一次）是占位数字，不是发现——本 App 不携带任何人的实际支出史。按你自己的生活填：房子旧、车老、家里人多，这个数就该更高。到达时点与市场抽样独立：现实中修屋顶和熊市可能同时来，这个模型不建模那种相关性。", "Chance that a lump lands in any given retirement year. The default of 15% (roughly once every seven years) is a placeholder, not a finding — this app ships nobody's spending history. Set it from your own life: an older house, an older car, more people, and it should be higher. Arrivals are INDEPENDENT of market draws: in reality a roof and a bear market can arrive together, and that correlation is not modelled."],
@@ -470,6 +627,19 @@
     "other_assets.sale_liquidity_discount": ["房子值多少和你卖了能拿到多少是两个数：佣金、买家要求的修缮、按时间表卖而不是从容卖的代价。默认 0 —— 一个默认就打折的模型会让每份计划悄悄变穷，而且没人知道是哪个数字动了。美国经纪佣金常见 5–6%，加上过户与修缮，8–10% 是常被引用的区间，但那不是本 App 给你的数，是你自己判断的起点。", "What the house is worth and what you get for it are two numbers: commission, the repairs a buyer demands, the cost of selling on a schedule rather than at leisure. Zero by default -- a model that discounted by default would make every plan quietly poorer with nobody knowing which figure moved. US agent commissions commonly run 5-6%, and 8-10% all-in is a frequently quoted range, but that is a starting point for your judgement, not a number this app is giving you."],
     "other_assets.downsize_enabled": ["缩表不是清仓：你卖掉旧房，然后要住在别处。勾上之后模型会在同一年扣掉新住处的价格，并且从那年起按新房算房产税与维护 —— 不勾的话，计划会拿着卖房款、然后免费住一辈子，那是能算出来的最漂亮的账。", "Downsizing is not liquidating: you sell the old place and then have to live somewhere. With this on the model charges the new home's price in the same year and, from then on, computes property tax and maintenance from the new house. Without it a plan banks the proceeds and lives somewhere free for life, which is the most flattering arithmetic available."],
     "other_assets.downsize_new_price_real": ["新住处的价格，今日美元。年龄用的是上面那个卖房年龄 —— 不另设一个，因为两个可能对不上的年龄比一个年龄更糟。填 0 = 你还没想好换到哪，模型不会替你假设一套免费的房子。", "Price of the new place in today's dollars. The age is the sale age above rather than a second field: two ages that can disagree are worse than one. Zero means you have not decided yet, and the model will not assume a free house on your behalf."],
+    "contributions.backdoor_roth": ["收入超过一定水平后,法律上<b>不能直接缴 Roth IRA</b>(2026 单身 MAGI 在 $153,000–$168,000 之间递减,超过就是零;联合 $242,000–$252,000)。本模型默认<b>按法律照做</b> —— 你的收入越过区间,Roth 缴款就归零。<br>但高收入者普遍用「后门」:先缴非抵扣传统 IRA,再转换成 Roth。做不做是<b>只有你知道</b>的事,所以这里做成开关而不是替你假设。勾上 = 恢复全额 Roth 额度。<br><b>勾之前请确认它对你成立</b>:如果你有税前传统 IRA 余额,pro-rata 规则会让转换产生应税收入,这个 App <b>不计算那部分税</b>。",
+      "Above a certain income the law does <b>not allow a direct Roth IRA contribution</b> (2026: it phases out between $153,000 and $168,000 of MAGI for a single filer and is zero above that; $242,000–$252,000 filing jointly). This model follows the law by default, so Roth contributions fall to zero once your income clears the range.<br>High earners commonly use the backdoor instead: contribute to a non-deductible traditional IRA, then convert. Whether you actually do that is something <b>only you know</b>, so it is a switch rather than an assumption. Ticking it restores the full Roth room.<br><b>Check that it applies to you first:</b> if you hold a pre-tax traditional IRA balance, the pro-rata rule makes the conversion taxable, and this app does <b>not</b> compute that tax."],
+    "contributions.savings_mode": ["同一件事的两种说法，<b>只能填一个</b> —— 两个都填会互相打架：年收入 $150,000 的人不可能既「每年花 $42,000」又「只存 15%」。<br>选「我填生活开销」（默认，也是这个模型一直以来的做法）：你说花多少，能存的就是剩下的。选「我填储蓄率」：你说存多少，开销变成剩下的那部分 —— 这种模式下不可能出现「收入盖不住开销」，因为开销本来就是按剩余定义的。",
+      "Two ways of stating the same budget, and you pick ONE -- both at once contradict each other: someone on $150,000 cannot both spend $42,000 a year and save only 15%.<br>Pick \u0022I'll state my spending\u0022 (the default, and what this model has always done): you say what you spend, and saving is whatever survives it. Pick \u0022I'll state my savings rate\u0022 and spending becomes the residual instead -- in that mode a shortfall is impossible, because spending is defined as what is left."],
+    "contributions.savings_rate": ["占<b>税前</b>收入的百分比，不是税后 —— 因为大多数人说「我存 20%」时说的是税前，也因为按税后算会让这个数字随税务假设一起漂。<br>它按 401(k) → HSA → Roth IRA → 应税账户的顺序分配，各账户到法定上限为止。所以一个存 15% 的高收入者会先把 401(k) 填满，溢出的才进后面几项。",
+      "A percentage of GROSS pay, not take-home -- both because that is what people mean when they say \u0022I save 20%\u0022, and because a net-based rate would drift whenever the tax assumption moved.<br>It is allocated 401(k) -> HSA -> Roth IRA -> taxable, each to its statutory limit, so a high earner saving 15% fills the 401(k) first and only the overflow reaches the rest."],
+    "career_break.enabled": ["你自己决定停下来一段时间 —— 读书、带孩子、照顾家人、纯粹休息。<b>这和上面的「失业风险」是两件事</b>：失业是引擎在路径里随机抽的事件，休假是你已经定了的计划，所以两者分开填、可以同时开。开启后这几年的工资、你自己的缴款、雇主匹配会一起下降，复工后按你填的比例继续。关闭时逐位不变。<br><b>三件事要知道：</b>①休假<b>不会</b>推迟晋升（详见下面「复工时拿到的薪资比例」）；②休假年的生活费<b>只从应税账户取</b> —— 401(k)/IRA/HSA 不会被动用，取空后仍未覆盖的部分会单独列出；③你现在可以填休假期的年度净新增医保费，但 App 不会替你选配偶计划、COBRA 或 Marketplace，也不算积累期 ACA 补贴。",
+      "Your own decision to stop for a while — study, a child, caring for someone, or simply rest. <b>This is not the layoff risk above</b>: a layoff is drawn inside a path, while a break is a plan you already made, so they are entered separately and can both be on. With it on, pay, your contributions and employer money fall together for those years, then resume at the share you enter. Bit-identical when off.<br><b>Three things to know:</b> (1) a break does <b>not</b> delay promotion — see \u0022share of pay you return on\u0022 below; (2) break-year living costs draw from the <b>taxable account only</b>, never a 401(k)/IRA/HSA, and anything still uncovered is reported separately; (3) you can now enter the annual net-new health premium during the break, but the app does not choose a spouse plan, COBRA or Marketplace coverage and does not compute an accumulation-phase ACA subsidy."],
+    "career_break.start_age": ["休假开始的那一岁。它必须落在你的工作年份里 —— 一段跑过最后一个工作年的休假会被拒绝并说明，而不是悄悄按更短的休假算。", "The age the break begins. It has to fall inside your working years: a break that would run past your last working year is refused with an explanation rather than quietly modelled as a shorter one."],
+    "career_break.years": ["离开几年，整年。第 1 年就是你达到上面那个年龄的那一年。", "How many whole years away. Year one is the year you reach the age above."],
+    "career_break.income_fraction": ["休假期间你还能拿到平常工资的百分之几。0 = 完全无薪；50 = 半薪。它同时作用于基础薪资、奖金和加班，不会只砍一项。注意一个算术上的结果：收入降下来之后，你自己的 401k/IRA/HSA 缴款会被<b>当年实际挣到的钱</b>封顶 —— 无薪的一年不可能还满额缴三个账户。", "What percentage of your usual pay you still receive while away. 0 = unpaid; 50 = half pay. It applies to base, bonus and overtime together, so no one income line escapes. One arithmetic consequence worth knowing: once pay falls, your own 401k/IRA/HSA contributions are capped by what you <b>actually earned</b> that year — an unpaid year cannot still max out three accounts."],
+    "career_break.return_wage_factor": ["复工那年起，你拿到的是「没休假的话本该拿到的工资」的百分之几。100 = 完全没损失；85 = 少 15%，而且是<b>永久</b>的，一直带到退休。<br><b>这是本模型唯一表达工资疤痕的地方。</b>晋升时钟在休假期间照常走：如果休假跨过了你本该晋升的那一年，复工时你会落在届时应有的职级工资上。这是三种可能里最乐观的一种，之所以这么选，是因为「推迟晋升」和「取消晋升」各自都是一个关于你所在行业的断言，这个 App 没有那个数据；而你可以用这个百分比表达出推迟甚至取消等价的损失，反过来却做不到。<b>所以如果你认为几年空档会让职级或加薪推迟，请自己把它折进这个数字。</b>", "From the year you return, the percentage you receive of the pay you would have been on had you never left. 100 = no loss; 85 = 15% less, and it is <b>permanent</b> — you carry it to retirement.<br><b>This is the only place wage scarring is modelled here.</b> The promotion clock keeps running while you are away: if the break spans the year you would have been promoted, you return on the salary that level would have reached by then. That is the most optimistic of the three possible readings, and it was chosen because \u0022promotion delayed\u0022 and \u0022promotion lost\u0022 are each an assertion about your industry that this app has no data for — while you can express a delay-shaped or even a loss-shaped scar through this percentage, and could not undo one baked into the engine. <b>So if you believe a gap of a few years would push back your level or your raises, fold that into this number yourself.</b>"],
+    "career_break.medical_premium_annual_real": ["休假期间年度净新增的家庭医保保费，今日美元。只填相对当前生活费里已有保费多出来的部分；0 表示覆盖没变或新增成本已经含在生活费。默认生活费模式下它先压低可负担储蓄；储蓄率模式仍以你填的比例为准，这笔钱占用残差生活费。", "Net NEW annual household health premium during the break, in today's dollars. Enter only the amount above premiums already inside current living expenses; zero means coverage is unchanged or the extra cost is already included. In the default spending mode it reduces affordable saving first; savings-rate mode keeps your stated rate authoritative and absorbs it inside residual spending."],
     "human_capital.enabled": ["工资在本模型里一直是一条确定性曲线：每条路径同样的增长率。开启后它按随机过程走，分成持久与暂时两种冲击。关闭时逐位不变。", "Wages have always followed a deterministic curve here: the same growth rate on every path. With this on they follow a stochastic process split into permanent and transitory shocks. Bit-identical when off."],
     "human_capital.permanent_sigma": ["持久冲击的标准差 —— 丢掉的那个层级，你带着它走完整个职业生涯。它和暂时冲击刻意分开：用一个「工资波动率」同时表示两者，等于断言丢一次晋升和少发一次奖金是同一件事，而对一个计划来说它们完全不同。这个数字没有来源，行业与周期差异极大，本 App 不替你选。", "Standard deviation of the permanent shock -- the level you lose and then carry for the rest of your career. Deliberately separate from the transitory one: a single 'wage volatility' dial would assert that losing a promotion and missing a bonus are the same event, and to a plan they are nothing alike. The number has no source; dispersion by occupation and cycle is enormous and this app will not pick one for you."],
     "human_capital.transitory_sigma": ["暂时冲击的标准差 —— 一个你缓得过来的坏年份，不改变之后的水平。同样没有来源。", "Standard deviation of the transitory shock -- a bad year you recover from, leaving your level unchanged afterwards. Also unsourced."],
@@ -535,7 +705,7 @@
     "promotion.timing_max": ["晋升最晚发生在第几年（在区间内随机）。", "Latest year (random within the window)."],
     "promotion.bonus_pct_min": ["晋升后奖金占薪资的下限。", "Lower bound of post-promo bonus, as % of salary."],
     "promotion.bonus_pct_max": ["晋升后奖金占薪资的上限。", "Upper bound of post-promo bonus %."],
-    "promotion.marginal_tax_post": ["晋升后的边际税率。", "Marginal tax rate after the promotion."],
+    "promotion.marginal_tax_post": ["只在税务方式选了平率时才生效。晋升后的边际税率。", "Read only when the tax model is set to flat. Marginal tax rate after the promotion."],
     "returns.return_df": ["Student-t 的自由度，越小尾部越厚（极端更频繁）。典型 5–8。", "Student-t degrees of freedom; smaller = fatter tails. Typical 5–8."],
     "returns.inflation_sigma": ["通胀逐年波动的标准差（需先开启随机通胀）。", "Std-dev of year-to-year inflation (needs stochastic inflation on)."],
     "returns.inflation_equity_corr": ["通胀与股票收益的相关性（通常略负）。", "Correlation between inflation and equity returns (usually slightly negative)."],
@@ -651,6 +821,7 @@
       { p: "household.spouse_initial_roth", label: ["配偶 · Roth IRA", "Spouse · Roth IRA"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
       { p: "initial.hsa", label: ["HSA", "HSA"], type: "num", money: true },
       { p: "household.spouse_initial_hsa", label: ["配偶 · HSA", "Spouse · HSA"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
+      { p: "initial.gov_457b", label: ["政府 457(b)", "Governmental 457(b)"], type: "num", money: true },
       { p: "initial.taxable", label: ["应税账户", "Taxable brokerage"], type: "num", money: true },
       { p: "household.spouse_initial_taxable", label: ["配偶 · 应税账户", "Spouse · taxable"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
       { p: "other_assets.cash", label: ["现金 / 活期存款", "Cash / savings"], type: "num", money: true },
@@ -661,28 +832,126 @@
       { p: "other_assets.sell_home_net_real", label: ["净得（今日 $，税费后）", "Net proceeds (today $, after costs)"], type: "num", money: true, showIf: c => get(c, "other_assets.sell_home_enabled") },
     ]},
     { id: "income", title: ["收入与储蓄", "Income & savings"], kicker: ["额外收入请填今日美元、税后可花现金：退休后先覆盖年度开销，剩余才进应税账户。它们不直接进入 MAGI/ACA/IRMAA，结果可能高估 ACA 补贴并低估税与 IRMAA。", "Enter extra income as today's-dollar, after-tax spendable cash: in retirement it covers annual spending first and only the surplus enters taxable. It does not directly enter MAGI/ACA/IRMAA, so results may overstate ACA subsidies and understate tax and IRMAA."], fields: [
-      { p: "contributions.base_salary_pre", label: ["基础薪资", "Base salary"], type: "num", money: true },
-      { p: "contributions.bonus_pre", label: ["年终奖", "Bonus"], type: "num", money: true },
+      { p: "contributions.employment_type", label: ["你的工作性质", "How you are paid"], type: "select", options: [["w2", ["W-2 雇员（雇主代付一半工资税）", "W-2 employee (employer pays half the payroll tax)"]], ["self_employed", ["自雇 / 1099（两半都自己付）", "Self-employed / 1099 (you pay both halves)"]]] },
+      { p: "contributions.workplace_plan_type", label: ["工作场所退休计划", "Workplace retirement plan"], type: "select", options: [["standard", ["普通 401(k) / 其他", "Standard 401(k) / other"]], ["403b", ["403(b)", "403(b)"]], ["simple", ["SIMPLE IRA / SIMPLE 401(k)", "SIMPLE IRA / SIMPLE 401(k)"]]] },
+      { p: "contributions.simple_higher_limit", label: ["SIMPLE 较高基础限额适用", "Higher SIMPLE base limit applies"], type: "check", showIf: c => get(c, "contributions.workplace_plan_type") === "simple" },
+      { p: "contributions.catchup_403b_15yr_enabled", label: ["403(b) · 15 年服务补缴", "403(b) · 15-year catch-up"], type: "check", showIf: c => get(c, "contributions.workplace_plan_type") === "403b" },
+      { p: "contributions.catchup_403b_15yr_prior_used_nominal", label: ["此前已用终身额度", "Lifetime amount already used"], type: "num", money: true, optionalNum: true, requiredIf: c => get(c, "contributions.workplace_plan_type") === "403b" && get(c, "contributions.catchup_403b_15yr_enabled"), showIf: c => get(c, "contributions.workplace_plan_type") === "403b" && get(c, "contributions.catchup_403b_15yr_enabled") },
+      { p: "contributions.catchup_403b_15yr_schedule_nominal", label: ["逐年额外额度（名义 $，逗号分隔）", "Annual extra room (nominal $, comma-separated)"], type: "text", list: true, showIf: c => get(c, "contributions.workplace_plan_type") === "403b" && get(c, "contributions.catchup_403b_15yr_enabled") },
+      { p: "contributions.base_salary_pre", label: ["基础薪资 / 预期净利润", "Base salary / expected net profit"], type: "num", money: true },
+      { p: "contributions.bonus_mode_pre", label: ["W-2 奖金/佣金形状", "W-2 bonus/commission shape"], type: "select", options: [["fixed_amount", ["固定年度金额", "Fixed annual amount"]], ["uniform_pct", ["每年在工资百分比区间内波动", "Annual range as % of base pay"]]], showIf: c => get(c, "contributions.employment_type") === "w2" },
+      { p: "contributions.bonus_pre", label: ["固定年终奖/佣金", "Fixed bonus/commission"], type: "num", money: true, showIf: c => get(c, "contributions.employment_type") !== "w2" || get(c, "contributions.bonus_mode_pre") === "fixed_amount" },
+      { p: "contributions.bonus_pct_min_pre", label: ["奖金/佣金 % 下限", "Bonus/commission % min"], type: "num", pct: true, step: 1, showIf: c => get(c, "contributions.employment_type") === "w2" && get(c, "contributions.bonus_mode_pre") === "uniform_pct" },
+      { p: "contributions.bonus_pct_max_pre", label: ["奖金/佣金 % 上限", "Bonus/commission % max"], type: "num", pct: true, step: 1, showIf: c => get(c, "contributions.employment_type") === "w2" && get(c, "contributions.bonus_mode_pre") === "uniform_pct" },
       { p: "contributions.ot_income_pre", label: ["加班收入", "Overtime income"], type: "num", money: true },
+      { p: "contributions.self_employed_profit_mode", label: ["1099 净利润形状", "1099 net-profit shape"], type: "select", options: [["fixed", ["平滑路径", "Smooth path"]], ["uniform", ["每年在倍数区间内波动", "Annual multiplier range"]]], showIf: c => get(c, "contributions.employment_type") === "self_employed" },
+      { p: "contributions.self_employed_profit_factor_min", label: ["净利润倍数下限", "Net-profit multiplier min"], type: "num", pct: true, step: 5, showIf: c => get(c, "contributions.employment_type") === "self_employed" && get(c, "contributions.self_employed_profit_mode") === "uniform" },
+      { p: "contributions.self_employed_profit_factor_max", label: ["净利润倍数上限", "Net-profit multiplier max"], type: "num", pct: true, step: 5, showIf: c => get(c, "contributions.employment_type") === "self_employed" && get(c, "contributions.self_employed_profit_mode") === "uniform" },
       { p: "contributions.salary_growth_pre", label: ["薪资增长", "Salary growth"], type: "num", pct: true, step: 0.1 },
       { p: "contributions.pretax_401k_limit_y1", label: ["401k 缴款上限", "401k limit"], type: "num", money: true },
+      { p: "contributions.gov_457b_y1", label: ["政府 457(b) 缴款", "Gov 457(b) contribution"], type: "num", money: true },
       { p: "contributions.roth_ira_limit_y1", label: ["Roth IRA 上限", "Roth IRA limit"], type: "num", money: true },
       { p: "contributions.hsa_limit_y1", label: ["HSA 上限", "HSA limit"], type: "num", money: true },
-      { p: "contributions.match_rate", label: ["雇主匹配率", "Employer match rate"], type: "num", pct: true, step: 0.5 },
+      { p: "contributions.hsa_coverage_tier", label: ["HSA 保障类型", "HSA coverage tier"], type: "select", options: [["none", ["无 / 不缴", "None / no contribution"]], ["self_only", ["仅本人", "Self-only"]], ["family", ["家庭", "Family"]]], showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.hsa_deductible_y1", label: ["HDHP deductible", "HDHP deductible"], type: "num", money: true, optionalNum: true, requiredIf: c => +get(c, "contributions.hsa_limit_y1") > 0, showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.hsa_out_of_pocket_max_y1", label: ["HDHP 自付上限", "HDHP out-of-pocket max"], type: "num", money: true, optionalNum: true, requiredIf: c => +get(c, "contributions.hsa_limit_y1") > 0, showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.hsa_disqualifying_other_coverage", label: ["有取消资格的其他保障", "Has disqualifying other coverage"], type: "check", showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.hsa_medicare_enrolled", label: ["已加入 Medicare", "Enrolled in Medicare"], type: "check", showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.hsa_claimed_as_dependent", label: ["可被他人申报为 dependent", "Claimable as a dependent"], type: "check", showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.hsa_eligible_through_age", label: ["HSA 资格保持到几岁（含）", "HSA eligible through age"], type: "num", optionalNum: true, requiredIf: c => +get(c, "contributions.hsa_limit_y1") > 0, showIf: c => +get(c, "contributions.hsa_limit_y1") > 0 },
+      { p: "contributions.childcare_schedule_real", label: ["逐年托育/育儿成本（今日 $）", "Annual childcare costs (today $)"], type: "text", list: true },
+      { p: "contributions.commuting_schedule_real", label: ["逐年通勤成本（今日 $）", "Annual commuting costs (today $)"], type: "text", list: true },
+      { p: "contributions.rsu_vest_enabled", label: ["按归属年份填 RSU（计为 W-2 工资）", "RSU by vest year (counted as W-2 wages)"], type: "check" },
+      { p: "contributions.rsu_vest_schedule_real", label: ["逐年归属价值（今日 $，逗号分隔）", "Vest value per year (today $, comma-separated)"], type: "text", list: true, showIf: c => get(c, "contributions.rsu_vest_enabled") },
+      { p: "contributions.rsu_retained_enabled", label: ["留着不卖（集中度情景）", "Keep shares instead of selling (concentration)"], type: "check", showIf: c => get(c, "contributions.rsu_vest_enabled") },
+      { p: "contributions.rsu_retained_schedule_real", label: ["每年留下多少（今日 $，逗号分隔）", "Kept per year (today $, comma-separated)"], type: "text", list: true, showIf: c => get(c, "contributions.rsu_vest_enabled") && get(c, "contributions.rsu_retained_enabled") },
+      { p: "contributions.rsu_retained_sale_age", label: ["卖出年龄", "Age you sell"], type: "num", showIf: c => get(c, "contributions.rsu_vest_enabled") && get(c, "contributions.rsu_retained_enabled") },
+      { p: "contributions.rsu_retained_value_multiple", label: ["卖出时值投入的几倍（1 = 打平）", "Worth at sale, as a multiple (1 = flat)"], type: "num", step: 0.1, showIf: c => get(c, "contributions.rsu_vest_enabled") && get(c, "contributions.rsu_retained_enabled") && !get(c, "contributions.rsu_retained_sigma_enabled") },
+      { p: "contributions.rsu_retained_sigma_enabled", label: ["改用我自己的波动率（抽一条路径）", "Use my own volatility (draw a path)"], type: "check", showIf: c => get(c, "contributions.rsu_vest_enabled") && get(c, "contributions.rsu_retained_enabled") },
+      { p: "contributions.rsu_retained_sigma_real", label: ["年化实际波动率 σ", "Annual real volatility (sigma)"], type: "num", pct: true, step: 1, showIf: c => get(c, "contributions.rsu_vest_enabled") && get(c, "contributions.rsu_retained_enabled") && get(c, "contributions.rsu_retained_sigma_enabled") },
+      { p: "contributions.rsu_retained_drift_real", label: ["年化实际漂移（0 = 不表态）", "Annual real drift (0 = no view)"], type: "num", pct: true, step: 0.5, showIf: c => get(c, "contributions.rsu_vest_enabled") && get(c, "contributions.rsu_retained_enabled") && get(c, "contributions.rsu_retained_sigma_enabled") },
+      { p: "contributions.espp_enabled", label: ["参加 §423 ESPP", "Participate in a §423 ESPP"], type: "check", showIf: c => get(c, "contributions.employment_type") === "w2" },
+      { p: "contributions.espp_disposition_mode", label: ["处置方式", "Disposition"], type: "select", options: [["immediate", ["购买后立即卖出", "Sell immediately after purchase"]], ["qualifying_hold", ["持有到 qualifying disposition", "Hold to qualifying disposition"]]], showIf: c => get(c, "contributions.espp_enabled") },
+      { p: "contributions.espp_grant_fmv_schedule_nominal", label: ["逐年 grant-date FMV（名义 $）", "Annual grant-date FMV (nominal $)"], type: "text", list: true, showIf: c => get(c, "contributions.espp_enabled") },
+      { p: "contributions.espp_exercise_fmv_schedule_nominal", label: ["逐年 exercise-date FMV（名义 $）", "Annual exercise-date FMV (nominal $)"], type: "text", list: true, showIf: c => get(c, "contributions.espp_enabled") },
+      { p: "contributions.espp_discount_rate", label: ["计划折扣", "Plan discount"], type: "num", pct: true, step: 1, showIf: c => get(c, "contributions.espp_enabled") },
+      { p: "contributions.espp_lookback_enabled", label: ["按 grant/exercise 较低价 lookback", "Look back to lower grant/exercise value"], type: "check", showIf: c => get(c, "contributions.espp_enabled") },
+      // `optionalNum`, so an unanswered sale age renders BLANK. Left as a
+      // plain number it rendered the null default as a visible 0 -- a year
+      // nobody chose, wearing the look of an answer. Found by driving the
+      // page, not by a gate.
+      { p: "contributions.espp_qualifying_sale_age", label: ["合格处置卖出年龄", "Qualifying-disposition sale age"], type: "num", min: 1, max: 120, step: 1, optionalNum: true, requiredIf: c => get(c, "contributions.espp_enabled") && get(c, "contributions.espp_disposition_mode") === "qualifying_hold", showIf: c => get(c, "contributions.espp_enabled") && get(c, "contributions.espp_disposition_mode") === "qualifying_hold" },
+      { p: "contributions.espp_qualifying_sale_value_schedule_nominal", label: ["卖出时逐批价值（名义 $）", "Per-lot value at sale (nominal $)"], type: "text", list: true, showIf: c => get(c, "contributions.espp_enabled") && get(c, "contributions.espp_disposition_mode") === "qualifying_hold" },
       { p: "contributions.match_excludes_bonus", label: ["匹配不含年终奖", "Match excludes bonus"], type: "check" },
-      { p: "contributions.marginal_tax_pre", label: ["边际税率", "Marginal tax rate"], type: "num", pct: true, step: 1 },
-      { p: "contributions.annual_spending_now", label: ["当前年生活开销（今日$，家庭合计）", "Current annual spending (today $, household)"], type: "num", money: true },
+      { p: "contributions.employer_nonelective_rate", label: ["雇主非选择性缴款（不看你缴多少）", "Employer contribution regardless of deferral"], type: "num", pct: true, step: 0.5 },
+      { p: "contributions.match_rate", label: ["雇主匹配率", "Employer match rate"], type: "num", pct: true, step: 0.5, showIf: c => get(c, "contributions.employment_type") !== "self_employed" },
+      { p: "contributions.tax_model", label: ["工作年份怎么交税", "How the working years are taxed"], type: "select", options: [["schedule", ["按真实税表（联邦税率表 + FICA，跟着收入走）", "Real schedule (federal brackets + FICA, follows income)"]], ["flat", ["我自己填一个平率", "One flat rate I state myself"]]] },
+      // Hidden under the schedule rather than shown-and-ignored: a control the
+      // engine does not read looks identical, from the user's side, to one it
+      // reads and gets wrong.
+      { p: "contributions.marginal_tax_pre", label: ["边际税率", "Marginal tax rate"], type: "num", pct: true, step: 1, showIf: c => get(c, "contributions.tax_model") === "flat" },
+      { p: "contributions.backdoor_roth", label: ["我用「后门 Roth」绕开收入限制", "I use a backdoor Roth to get around the income limit"], type: "check" },
+      { p: "contributions.savings_mode", label: ["你想怎么描述你的储蓄", "How you'd rather describe your saving"], type: "select", options: [["residual", ["我填生活开销，储蓄是剩下的", "I'll state my spending; saving is what's left"]], ["savings_rate", ["我填储蓄率，开销是剩下的", "I'll state my savings rate; spending is what's left"]]] },
+      // Blank is a real answer here and the help says so ("留空＝与退休支出相同"):
+      // the adapter falls back to `state.expenses_y0` for null. Without
+      // `optionalNum` the page rendered that null as 0 -- "I spend nothing" --
+      // which is a different plan from "I did not state it".
+      { p: "contributions.annual_spending_now", label: ["当前年生活开销（今日$，家庭合计）", "Current annual spending (today $, household)"], type: "num", money: true, optionalNum: true, showIf: c => get(c, "contributions.savings_mode") !== "savings_rate" },
+      { p: "contributions.savings_rate", label: ["你实际存下税前收入的百分之几", "Share of gross pay you actually save"], type: "num", pct: true, step: 1, showIf: c => get(c, "contributions.savings_mode") === "savings_rate" },
+      { p: "student_debt.enabled", label: ["还有一笔学生贷款", "I have a student loan"], type: "check" },
+      { p: "student_debt.balance", label: ["当前未偿余额", "Current outstanding balance"], type: "num", money: true, showIf: c => get(c, "student_debt.enabled") },
+      { p: "student_debt.annual_rate", label: ["名义年利率", "Nominal annual rate"], type: "num", pct: true, step: 0.1, showIf: c => get(c, "student_debt.enabled") },
+      { p: "student_debt.monthly_payment", label: ["固定名义月供", "Fixed nominal monthly payment"], type: "num", money: true, showIf: c => get(c, "student_debt.enabled") },
+      { p: "lifestyle_creep.mode", label: ["生活方式膨胀", "Lifestyle creep"], type: "select", options: [["off", ["关闭", "Off"]], ["fixed", ["固定幅度", "Fixed step"]], ["clipnorm", ["截断正态抽样", "Clipped-normal draw"]]] },
+      { p: "lifestyle_creep.magnitude", label: ["开销永久上调", "Permanent spending step"], type: "num", pct: true, step: 1, showIf: c => get(c, "lifestyle_creep.mode") !== "off" },
+      { p: "lifestyle_creep.sd", label: ["上调幅度标准差", "Step standard deviation"], type: "num", pct: true, step: 1, showIf: c => get(c, "lifestyle_creep.mode") === "clipnorm" },
+      { p: "lifestyle_creep.cap", label: ["上调幅度上限", "Maximum step"], type: "num", pct: true, step: 1, showIf: c => get(c, "lifestyle_creep.mode") !== "off" },
+      { p: "lifestyle_creep.year_lo", label: ["最早发生在第几年", "Earliest working year"], type: "num", min: 2, step: 1, showIf: c => get(c, "lifestyle_creep.mode") !== "off" },
+      { p: "lifestyle_creep.year_hi", label: ["最晚发生在第几年", "Latest working year"], type: "num", min: 2, step: 1, showIf: c => get(c, "lifestyle_creep.mode") !== "off" },
+      { p: "career_break.enabled", label: ["计划一段职业休假", "Plan a career break"], type: "check" },
+      { p: "career_break.start_age", label: ["休假从几岁开始", "Age the break starts"], type: "num", min: 18, max: 80, showIf: c => get(c, "career_break.enabled") },
+      { p: "career_break.years", label: ["休假几年", "Years away"], type: "num", min: 1, max: 30, step: 1, showIf: c => get(c, "career_break.enabled") },
+      { p: "career_break.income_fraction", label: ["休假期间还有多少收入", "Share of your pay you still earn"], type: "num", pct: true, step: 5, showIf: c => get(c, "career_break.enabled") },
+      { p: "career_break.return_wage_factor", label: ["复工时拿到的薪资比例", "Share of pay you return on"], type: "num", pct: true, step: 5, showIf: c => get(c, "career_break.enabled") },
+      { p: "career_break.medical_premium_annual_real", label: ["休假期年度净新增医保（今日$）", "Net-new annual health premium during break (today $)"], type: "num", money: true, showIf: c => get(c, "career_break.enabled") },
+      { p: "spouse_career_break.enabled", label: ["配偶也计划一段休假", "Spouse plans a break too"], type: "check", showIf: c => get(c, "household.enabled") },
+      { p: "spouse_career_break.start_age", label: ["休假从配偶几岁开始", "Spouse's age when the break starts"], type: "num", min: 18, max: 80, showIf: c => get(c, "household.enabled") && get(c, "spouse_career_break.enabled") },
+      { p: "spouse_career_break.years", label: ["配偶休假几年", "Years the spouse is away"], type: "num", min: 1, max: 30, step: 1, showIf: c => get(c, "household.enabled") && get(c, "spouse_career_break.enabled") },
+      { p: "spouse_career_break.income_fraction", label: ["配偶休假期间还有多少收入", "Share of spouse's pay still earned"], type: "num", pct: true, step: 5, showIf: c => get(c, "household.enabled") && get(c, "spouse_career_break.enabled") },
+      { p: "spouse_career_break.return_wage_factor", label: ["配偶复工时拿到的薪资比例", "Share of pay the spouse returns on"], type: "num", pct: true, step: 5, showIf: c => get(c, "household.enabled") && get(c, "spouse_career_break.enabled") },
+      { p: "spouse_human_capital.enabled", label: ["配偶也有工资冲击", "Spouse also has wage shocks"], type: "check", showIf: c => get(c, "household.enabled") },
+      { p: "spouse_human_capital.permanent_sigma", label: ["配偶 · 永久性冲击 σ", "Spouse · permanent shock sigma"], type: "num", pct: true, step: 1, showIf: c => get(c, "household.enabled") && get(c, "spouse_human_capital.enabled") },
+      { p: "spouse_human_capital.transitory_sigma", label: ["配偶 · 一次性冲击 σ", "Spouse · transitory shock sigma"], type: "num", pct: true, step: 1, showIf: c => get(c, "household.enabled") && get(c, "spouse_human_capital.enabled") },
       { p: "household.spouse_base_salary_pre", label: ["配偶 · 基础薪资", "Spouse · base salary"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
+      { p: "household.spouse_bonus_mode_pre", label: ["配偶奖金形状", "Spouse bonus shape"], type: "select", options: [["fixed_amount", ["固定年度金额", "Fixed annual amount"]], ["uniform_pct", ["每年在工资百分比区间内波动", "Annual range as % of base pay"]]], showIf: c => get(c, "household.enabled") },
+      { p: "household.spouse_bonus_pct_min_pre", label: ["配偶奖金 % 下限", "Spouse bonus % min"], type: "num", pct: true, step: 1, showIf: c => get(c, "household.enabled") && get(c, "household.spouse_bonus_mode_pre") === "uniform_pct" },
+      { p: "household.spouse_bonus_pct_max_pre", label: ["配偶奖金 % 上限", "Spouse bonus % max"], type: "num", pct: true, step: 1, showIf: c => get(c, "household.enabled") && get(c, "household.spouse_bonus_mode_pre") === "uniform_pct" },
       { p: "household.spouse_bonus_pre", label: ["配偶 · 年终奖", "Spouse · bonus"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
       { p: "household.spouse_salary_growth_pre", label: ["配偶 · 薪资增长", "Spouse · salary growth"], type: "num", pct: true, step: 0.1, showIf: c => get(c, "household.enabled") },
       { p: "household.spouse_pretax_401k_limit_y1", label: ["配偶 · 401k 缴款", "Spouse · 401k contribution"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
+      { p: "household.spouse_workplace_plan_type", label: ["配偶 · 工作场所退休计划", "Spouse · workplace retirement plan"], type: "select", options: [["standard", ["普通 401(k) / 其他", "Standard 401(k) / other"]], ["403b", ["403(b)", "403(b)"]], ["simple", ["SIMPLE IRA / SIMPLE 401(k)", "SIMPLE IRA / SIMPLE 401(k)"]]], showIf: c => get(c, "household.enabled") },
+      { p: "household.spouse_simple_higher_limit", label: ["配偶 · SIMPLE 较高基础限额适用", "Spouse · higher SIMPLE base limit applies"], type: "check", showIf: c => get(c, "household.enabled") && get(c, "household.spouse_workplace_plan_type") === "simple" },
+      { p: "household.spouse_catchup_403b_15yr_enabled", label: ["配偶 · 403(b) 15 年服务补缴", "Spouse · 403(b) 15-year catch-up"], type: "check", showIf: c => get(c, "household.enabled") && get(c, "household.spouse_workplace_plan_type") === "403b" },
+      { p: "household.spouse_catchup_403b_15yr_prior_used_nominal", label: ["配偶 · 此前已用终身额度", "Spouse · lifetime amount already used"], type: "num", money: true, optionalNum: true, requiredIf: c => get(c, "household.enabled") && get(c, "household.spouse_workplace_plan_type") === "403b" && get(c, "household.spouse_catchup_403b_15yr_enabled"), showIf: c => get(c, "household.enabled") && get(c, "household.spouse_workplace_plan_type") === "403b" && get(c, "household.spouse_catchup_403b_15yr_enabled") },
+      { p: "household.spouse_catchup_403b_15yr_schedule_nominal", label: ["配偶 · 逐年额外额度（名义 $）", "Spouse · annual extra room (nominal $)"], type: "text", list: true, showIf: c => get(c, "household.enabled") && get(c, "household.spouse_workplace_plan_type") === "403b" && get(c, "household.spouse_catchup_403b_15yr_enabled") },
       { p: "household.spouse_roth_ira_limit_y1", label: ["配偶 · Roth IRA", "Spouse · Roth IRA"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
       { p: "household.spouse_hsa_limit_y1", label: ["配偶 · HSA", "Spouse · HSA"], type: "num", money: true, showIf: c => get(c, "household.enabled") },
+      { p: "household.spouse_hsa_coverage_tier", label: ["配偶 · HSA 保障类型", "Spouse · HSA coverage"], type: "select", options: [["none", ["无 / 不缴", "None / no contribution"]], ["self_only", ["仅本人", "Self-only"]], ["family", ["家庭", "Family"]]], showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
+      { p: "household.spouse_hsa_deductible_y1", label: ["配偶 · HDHP deductible", "Spouse · HDHP deductible"], type: "num", money: true, optionalNum: true, requiredIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0, showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
+      { p: "household.spouse_hsa_out_of_pocket_max_y1", label: ["配偶 · HDHP 自付上限", "Spouse · HDHP OOP max"], type: "num", money: true, optionalNum: true, requiredIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0, showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
+      { p: "household.spouse_hsa_disqualifying_other_coverage", label: ["配偶 · 有取消资格的其他保障", "Spouse · disqualifying coverage"], type: "check", showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
+      { p: "household.spouse_hsa_medicare_enrolled", label: ["配偶 · 已加入 Medicare", "Spouse · enrolled in Medicare"], type: "check", showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
+      { p: "household.spouse_hsa_claimed_as_dependent", label: ["配偶 · 可被申报为 dependent", "Spouse · claimable as dependent"], type: "check", showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
+      { p: "household.spouse_hsa_eligible_through_age", label: ["配偶 · HSA 资格到几岁（含）", "Spouse · HSA eligible through age"], type: "num", optionalNum: true, requiredIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0, showIf: c => get(c, "household.enabled") && +get(c, "household.spouse_hsa_limit_y1") > 0 },
       { p: "household.spouse_match_rate", label: ["配偶 · 雇主匹配率", "Spouse · match rate"], type: "num", pct: true, step: 0.5, showIf: c => get(c, "household.enabled") },
-      { p: "household.spouse_marginal_tax_pre", label: ["配偶 · 边际税率", "Spouse · marginal tax"], type: "num", pct: true, step: 1, showIf: c => get(c, "household.enabled") },
+      { p: "household.spouse_marginal_tax_pre", label: ["配偶 · 边际税率", "Spouse · marginal tax"], type: "num", pct: true, step: 1, showIf: c => get(c, "household.enabled") && get(c, "contributions.tax_model") === "flat" },
       { p: "income_streams.pension_enabled", label: ["有养老金/年金", "Pension / annuity"], type: "check" },
       { p: "income_streams.pension_owner", label: ["归属成员（年龄仍按你的年龄轴）", "Owner (ages stay on your timeline)"], type: "select", options: INCOME_OWNER_OPTIONS, showIf: c => get(c, "income_streams.pension_enabled") },
-      { p: "income_streams.pension_annual_real", label: ["年金年额（今日$）", "Pension per year (today $)"], type: "num", money: true, showIf: c => get(c, "income_streams.pension_enabled") },
+      { p: "income_streams.pension_amount_mode", label: ["金额来源", "Amount source"], type: "select", options: [["manual", ["直接填写年额", "Enter annual amount"]], ["traditional_db", ["传统 DB 公式", "Traditional DB formula"]]], showIf: c => get(c, "income_streams.pension_enabled") },
+      { p: "income_streams.pension_annual_real", label: ["年金年额（今日$）", "Pension per year (today $)"], type: "num", money: true, showIf: c => get(c, "income_streams.pension_enabled") && get(c, "income_streams.pension_amount_mode") !== "traditional_db" },
+      { p: "income_streams.pension_db_service_years", label: ["计入工龄", "Credited service years"], type: "num", min: 0, step: 0.5, showIf: c => get(c, "income_streams.pension_enabled") && get(c, "income_streams.pension_amount_mode") === "traditional_db" },
+      { p: "income_streams.pension_db_accrual_rate", label: ["每年 accrual rate", "Accrual rate per year"], type: "num", pct: true, step: 0.1, showIf: c => get(c, "income_streams.pension_enabled") && get(c, "income_streams.pension_amount_mode") === "traditional_db" },
+      { p: "income_streams.pension_db_final_average_salary_real", label: ["Final-average salary（今日$）", "Final-average salary (today $)"], type: "num", money: true, showIf: c => get(c, "income_streams.pension_enabled") && get(c, "income_streams.pension_amount_mode") === "traditional_db" },
       { p: "income_streams.pension_start_age", label: ["起领年龄", "Pension start age"], type: "num", min: 40, max: 75, showIf: c => get(c, "income_streams.pension_enabled") },
       { p: "income_streams.pension_cola", label: ["随通胀调整（COLA）", "Inflation-adjusted (COLA)"], type: "check", showIf: c => get(c, "income_streams.pension_enabled") },
       { p: "income_streams.rental_enabled", label: ["有出租房净收入", "Rental net income"], type: "check" },
@@ -758,7 +1027,7 @@
     { id: "relocation", title: ["搬迁目的地（可选）", "Relocation (optional)"], kicker: ["想比较搬到别处？选一个目的地或自定义——会自动填入生活成本/汇率/税/医疗。", "Comparing a move? Pick a destination or go custom — it fills cost-of-living / FX / tax / healthcare."], fields: [
       { p: "relocation.enabled", label: ["建模搬迁情景", "Model a relocation"], type: "check" },
       { p: "relocation.destination", label: ["目的地", "Destination"], type: "dest", showIf: c => get(c, "relocation.enabled") },
-      { p: "relocation.relocation_age", label: ["搬迁年龄", "Relocation age"], type: "num", min: 30, max: 80, showIf: c => get(c, "relocation.enabled") },
+      { p: "relocation.relocation_age", label: ["搬迁年龄", "Relocation age"], type: "num", min: 30, max: 80, optionalNum: true, requiredIf: c => get(c, "relocation.enabled"), showIf: c => get(c, "relocation.enabled") },
       { p: "relocation.col_ratio", label: ["生活成本比（相对本土）", "Cost-of-living ratio"], type: "num", pct: true, step: 1, showIf: c => get(c, "relocation.enabled") },
       { p: "state.inflation_cn", label: ["目的地通胀", "Destination inflation"], type: "num", pct: true, step: 0.1, showIf: c => get(c, "relocation.enabled") },
       { p: "relocation.fx_sigma", label: ["汇率波动", "FX volatility"], type: "num", pct: true, step: 0.5, showIf: c => get(c, "relocation.enabled") },
@@ -776,7 +1045,57 @@
         { p: "promotion.timing_max", label: ["最晚（第N年）", "Latest (yr)"], type: "num", min: 1, max: 20 },
         { p: "promotion.bonus_pct_min", label: ["奖金% 下限", "Bonus % min"], type: "num", pct: true, step: 1 },
         { p: "promotion.bonus_pct_max", label: ["奖金% 上限", "Bonus % max"], type: "num", pct: true, step: 1 },
+        // Deliberately unconditional: this is an advanced group, and the
+        // renderer does not evaluate visibility predicates there (a gate in
+        // test_field_help.py enforces that none appear). The field therefore
+        // stays visible under the schedule, and its help text says it is not
+        // read -- a predicate here would promise a hiding that never happens.
         { p: "promotion.marginal_tax_post", label: ["边际税率（晋升后）", "Marginal tax (post)"], type: "num", pct: true, step: 1 },
+      ]},
+      { title: ["配偶晋升", "Spouse promotion"], fields: [
+        { p: "spouse_promotion.enabled", label: ["给配偶建模一次晋升", "Model one spouse promotion"], type: "check" },
+        { p: "spouse_promotion.timing_mode", label: ["晋升时间", "Promotion timing"], type: "select", options: [["fixed", ["固定年份", "Fixed year"]], ["uniform_int", ["整数年份区间", "Integer-year window"]], ["never", ["永不发生", "Never"]]] },
+        { p: "spouse_promotion.timing_min", label: ["最早（第 N 年）", "Earliest (year N)"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") === "uniform_int" },
+        { p: "spouse_promotion.timing_max", label: ["最晚（第 N 年）", "Latest (year N)"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") === "uniform_int" },
+        { p: "spouse_promotion.timing_fixed", label: ["固定在第 N 年", "Fixed at year N"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") === "fixed" },
+        { p: "spouse_promotion.base_salary_post", label: ["配偶晋升后基础年薪", "Spouse post-promo base salary"], type: "num", money: true, min: 0.01, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") !== "never" },
+        { p: "spouse_promotion.base_growth_post", label: ["配偶晋升后薪资增长", "Spouse post-promo salary growth"], type: "num", pct: true, min: -99, step: 0.1, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") !== "never" },
+        { p: "spouse_promotion.bonus_mode", label: ["配偶晋升后奖金形状", "Spouse post-promo bonus shape"], type: "select", options: [["fixed", ["固定工资百分比", "Fixed share of base"]], ["uniform", ["每年在区间内波动", "Annual range"]]] },
+        { p: "spouse_promotion.bonus_pct_min", label: ["配偶晋升后奖金 % 下限", "Spouse post-promo bonus % min"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") !== "never" && get(c, "spouse_promotion.bonus_mode") === "uniform" },
+        { p: "spouse_promotion.bonus_pct_max", label: ["配偶晋升后奖金 % 上限", "Spouse post-promo bonus % max"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") !== "never" && get(c, "spouse_promotion.bonus_mode") === "uniform" },
+        { p: "spouse_promotion.bonus_pct_fixed", label: ["配偶晋升后固定奖金 %", "Spouse fixed post-promo bonus %"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") !== "never" && get(c, "spouse_promotion.bonus_mode") === "fixed" },
+        { p: "spouse_promotion.bonus_resampled_each_year", label: ["区间奖金每年重抽", "Redraw range bonus each year"], type: "check" },
+        { p: "spouse_promotion.marginal_tax_post", label: ["配偶晋升后边际税率", "Spouse marginal tax (post)"], type: "num", pct: true, min: 0, max: 99, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_promotion.enabled") && get(c, "spouse_promotion.timing_mode") !== "never" && get(c, "contributions.tax_model") === "flat" },
+      ]},
+      { title: ["第二次晋升", "Second promotion"], fields: [
+        { p: "second_promotion.enabled", label: ["给你建模第二次晋升", "Model your second promotion"], type: "check" },
+        { p: "second_promotion.timing_mode", label: ["第二次晋升时间", "Second-promotion timing"], type: "select", options: [["fixed", ["固定年份", "Fixed year"]], ["uniform_int", ["整数年份区间", "Integer-year window"]], ["never", ["永不发生", "Never"]]] },
+        { p: "second_promotion.timing_min", label: ["最早（第 N 年）", "Earliest (year N)"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") === "uniform_int" },
+        { p: "second_promotion.timing_max", label: ["最晚（第 N 年）", "Latest (year N)"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") === "uniform_int" },
+        { p: "second_promotion.timing_fixed", label: ["固定在第 N 年", "Fixed at year N"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") === "fixed" },
+        { p: "second_promotion.base_salary_post", label: ["第二次晋升后基础年薪", "Base salary after second promotion"], type: "num", money: true, min: 0.01, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") !== "never" },
+        { p: "second_promotion.base_growth_post", label: ["第二次晋升后薪资增长", "Salary growth after second promotion"], type: "num", pct: true, min: -99, step: 0.1, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") !== "never" },
+        { p: "second_promotion.bonus_mode", label: ["第二次晋升后奖金形状", "Bonus shape after second promotion"], type: "select", options: [["fixed", ["固定工资百分比", "Fixed share of base"]], ["uniform", ["每年在区间内波动", "Annual range"]]] },
+        { p: "second_promotion.bonus_pct_min", label: ["奖金 % 下限", "Bonus % min"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") !== "never" && get(c, "second_promotion.bonus_mode") === "uniform" },
+        { p: "second_promotion.bonus_pct_max", label: ["奖金 % 上限", "Bonus % max"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") !== "never" && get(c, "second_promotion.bonus_mode") === "uniform" },
+        { p: "second_promotion.bonus_pct_fixed", label: ["固定奖金 %", "Fixed bonus %"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") !== "never" && get(c, "second_promotion.bonus_mode") === "fixed" },
+        { p: "second_promotion.bonus_resampled_each_year", label: ["区间奖金每年重抽", "Redraw range bonus each year"], type: "check" },
+        { p: "second_promotion.marginal_tax_post", label: ["第二次晋升后边际税率", "Marginal tax after second promotion"], type: "num", pct: true, min: 0, max: 99, step: 1, optionalNum: true, requiredIf: c => get(c, "second_promotion.enabled") && get(c, "second_promotion.timing_mode") !== "never" && get(c, "contributions.tax_model") === "flat" },
+      ]},
+      { title: ["配偶第二次晋升", "Spouse second promotion"], fields: [
+        { p: "spouse_second_promotion.enabled", label: ["给配偶建模第二次晋升", "Model spouse second promotion"], type: "check" },
+        { p: "spouse_second_promotion.timing_mode", label: ["第二次晋升时间", "Second-promotion timing"], type: "select", options: [["fixed", ["固定年份", "Fixed year"]], ["uniform_int", ["整数年份区间", "Integer-year window"]], ["never", ["永不发生", "Never"]]] },
+        { p: "spouse_second_promotion.timing_min", label: ["最早（第 N 年）", "Earliest (year N)"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") === "uniform_int" },
+        { p: "spouse_second_promotion.timing_max", label: ["最晚（第 N 年）", "Latest (year N)"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") === "uniform_int" },
+        { p: "spouse_second_promotion.timing_fixed", label: ["固定在第 N 年", "Fixed at year N"], type: "num", min: 1, max: 40, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") === "fixed" },
+        { p: "spouse_second_promotion.base_salary_post", label: ["配偶第二次晋升后基础年薪", "Spouse base salary after second promotion"], type: "num", money: true, min: 0.01, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") !== "never" },
+        { p: "spouse_second_promotion.base_growth_post", label: ["配偶第二次晋升后薪资增长", "Spouse salary growth after second promotion"], type: "num", pct: true, min: -99, step: 0.1, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") !== "never" },
+        { p: "spouse_second_promotion.bonus_mode", label: ["配偶第二次晋升后奖金形状", "Spouse bonus shape after second promotion"], type: "select", options: [["fixed", ["固定工资百分比", "Fixed share of base"]], ["uniform", ["每年在区间内波动", "Annual range"]]] },
+        { p: "spouse_second_promotion.bonus_pct_min", label: ["配偶奖金 % 下限", "Spouse bonus % min"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") !== "never" && get(c, "spouse_second_promotion.bonus_mode") === "uniform" },
+        { p: "spouse_second_promotion.bonus_pct_max", label: ["配偶奖金 % 上限", "Spouse bonus % max"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") !== "never" && get(c, "spouse_second_promotion.bonus_mode") === "uniform" },
+        { p: "spouse_second_promotion.bonus_pct_fixed", label: ["配偶固定奖金 %", "Spouse fixed bonus %"], type: "num", pct: true, min: 0, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") !== "never" && get(c, "spouse_second_promotion.bonus_mode") === "fixed" },
+        { p: "spouse_second_promotion.bonus_resampled_each_year", label: ["区间奖金每年重抽", "Redraw range bonus each year"], type: "check" },
+        { p: "spouse_second_promotion.marginal_tax_post", label: ["配偶第二次晋升后边际税率", "Spouse marginal tax after second promotion"], type: "num", pct: true, min: 0, max: 99, step: 1, optionalNum: true, requiredIf: c => get(c, "spouse_second_promotion.enabled") && get(c, "spouse_second_promotion.timing_mode") !== "never" && get(c, "contributions.tax_model") === "flat" },
       ]},
       { title: ["失业风险", "Layoff risk"], fields: [
         { p: "layoff.enabled", label: ["建模失业风险", "Model layoff risk"], type: "check" },
@@ -784,6 +1103,24 @@
         { p: "layoff.return_threshold", label: ["坏年阈值（收益 ≤）", "Bad-year threshold (return ≤)"], type: "num", pct: true, step: 1 },
         { p: "layoff.bad_year_multiplier", label: ["坏年概率倍数", "Bad-year multiplier"], type: "num", min: 1, max: 10, step: 0.5 },
         { p: "layoff.gap_months", label: ["失业空窗（月）", "Gap (months)"], type: "num", min: 1, max: 12, step: 0.5 },
+        { p: "layoff.medical_premium_monthly_real", label: ["空窗期每月净新增医保（今日$）", "Net-new monthly health premium during gap (today $)"], type: "num", money: true },
+      ]},
+      { title: ["配偶失业风险", "Spouse layoff risk"], fields: [
+        { p: "spouse_layoff.enabled", label: ["也给配偶建模失业风险", "Model the spouse's layoff risk too"], type: "check" },
+        { p: "spouse_layoff.p_annual", label: ["配偶年失业概率", "Spouse annual layoff prob."], type: "num", pct: true, step: 0.5 },
+        { p: "spouse_layoff.return_threshold", label: ["配偶坏年阈值（收益 ≤）", "Spouse bad-year threshold (return ≤)"], type: "num", pct: true, step: 1 },
+        { p: "spouse_layoff.bad_year_multiplier", label: ["配偶坏年概率倍数", "Spouse bad-year multiplier"], type: "num", min: 1, max: 10, step: 0.5 },
+        { p: "spouse_layoff.p_cap", label: ["配偶年概率上限", "Spouse annual probability cap"], type: "num", pct: true, step: 1 },
+        { p: "spouse_layoff.gap_months", label: ["配偶失业空窗（月）", "Spouse gap (months)"], type: "num", min: 1, max: 12, step: 0.5 },
+        { p: "spouse_layoff.gap_months_per_year_of_age", label: ["配偶找工作时长随龄增加（月/岁）", "Spouse extra search months per year of age"], type: "num", step: 0.5 },
+        { p: "spouse_layoff.decay_from_age", label: ["配偶从几岁开始变难", "Age it starts getting harder for the spouse"], type: "num", min: 30, max: 70 },
+        { p: "spouse_layoff.max_gap_months", label: ["配偶空窗上限（月）", "Spouse maximum gap (months)"], type: "num", min: 1, max: 12, step: 0.5 },
+      ]},
+      { title: ["SSDI 伤残压力", "SSDI disability stress"], fields: [
+        { p: "disability.enabled", label: ["建模 SSA disabled-worker award", "Model an SSA disabled-worker award"], type: "check" },
+        { p: "disability.ssdi_monthly_real", label: ["SSDI 月度可花金额（今日$）", "Monthly spendable SSDI (today $)"], type: "num", money: true },
+        { p: "disability.ltd_monthly_real", label: ["LTD 月度可花金额（已扣 SSDI offset）", "Monthly spendable LTD (after SSDI offset)"], type: "num", money: true },
+        { p: "disability.medical_premium_annual_real", label: ["新增年度医保保费（今日$）", "Extra annual health premium (today $)"], type: "num", money: true },
       ]},
       { title: ["住房（租/购/按揭）", "Housing (rent/buy/mortgage)"], fields: [
         { p: "housing.enabled", label: ["建模住房现金流", "Model housing cash flows"], type: "check" },
@@ -869,7 +1206,11 @@
         { p: "rule.lower_guardrail", label: ["GK 下护栏", "GK lower guardrail"], type: "num", pct: true, step: 1 },
         { p: "rule.adjustment_pct", label: ["GK 调整幅度", "GK adjustment"], type: "num", pct: true, step: 1 },
         { p: "rule.cut_realisation", label: ["削减的实际执行比例", "How much of a cut actually happens"], type: "num", pct: true, step: 5 },
-        { p: "estate.exemption_real", label: ["遗产税豁免额（今日$，选填）", "Estate tax exemption (today $, optional)"], type: "num", money: true, optional: true },
+        // `optional: true` was the only use of that key in this file and the
+      // renderer never read it, so the field advertised itself as optional
+      // and still rendered its null default as 0. `optionalNum` is the key
+      // that actually does it.
+      { p: "estate.exemption_real", label: ["遗产税豁免额（今日$，选填）", "Estate tax exemption (today $, optional)"], type: "num", money: true, optionalNum: true },
         { p: "mortality.enabled", label: ["启用死亡率", "Mortality enabled"], type: "check" },
         { p: "mortality.sex", label: ["性别（死亡率表）", "Sex (mortality table)"], type: "select", options: [["male", ["男", "Male"]], ["female", ["女", "Female"]]] },
       ]},
@@ -907,6 +1248,10 @@
     // matches no option, and the control then wrote "" back -- a value the
     // preflight refuses, so the wizard could not reach the run.
     if (f.optionalSelect && v == null) return "";
+    // A per-year schedule the user types as a list. Rendered blank when empty
+    // rather than as "0": an empty schedule is a question nobody answered, and
+    // the adapter refuses it by name if the switch beside it is on.
+    if (f.list) return Array.isArray(v) ? v.join(", ") : "";
     if (v == null) return f.type === "check" ? false : (f.type === "text" ? "" : 0);
     if (f.pct) v = +(v * 100).toFixed(6);
     return v;
@@ -921,6 +1266,14 @@
       let blank = (raw === "" || raw == null || !Number.isFinite(+raw));
       set(state.config, f.p,
           blank ? null : (f.pct ? +raw / 100 : +raw));
+      return;
+    }
+    // The list control writes an ARRAY, not the string the box holds. Anything
+    // the user typed that is not a finite number is kept as-is (NaN) so the
+    // adapter refuses it by name instead of this line silently dropping it.
+    if (f.list) {
+      const parts = String(raw).split(/[,\s]+/).filter(x => x !== "");
+      set(state.config, f.p, parts.map(x => +x));
       return;
     }
     if (f.type === "check") v = !!raw;
@@ -1063,12 +1416,33 @@
           // and keep the control visibly invalid until the user supplies one.
           inp.classList.add("invalid");
           return;
+        } else if (f.p === "social_security.pia_monthly_y0") {
+          writeF(f, inp.value);
+          if (get(state.config, "social_security.ssa_basis_v1")) {
+            delete state.config.social_security.ssa_basis_v1;
+            toast(tt("已切回手填 PIA 常数模式", "Switched back to manual constant PIA"));
+          }
         } else {
           inp.classList.remove("invalid");
           writeF(f, inp.value);
         }
-        const vv = $("v_" + f.p); if (vv) vv.textContent = fmtV(f, +inp.value || 0); onWizChange();
+        const vv = $("v_" + f.p); if (vv) vv.textContent = fmtV(f, +inp.value || 0);
+        onWizChange();
       });
+      // A NUMERIC field can gate other controls, and only checkboxes and
+      // selects rebuilt the step. Measured: 21 controls sit behind 3 numeric
+      // gates, and ten of them are the HDHP eligibility facts behind
+      // `contributions.hsa_limit_y1` (ten more behind the spouse's). Typing an
+      // HSA amount therefore put the plan into a state the server refuses --
+      // "contributions.hsa_coverage_tier must be 'self_only' or 'family' for a
+      // non-zero HSA contribution" -- while every control that could answer
+      // that refusal stayed absent from the DOM. A dead end, shipped in
+      // v10.0-installed-30, found by typing into the running page.
+      //
+      // On `change`, not on `input`: the value is committed and the field has
+      // already lost focus, so rebuilding cannot take the caret out of a
+      // half-typed number. Same thing checkboxes and selects have always done.
+      inp.addEventListener("change", () => { buildStep(); });
       w.appendChild(inp);
       if (f.p === "medical.premium_aca") {
         const source = document.createElement("div");
@@ -1127,6 +1501,9 @@
       if (f.type !== "num") return;
       const el = focus ? document.querySelector(`.field[data-path="${f.p}"] input`) : null;
       const raw = get(state.config, f.p);
+      const requiredBlank = f.optionalNum && raw == null && f.requiredIf
+        && f.requiredIf(state.config);
+      if (f.optionalNum && raw == null && !requiredBlank) return;
       const v = f.pct ? (+raw * 100) : +raw;
       const premiumControlInvalid = f.p === "medical.premium_aca" && el
         && (el.value === "" || !Number.isFinite(+el.value) || +el.value <= 0);
@@ -1144,7 +1521,7 @@
             "medical.cpi_delta_routine", "medical.cpi_delta_premium",
             "medical.cpi_delta_oop"].includes(f.p)
         && el && el.value === "";
-      if (premiumControlInvalid || ageEndControlInvalid || shareControlInvalid || annualMedicalBlank || !isFinite(v) || (f.min != null && v < f.min) || (f.max != null && v > f.max)) bad.push(el || f.p);
+      if (requiredBlank || premiumControlInvalid || ageEndControlInvalid || shareControlInvalid || annualMedicalBlank || !isFinite(v) || (f.min != null && v < f.min) || (f.max != null && v > f.max)) bad.push(el || f.p);
     });
     if (st.id === "basics") {
       const m1 = +get(state.config, "milestones.0") || 0, m2 = +get(state.config, "milestones.1") || 0;
@@ -1192,6 +1569,11 @@
   function buildStep() {
     const s = STEPS[state.step];
     const host = $("wizStep");
+    // The savings figure comes from the server (E33), so ask on arrival as
+    // well as on edit -- otherwise a user who opens the wizard and walks
+    // straight to the review step reads "—" for a plan that has an answer.
+    // Debounced, so stepping through the wizard sends one request.
+    requestSavingsEstimate();
     // A ticked field rebuilds the whole step (dependent fields appear/vanish) — capture which
     // fgroups were open so a checkbox doesn't collapse the group you're working in. Same-step
     // only, keyed by group order; navigation to a different step keeps the defaults.
@@ -1272,7 +1654,10 @@
   function renderCsvResult() {
     const r = CSVI.data, hostEl = $("csviResult");
     if (!r || !hostEl) return;
-    const B_LAB = { pretax_401k: tt("税前 401k/IRA", "Pretax 401k/IRA"), roth_ira: "Roth IRA", hsa: "HSA", taxable: tt("应税账户", "Taxable"), cash: tt("现金", "Cash"), skip: tt("忽略", "Skip") };
+    // The importer can now return `gov_457b` (OPEN_ITEMS E37). A bucket the
+    // server can name and this list cannot show would leave the account with
+    // no option to select and no way to say so.
+    const B_LAB = { pretax_401k: tt("税前 401k/IRA", "Pretax 401k/IRA"), gov_457b: tt("政府 457(b)", "Gov 457(b)"), roth_ira: "Roth IRA", hsa: "HSA", taxable: tt("应税账户", "Taxable"), cash: tt("现金", "Cash"), skip: tt("忽略", "Skip") };
     const opts = b => Object.entries(B_LAB).map(([k, la]) => `<option value="${k}" ${k === (b || "skip") ? "selected" : ""}>${la}</option>`).join("");
     hostEl.innerHTML = `
       <table class="ed-table" style="margin-top:10px"><thead><tr>
@@ -1308,11 +1693,11 @@
       <div class="compute-row" style="margin-top:16px">
         <button class="btn-ghost sm" id="ssaiBtn">📄 ${tt("从 SSA 记录导入 PIA…（ssa.gov 的 XML 报表）", "Import PIA from SSA record… (ssa.gov XML statement)")}</button>
         <input type="file" id="ssaiFile" accept=".xml" style="display:none">
-        <label class="hint" style="cursor:pointer"><input type="checkbox" id="ssaiProj"> ${tt("假设继续当前收入工作到 62 岁", "Assume current earnings continue to 62")}</label>
+        <label class="hint" style="cursor:pointer"><input type="checkbox" id="ssaiProj"> ${tt("仅预览：假设当前收入持续到 62 岁", "Preview only: assume current earnings continue to 62")}</label>
         <span class="hint" id="ssaiHint"></span>
       </div>
       <div id="ssaiResult"></div>
-      <p class="cap">${tt("完全本机解析：逐年收入历史不回显、不落盘、不打日志，只返回 AIME/PIA 与覆盖统计。FIRE 人群默认不投影未来收入——提前退休意味着前 35 年里有零。", "Parsed entirely on this machine: the year-by-year earnings history is never echoed, stored, or logged — only AIME/PIA and coverage stats come back. Default: no future-earnings projection — early retirement means zeros in the top-35.")}</p>`;
+      <p class="cap">${tt("完全本机解析：原始 XML 不落盘，姓名和逐年收入历史也不保存。应用后，计划只保存 35 个不带年份的指数化金额，让模拟中的停工、失业和低薪准确替换最低收入年；不会把它当作原始报表。", "Parsed entirely on this machine: raw XML is not stored, nor are names or year-by-year earnings histories. After applying, the plan stores only 35 indexed amounts without calendar years so simulated breaks, layoffs, and lower pay can replace the lowest years exactly; this is not the original statement.")}</p>`;
     host.appendChild(box);
     $("ssaiBtn").addEventListener("click", () => $("ssaiFile").click());
     $("ssaiProj").addEventListener("change", () => { if (SSAI.text) ssaiParse(); });
@@ -1352,13 +1737,14 @@
         <div class="readout"><div class="lab">${tt("有收入年数", "Years w/ earnings")}</div><div class="num">${r.years_with_earnings}${r.rows_skipped ? tt(`（另有 ${r.rows_skipped} 行无法解析，已跳过）`, ` (${r.rows_skipped} row(s) unreadable and skipped)`) : ""}${r.projected_years ? tt(`（含投影 ${r.projected_years}）`, ` (incl. ${r.projected_years} projected)`) : ""}</div></div>
         <div class="readout"><div class="lab">${tt("前 35 年中的零", "Zeros in top-35")}</div><div class="num">${r.zeros_in_top35}</div></div>
       </div>
-      <div class="compute-row"><button class="btn-run sm" id="ssaiApply">✓ ${tt("应用 PIA 到社保设置", "Apply PIA to Social Security")}</button>
+      <div class="compute-row"><button class="btn-run sm" id="ssaiApply">✓ ${tt("应用收入基础到社保设置", "Apply earnings basis to Social Security")}</button>
       <span class="hint">${tt(`弯点 $${r.bend_points[0]}/$${r.bend_points[1]}（资格年 ${r.eligibility_year}）· AWI 表至 ${r.awi_vintage}`, `bends $${r.bend_points[0]}/$${r.bend_points[1]} (eligibility ${r.eligibility_year}) · AWI through ${r.awi_vintage}`)}${importStatus}</span></div>`;
     $("ssaiApply").addEventListener("click", () => {
       set(state.config, "social_security.pia_monthly_y0", Math.round(r.pia_monthly));
+      set(state.config, "social_security.ssa_basis_v1", r.ssa_basis_v1);
       set(state.config, "social_security.enabled", true);
       saveDraft(true); buildStep();
-      toast(tt("PIA 已应用：$" + Math.round(r.pia_monthly) + "/月", "PIA applied: $" + Math.round(r.pia_monthly) + "/mo"));
+      toast(tt("PIA 与社保收入基础已应用", "PIA and Social Security earnings basis applied"));
     });
   }
 
@@ -1552,13 +1938,26 @@
     const out = [];
     let gross = (+get(state.config, "contributions.base_salary_pre") || 0) + (+get(state.config, "contributions.bonus_pre") || 0) + (+get(state.config, "contributions.ot_income_pre") || 0);
     if (get(state.config, "household.enabled")) gross += (+get(state.config, "household.spouse_base_salary_pre") || 0) + (+get(state.config, "household.spouse_bonus_pre") || 0);
-    const sav = estSavings(), sr = gross > 0 ? sav / gross : 0;
+    // No estimate, no claim. The old code turned "not computed" into a
+    // savings rate of 0 and then warned the user they save almost nothing --
+    // a warning manufactured out of an absent answer.
+    const sr = (SAV.state === "ok" && SAV.rate != null) ? SAV.rate : null;
     const swr = (+get(state.config, "state.swr_pref") || 0) * 100;
     const exp = +get(state.config, "state.expenses_y0") || 0;
     const spendNow = +get(state.config, "contributions.annual_spending_now") || exp;
     const age = +get(state.config, "state.start_age") || 0;
-    if (sr > 0.75) out.push(tt(`储蓄率 ≈ ${(sr * 100).toFixed(0)}%——高于绝大多数人，确认当前开销 ${money(spendNow)} 没填漏。`, `Savings rate ≈ ${(sr * 100).toFixed(0)}% — unusually high; confirm current spending ${money(spendNow)} isn't missing anything.`));
-    if (sr < 0.05 && gross > 0) out.push(tt(`储蓄率 ≈ ${(sr * 100).toFixed(0)}%——几乎存不下钱，FIRE 会非常远。`, `Savings rate ≈ ${(sr * 100).toFixed(0)}% — almost nothing saved; FIRE will be very far.`));
+    if (sr == null && gross > 0) out.push(tt(
+      "储蓄率还没算出来（服务端未回答），所以这里不对它下判断。",
+      "The savings rate has not been computed yet, so nothing is claimed about it here."));
+    // A shortfall is not a low savings rate, it is a plan that does not cover
+    // its own spending, and it gets said first and plainly. Before this, the
+    // page could not tell the two apart: it congratulated a $45,000 earner
+    // on saving 87% while the engine had them $3,662 a year short.
+    if (SAV.state === "ok" && SAV.shortfall > 0) out.push(tt(
+      `这个计划的第一年就差 ${money(SAV.shortfall)} 才够覆盖开销 —— 不是存得少，是存不下。`,
+      `This plan is ${money(SAV.shortfall)} short of covering its own spending in year one — not saving little, saving nothing.`));
+    if (sr != null && sr > 0.75) out.push(tt(`储蓄率 ≈ ${(sr * 100).toFixed(0)}%——高于绝大多数人，确认当前开销 ${money(spendNow)} 没填漏。`, `Savings rate ≈ ${(sr * 100).toFixed(0)}% — unusually high; confirm current spending ${money(spendNow)} isn't missing anything.`));
+    if (sr != null && sr < 0.05 && gross > 0) out.push(tt(`储蓄率 ≈ ${(sr * 100).toFixed(0)}%——几乎存不下钱，FIRE 会非常远。`, `Savings rate ≈ ${(sr * 100).toFixed(0)}% — almost nothing saved; FIRE will be very far.`));
     if (swr > 4.5) out.push(tt(`SWR ${swr.toFixed(2)}% 偏激进（经典研究多在 3–4%）。`, `SWR ${swr.toFixed(2)}% is aggressive (classic studies: 3–4%).`));
     if (swr < 2.5 && swr > 0) out.push(tt(`SWR ${swr.toFixed(2)}% 非常保守——FIRE 门槛会很高。`, `SWR ${swr.toFixed(2)}% is very conservative — a high FI number.`));
     if (exp > 0 && exp < 15000) out.push(tt(`退休年支出 ${money(exp)} 低于多数人的生存线，确认单位没错。`, `Retirement spend ${money(exp)} is below subsistence for most — check the units.`));
@@ -1678,28 +2077,81 @@
     rd.readAsText(file);
   }
 
-  function onWizChange() { renderWizSide(); $("saveHint").textContent = tt("有未保存改动", "unsaved changes"); }
-  function estSavings() {
-    const c = get(state.config, "contributions") || {}, st = get(state.config, "state") || {};
-    const base = +c.base_salary_pre || 0, ot = +c.ot_income_pre || 0, bonus = +c.bonus_pre || 0;
-    const gross = base + ot + bonus, matchBase = base + ot + (c.match_excludes_bonus ? 0 : bonus);
-    const match = (+c.match_rate || 0) * matchBase, preTax = +c.pretax_401k_limit_y1 || 0, roth = +c.roth_ira_limit_y1 || 0, hsa = +c.hsa_limit_y1 || 0;
-    const afterTax = Math.max(0, gross - preTax - hsa) * (1 - (+c.marginal_tax_pre || 0.24));
-    const spendNow = +c.annual_spending_now || +st.expenses_y0 || 0;
-    let total = preTax + roth + hsa + match + Math.max(0, afterTax - spendNow - roth);
-    const hh = get(state.config, "household") || {};
-    if (hh.enabled) {
-      const sGross = (+hh.spouse_base_salary_pre || 0) + (+hh.spouse_bonus_pre || 0);
-      const sPre = +hh.spouse_pretax_401k_limit_y1 || 0, sRoth = +hh.spouse_roth_ira_limit_y1 || 0, sHsa = +hh.spouse_hsa_limit_y1 || 0;
-      const sMatch = (+hh.spouse_match_rate || 0) * (+hh.spouse_base_salary_pre || 0);
-      // spouse residual: no second expense subtraction (household spending is counted once)
-      const sAfter = Math.max(0, sGross - sPre - sHsa) * (1 - (+hh.spouse_marginal_tax_pre || 0.24));
-      total += sPre + sRoth + sHsa + sMatch + Math.max(0, sAfter - sRoth);
+  function onWizChange() { renderWizSide(); requestSavingsEstimate(); $("saveHint").textContent = tt("有未保存改动", "unsaved changes"); }
+
+  // ---------------------------------------------------------- E33 · savings
+  // This used to be `estSavings()`, a second savings algorithm living in the
+  // page: it filled three accounts to their statutory limits and applied one
+  // flat rate. Measured against the engine before it was removed, at a
+  // $45,000 salary it said the household saved 87% of gross -- and the
+  // anomaly note below congratulated them for beating almost everybody --
+  // while the engine had them $3,662 A YEAR SHORT of their own spending. In
+  // `savings_mode="savings_rate"` it was worse: it returned the same number
+  // whether the user typed 10%, 30% or 50%, because it never read
+  // `savings_mode` at all. The control they had just moved did nothing to
+  // the figure beside it.
+  //
+  // So there is no arithmetic here any more. The server runs the engine's own
+  // first-year contribution code and this holds the answer.
+  //
+  // `savings` is null until an answer arrives and stays null when one cannot
+  // be had. It is NEVER zero for those cases: "not computed" and "computed,
+  // and it is zero" have to look different, and a savings figure is exactly
+  // the number a reader would act on.
+  const SAV = { state: "unknown", savings: null, rate: null, shortfall: 0,
+                field: null, token: 0 };
+  let _savTimer = null;
+  function requestSavingsEstimate() {
+    clearTimeout(_savTimer);
+    // Debounced: the sidebar re-renders on every keystroke, and a request per
+    // keystroke would put the engine lock on the critical path of typing.
+    _savTimer = setTimeout(fetchSavingsEstimate, 350);
+  }
+  async function fetchSavingsEstimate() {
+    const token = ++SAV.token;
+    SAV.state = "pending";
+    paintSavings();
+    let next;
+    try {
+      const capability = await ensureFireCapability();
+      const r = await fetch("/api/estimate/savings", { method: "POST",
+        headers: { "Content-Type": "application/json",
+                   "X-FIRE-Capability": capability },
+        body: JSON.stringify({ config: state.config }) });
+      const j = await r.json().catch(() => ({}));
+      next = r.ok && !j.error
+        ? { state: "ok", savings: +j.savings, rate: (j.savings_rate == null ? null : +j.savings_rate),
+            shortfall: +j.expense_shortfall || 0, field: null }
+        // A refusal names the field the plan is missing. Showing that beats
+        // showing a number, which is the whole point of this endpoint.
+        : { state: "refused", savings: null, rate: null, shortfall: 0,
+            field: j.field || null };
+    } catch (e) {
+      next = { state: "unreachable", savings: null, rate: null, shortfall: 0, field: null };
     }
-    return total;
+    // A slower answer to an older config must not overwrite a newer one.
+    if (token !== SAV.token) return;
+    Object.assign(SAV, next);
+    paintSavings();
+  }
+  function paintSavings() {
+    // Only the one cell, so this can never re-enter the change handler that
+    // triggered the fetch. The review step reads the same cache when it
+    // renders, and says so when there is nothing in it yet.
+    const cell = document.getElementById("wizSavingsCell");
+    if (cell) cell.textContent = savingsText();
+  }
+  function savingsText() {
+    if (SAV.state === "ok" && SAV.savings != null) return money(SAV.savings);
+    if (SAV.state === "pending") return tt("计算中…", "computing…");
+    if (SAV.state === "refused") {
+      return SAV.field ? tt("缺 ", "needs ") + SAV.field : tt("计划不完整", "plan incomplete");
+    }
+    if (SAV.state === "unreachable") return tt("取不到", "unavailable");
+    return "—";
   }
   function renderWizSide() {
-    const buckets = [["initial.pretax_401k", tt("税前 401k", "Pretax 401k")], ["initial.roth_ira", "Roth IRA"], ["initial.hsa", "HSA"], ["initial.taxable", tt("应税", "Taxable")], ["other_assets.cash", tt("现金", "Cash")], ["other_assets.other_liquid", tt("其他流动", "Other liquid")]];
+    const buckets = [["initial.pretax_401k", tt("税前 401k", "Pretax 401k")], ["initial.gov_457b", tt("政府 457(b)", "Gov 457(b)")], ["initial.roth_ira", "Roth IRA"], ["initial.hsa", "HSA"], ["initial.taxable", tt("应税", "Taxable")], ["other_assets.cash", tt("现金", "Cash")], ["other_assets.other_liquid", tt("其他流动", "Other liquid")]];
     if (get(state.config, "household.enabled")) {
       buckets.push(["household.spouse_initial_pretax", tt("配偶税前", "Sp. pretax")],
                    ["household.spouse_initial_roth", tt("配偶 Roth", "Sp. Roth")],
@@ -1714,7 +2166,12 @@
     const spend = +get(state.config, "state.expenses_y0") || 0;
     const _swrRaw = +get(state.config, "state.swr_pref");
     const swr = isFinite(_swrRaw) ? _swrRaw : 0;   // 0 must show as 0, not fall back (audit P2-1)
-    const der = [[tt("年度储蓄 ≈", "Savings ≈"), money(estSavings()), "accent"], [tt("FI 数", "FI number"), swr > 0 ? money(spend / swr) : "—", ""], [tt("现价组合", "Portfolio"), money(tot), "home"], ["SWR", (swr * 100).toFixed(2) + "%", ""]];
+    // `savingsText()` and not a number: the cell has to be able to say
+    // "computing", "plan incomplete" or "—", and a zero would read as a
+    // measured zero. The id is what `paintSavings()` writes into when the
+    // server answers.
+    const der = [[tt("年度储蓄 ≈", "Savings ≈"),
+                  `<span id="wizSavingsCell">${savingsText()}</span>`, "accent"], [tt("FI 数", "FI number"), swr > 0 ? money(spend / swr) : "—", ""], [tt("现价组合", "Portfolio"), money(tot), "home"], ["SWR", (swr * 100).toFixed(2) + "%", ""]];
     $("wizDerived").innerHTML = der.map(([la, v, c]) => `<div class="readout"><div class="lab">${la}</div><div class="num ${c}">${v}</div></div>`).join("");
   }
   const romNum = n => ["Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ"][n - 1] || n;
@@ -1771,10 +2228,15 @@
     // inputs. `tests/test_ui_server_seams.py` now derives this set from the
     // page's own `<panel>Run`/`<panel>Out` convention rather than trusting
     // that whoever adds the next panel remembers this line.
-    "frOut", "rschOut", "alocOut", "beqOut", "decReviewOut"
+    "frOut", "rschOut", "alocOut", "beqOut", "execOut", "decReviewOut", "cbOut"
   ];
   const OPTIONAL_HINT_IDS = ["fanDrillHint", "storyHint", "sensHint", "claimCap", "rothHint", "stratHint", "hzHint", "gsHint", "efHint", "decReviewHint"];
   function clearOptionalResults() {
+    // Cleared alongside its container: `state.careerBreak` exists so a
+    // language switch can re-render the panel, and a stored verdict that
+    // outlived the numbers it describes would come back on the next switch
+    // after the container had already been emptied.
+    state.careerBreak = null;
     state.od = { sens: null, swr: null, claim: null, bt: null, solver: null, roth: null, strat: null, hz: null };
     state.solving = false;
     clearInterval(GS.poll); GS.poll = null; GS.job = null; GS.data = null;
@@ -1796,6 +2258,8 @@
     if ($("claimRun")) $("claimRun").textContent = t("stress.claim.run");
     if ($("btRun")) $("btRun").textContent = t("stress.bt.run");
     if ($("beqRun") && !$("beqRun").disabled) $("beqRun").textContent = t("beq.run");
+    if ($("cbRun") && !$("cbRun").disabled) $("cbRun").textContent = t("cb.run");
+    if ($("execRun") && !$("execRun").disabled) $("execRun").textContent = t("exec.run");
     const termHint = $("termHint"); if (termHint) termHint.textContent = t("drill.term.hint");
   }
 
@@ -2076,7 +2540,7 @@
     const yr = n => tt(n + " 岁", "age " + n);
     const income = g("contributions.base_salary_pre") + g("contributions.bonus_pre") + g("contributions.ot_income_pre");
     const spouseInc = on("household.enabled") ? g("household.spouse_base_salary_pre") + g("household.spouse_bonus_pre") : 0;
-    const assets = ["initial.pretax_401k", "initial.roth_ira", "initial.hsa", "initial.taxable"].map(g);
+    const assets = ["initial.pretax_401k", "initial.gov_457b", "initial.roth_ira", "initial.hsa", "initial.taxable"].map(g);
     const assetTotal = assets.reduce((a, b) => a + b, 0);
     const row = (k, v) => v == null ? "" : `<div class="recap-row"><span class="rk">${k}</span><span class="rv">${v}</span></div>`;
     const sec = (title, rows) => { const body = rows.filter(Boolean).join(""); return body ? `<div class="recap-sec"><div class="recap-h">${title}</div>${body}</div>` : ""; };
@@ -2088,12 +2552,20 @@
       row(tt("税前年收入", "Gross income / yr"), income > 0 ? full(income) + (spouseInc ? " + " + full(spouseInc) + tt("（配偶）", " (spouse)") : "") : null),
       row(tt("当前年开销", "Spending now / yr"), spendNow > 0 ? full(spendNow) : null),
     ]);
+    // One row per entry of `assets`, in its order. `initial.gov_457b` was
+    // added to that array on 2026-08-24 without a row of its own, and every
+    // label below it shifted by one: a user's 457(b) was shown as Roth, their
+    // Roth as HSA, their HSA as taxable, and their taxable account was never
+    // shown at all. `assetTotal` sums the array, so the total stayed right and
+    // nothing looked broken -- in a panel whose whole job is letting a user
+    // check what they told the model. It shipped in v10.0-installed-30.
     const asset = sec(tt("投资资产", "Investable assets"), [
       row(tt("合计", "Total"), full(assetTotal)),
       row("401(k) / IRA·pre", full(assets[0])),
-      row("Roth", full(assets[1])),
-      row("HSA", full(assets[2])),
-      row(tt("应税账户", "Taxable"), full(assets[3])),
+      row(tt("政府 457(b)", "Governmental 457(b)"), full(assets[1])),
+      row("Roth", full(assets[2])),
+      row("HSA", full(assets[3])),
+      row(tt("应税账户", "Taxable"), full(assets[4])),
     ]);
     const ret = sec(tt("退休假设", "Retirement assumptions"), [
       row(tt("目标年开销", "Target spend / yr"), full(g("state.expenses_y0"))),
@@ -2123,6 +2595,12 @@
     ssa_statement_import: ["SSA 账单导入", "SSA statement import"],
     us_state_archetypes: ["州所得税原型", "State income-tax archetypes"],
     ssa_trust_fund: ["社保信托基金枯竭", "Social Security trust fund depletion"],
+    retirement_catch_up_limits: ["补缴上限与年度合计上限", "Catch-up and annual additions limits"],
+    ira_income_phase_outs: ["IRA 收入 phase-out", "IRA income phase-outs"],
+    fica_payroll_tax: ["工资税(社保/Medicare)", "Payroll tax (Social Security / Medicare)"],
+    self_employment_tax: ["自雇税(SECA)", "Self-employment tax (SECA)"],
+    plan_shape_limits: ["各类计划的限额与 HSA 资格", "Plan-shape limits and HSA eligibility"],
+    espp_section_423: ["§423 ESPP 年度上限与折扣", "Section 423 ESPP annual limit and discount"],
   };
   const RULE_PACK_IDS = new Set(Object.keys(RULE_PACK_LABELS));
   const RULE_PACK_STATUSES = new Set(["current", "stale", "review_required"]);
@@ -2147,6 +2625,17 @@
     // because a plan able to edit the actuary's number could publish a
     // federal projection nobody made, wearing the pack's vintage.
     ssa_trust_fund: new Set(["pack"]),
+      // Statutory amounts and rates: read from the pack or not at all. A plan
+    // cannot supply its own 415(c) cap, catch-up amount, phase-out range or
+    // payroll-tax rate for the pack value to match or override -- and the
+    // comment above is the standing warning that this list and the server's
+    // are two copies of one fact.
+    retirement_catch_up_limits: new Set(["pack"]),
+    ira_income_phase_outs: new Set(["pack"]),
+    fica_payroll_tax: new Set(["pack"]),
+    self_employment_tax: new Set(["pack"]),
+    plan_shape_limits: new Set(["pack"]),
+    espp_section_423: new Set(["pack"]),
   };
   const RULE_PACK_EVALUATION_BASIS = "config_applicability_not_path_instrumentation";
   function validIsoDate(value) {
@@ -2440,7 +2929,7 @@
     if (state.quick) {
       const d2 = document.createElement("div");
       d2.className = "v-sub";
-      d2.innerHTML = tt("速估口径：代表性账户结构（税前 50/Roth 15/应税 35）+ 默认假设。", "Quick-estimate basis: representative account mix (50/15/35) + default assumptions. ") + ` <a id="quickRefine">${tt("进完整向导精修 →", "Refine in the full wizard →")}</a>`;
+      d2.innerHTML = tt("速估口径：代表性账户结构（税前 50/Roth 15/应税 35）+ 默认假设。HSA 只有你自己选了 HDHP 并填了资格事实才计入，且按该 tier 的法定基础上限封顶（不含 55 岁补缴）。", "Quick-estimate basis: representative account mix (50/15/35) + default assumptions. An HSA is counted only if you chose an HDHP and stated its eligibility facts, capped at that tier's statutory base (no age-55 catch-up). ") + ` <a id="quickRefine">${tt("进完整向导精修 →", "Refine in the full wizard →")}</a>`;
       el2.appendChild(d2);
       const qa = $("quickRefine"); if (qa) qa.addEventListener("click", () => { state.quick = false; state.step = 0; goto("wizard"); });
     }
@@ -3227,6 +3716,175 @@
       out.innerHTML = `<div class="callout warn"><p>${esc(e.message || String(e))}</p></div>`;
     } finally {
       btn.disabled = false; btn.textContent = t("beq.run");
+    }
+  }
+
+  // ============================================ 9.0 Phase 3 · career break
+  // Composed here from the numbers, bilingually, for the same reason the
+  // bequest verdict is: the server's `not_modelled` strings are English-only
+  // diagnostics, and a Chinese reader must not meet an English paragraph in a
+  // headline panel. Nothing below reads them.
+  function careerBreakHtml(v) {
+    if (!v || v.applicable === false) {
+      return `<div class="callout"><p>${tt(
+        "这个计划里没有安排职业休假，所以没有可对比的第二种走法。这是「不适用」，不是「比过了，没差别」。在「收入与储蓄」里勾上「计划一段职业休假」再回来。",
+        "No career break is planned here, so there is no second version of this plan to compare against. That is <i>not applicable</i>, which is a different fact from <i>compared, and no difference</i>. Tick \u0022plan a career break\u0022 under Income &amp; savings and come back.")}</p></div>`;
+    }
+    const keep = v.keep_working || {}, took = v.with_break || {};
+    const num = x => (x === null || x === undefined) ? null : x;
+    // `None` from the server means NOT MEASURED and must not print as a zero.
+    const cell = (label, value, hint) => {
+      const shown = (value === null || value === undefined)
+        ? `<span class="muted">${tt("未测量", "not measured")}</span>`
+        : money(value);
+      return `<tr><td>${label}</td><td class="num"><b>${shown}</b></td>
+              <td class="muted" style="font-size:12px">${hint || ""}</td></tr>`;
+    };
+    const delay = num(v.fire_age_delay);
+    const keepAge = num(keep.fire_age_p50), tookAge = num(took.fire_age_p50);
+    let headline;
+    if (delay === null || keepAge === null || tookAge === null) {
+      headline = tt("这次没有测到 FIRE 年龄的中位数，所以时间差没有被测量，不是 0。",
+                    "No median FIRE age came back this time, so the delay is not measured — it is not zero.");
+    } else if (delay === 0) {
+      headline = tt(`FIRE 年龄中位数两边都是 ${keepAge} 岁。<b>时间没变，代价在下面那几笔钱里</b> —— 不要读成「休假不要钱」。`,
+                    `Median FIRE age is ${keepAge} either way. <b>The date does not move; the cost is in the figures below</b> — do not read that as the break being free.`);
+    } else {
+      headline = tt(`FIRE 年龄中位数从 ${keepAge} 岁推到 ${tookAge} 岁，晚 <b>${delay}</b> 年。`,
+                    `Median FIRE age moves from ${keepAge} to ${tookAge} — <b>${delay}</b> year(s) later.`);
+    }
+    const rows = [
+      // A NET, and it can go either way. Coming back on a discounted salary
+      // can drop your income below the Roth phase-out that the keep-working
+      // arm never escapes, so a break can leave you contributing MORE. A bare
+      // negative under "contributions never made" reads as a bug; the label
+      // flips instead, because the number is telling the truth.
+      ((v.forgone_employee_contributions !== null
+        && v.forgone_employee_contributions < 0)
+        ? cell(tt("你反而多缴进去的钱（累计）", "Contributions you actually gained"),
+               -v.forgone_employee_contributions,
+               tt("复工后收入较低，反而让你重新够得着 Roth 的收入门槛 —— 继续工作那一边够不着", "returning on lower pay can drop you back under the Roth income limit, which the keep-working path never gets back under"))
+        : cell(tt("你自己少缴进去的钱（累计）", "Your own contributions never made"),
+               num(v.forgone_employee_contributions),
+               tt("休假那几年按当年实际收入封顶后的差额", "the shortfall once deferrals are capped by what you actually earned"))),
+      cell(tt("损失的雇主匹配（累计）", "Employer match never received"),
+           num(v.forgone_employer_match),
+           tt("包含复工后按较低薪资继续少拿的部分", "including the lower match that continues after you return, on the reduced salary")),
+      cell(tt("复工后最后一年的薪资差", "Pay gap in your final working year"),
+           num(v.return_wage_gap_final_year),
+           tt("复工折价是永久的，这是它走到积累期末时的样子", "the return discount is permanent; this is what it looks like by the end")),
+      cell(tt("休假期间从投资里取走的生活费", "Living costs taken from investments"),
+           num(v.break_expenses_drawn_from_portfolio),
+           tt("<b>只从应税账户取</b> —— 401(k)/IRA/HSA 不动，59.5 岁前提取的罚金本 App 不计算", "<b>taxable account only</b> — 401(k)/IRA/HSA are never touched; early-withdrawal penalties are not computed here")),
+      cell(tt("取完之后仍未覆盖的部分", "Still not covered after that"),
+           num(v.unfunded_break_expenses),
+           tt("应税账户被取空之后剩下的缺口。不是 0 就说明这个计划撑不住这段休假", "what remains once the taxable account is empty — anything above zero means the plan cannot fund this break")),
+    ].join("");
+    const missing = [
+      tt("休假<b>不会</b>推迟晋升。晋升时钟照常走，复工后落在届时应有的职级工资上，再乘你填的复工比例 —— 那个比例是本模型唯一表达工资疤痕的地方。",
+         "A break does <b>not</b> delay your promotion. The clock keeps running and you return on the salary that level would have reached, times the return share you entered — that share is the only place wage scarring is modelled."),
+      tt("休假年的生活费<b>只从应税账户</b>取。401(k)/IRA/HSA 永远不动 —— 59.5 岁前提取的罚金与税本 App 不计算，所以那笔钱在这里不可用。",
+         "Break-year living costs are drawn from your <b>taxable account only</b>. 401(k)/IRA/HSA are never touched — the penalties and tax on an early withdrawal are not computed here, so that money is not available in this model."),
+      tt("积累期的医疗保险完全没建模：本 App 的 ACA 只在退休期算，所以失去雇主医保在这里花费为零 —— <b>那不是算出来是零，是没算</b>。",
+         "Health insurance during the break is not modelled at all: this app computes ACA only in retirement, so losing employer cover costs zero here — <b>that is an unmeasured zero, not a measured one</b>."),
+    ].map(x => `<li>${x}</li>`).join("");
+    const successNote = tt(
+      `成功率：继续工作 ${(keep.lifetime_success * 100).toFixed(1)}%，休假 ${(took.lifetime_success * 100).toFixed(1)}%。`,
+      `Success rate: ${(keep.lifetime_success * 100).toFixed(1)}% working through, ${(took.lifetime_success * 100).toFixed(1)}% with the break.`);
+    return `<div class="callout"><h5><span class="pill">${tt("对比", "Compared")}</span>${headline}</h5>
+      <table class="mini"><tbody>${rows}</tbody></table>
+      <p class="muted" style="font-size:12px;margin-top:8px">${successNote} ${tt(
+        "两边常常一模一样，因为提取规则靠砍消费吸收损失 —— 成功率没动不代表休假没有代价。",
+        "These are often identical, because the withdrawal rule absorbs the loss by cutting spending. An unchanged success rate does not mean the break was free.")}</p>
+      <p style="margin-top:10px"><b>${tt("这三件事没有算进上面的数字，而且都让休假显得更便宜：",
+        "Three things are not in the figures above, and all three make the break look cheaper:")}</b></p>
+      <ul style="margin:6px 0 0 18px;font-size:13px;line-height:1.7">${missing}</ul></div>`;
+  }
+
+  async function runCareerBreakCheck() {
+    const btn = $("cbRun"); const out = $("cbOut");
+    if (!btn || !out) return;
+    const revision = state.revision;
+    btn.disabled = true; btn.textContent = t("cb.running");
+    out.innerHTML = "";
+    try {
+      const started = await postJSON("/api/career_break/start", {
+        config: state.config, paths: Math.min(state.paths || 2000, 2000),
+        seed: state.seed || 96000 });
+      if (!started.job) throw new Error(started.error || "no job");
+      for (;;) {
+        await new Promise(r => setTimeout(r, 500));
+        const progress = await revGet("/api/progress?job=" + encodeURIComponent(started.job));
+        if (progress.error) throw new Error(progress.error);
+        if (progress.done) break;
+      }
+      const verdict = await revGet("/api/result?job=" + encodeURIComponent(started.job));
+      if (revision !== state.revision) return;   // a newer run superseded this
+      // Kept so a language switch can re-render it. Without this the panel
+      // sticks in the language it was computed in, which is the standing rule
+      // this project audits for after finding it three times.
+      state.careerBreak = verdict;
+      out.innerHTML = careerBreakHtml(verdict);
+    } catch (e) {
+      state.careerBreak = null;
+      out.innerHTML = `<div class="callout warn"><p>${esc(e.message || String(e))}</p></div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = t("cb.run");
+    }
+  }
+
+  // =================================================== B4 execution stress
+  // No categorical verdict. This prices one defined simplification; it does
+  // not diagnose cognition or decide whether the difference is acceptable.
+  function executionStressHtml(v) {
+    if (!v || v.applicable === false) {
+      return `<div class="callout"><p>${tt(
+        "抽到的路径里，没有一条活到并走到 80 岁后的退休付款。因此这次压力测试不适用；下面的差异没有被测量，不是 0。",
+        "No sampled path reached a retirement payment at or after age 80. This stress is not applicable: its deltas were not measured, and are not zero.")}</p></div>`;
+    }
+    const b = v.baseline, s = v.simplified, d = v.deltas;
+    const pp = x => (x * 100).toFixed(2) + " pp";
+    const signedMoney = x => `${x >= 0 ? "+" : "−"}${money(Math.abs(x))}`;
+    const successDelta = `${d.lifetime_success >= 0 ? "+" : "−"}${pp(Math.abs(d.lifetime_success))}`;
+    const rows = [
+      [tt("终身成功率", "Lifetime success"), pct(b.lifetime_success, 1), pct(s.lifetime_success, 1), successDelta],
+      [tt("中位年实际消费", "Median annual real consumption"), money(b.mean_real_consumption_p50), money(s.mean_real_consumption_p50), signedMoney(d.mean_real_consumption_p50)],
+      [tt("中位最低年实际消费", "Median minimum annual real consumption"), money(b.min_real_consumption_p50), money(s.min_real_consumption_p50), signedMoney(d.min_real_consumption_p50)],
+      [tt("中位实际终值", "Median real terminal wealth"), money(b.terminal_real_p50), money(s.terminal_real_p50), signedMoney(d.terminal_real_p50)],
+    ].map(r => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="num">${r[3]}</td></tr>`).join("");
+    const measured = v.already_simple
+      ? tt("这份计划本来已经是固定实际提取、无新增转换、恒定股债目标；配对结果测得差异为 0。", "This plan already uses fixed-real withdrawals, no new conversions, and a constant allocation target; the paired run measured zero difference.")
+      : tt(`共 ${v.paths.toLocaleString()} 条配对路径，其中 ${v.exposed_paths.toLocaleString()} 条实际走到 80 岁后的退休付款。`, `${v.paths.toLocaleString()} paths were paired; ${v.exposed_paths.toLocaleString()} actually reached a retirement payment at or after 80.`);
+    return `<div class="callout"><p><b>${tt("结果，不是裁定。", "A result, not a verdict.")}</b> ${measured}</p>
+      <table class="cmp-table"><thead><tr><th>${tt("口径", "Metric")}</th><th>${tt("原计划", "As planned")}</th><th>${tt("80 岁简化", "Simplified at 80")}</th><th>${tt("差异", "Delta")}</th></tr></thead><tbody>${rows}</tbody></table>
+      <p class="panel-note">${tt(
+        "简化只替换执行动作：固定实际提取基准、不再新增 Roth conversion（已有金额继续 seasoning）、冻结 allocation target。税、收入、医疗、遗属、事件、死亡与冲击照常运行。当前引擎仍把同一个 blended return 施加到所有账户，等价于隐式再平衡；这里没有测字面上的 no-rebalancing，也没有预测认知衰退。本刀固定跑未搬迁的 base-location 臂，计划里的搬迁设置不在这次差异里。",
+        "Only execution changes: a fixed-real withdrawal base, no new Roth conversions (existing amounts keep seasoning), and a frozen allocation target. Taxes, income, medical costs, survivor rules, events, mortality, and shocks continue unchanged. The engine still applies one blended return to every account, which is implicit rebalancing; literal no-rebalancing and cognitive decline are not measured here. This slice fixes the study to the no-relocation, base-location arm; any relocation setting in the plan is outside this comparison.")}</p></div>`;
+  }
+
+  async function runExecutionStress() {
+    const btn = $("execRun"), out = $("execOut");
+    if (!btn || !out) return;
+    const revision = state.revision;
+    btn.disabled = true; btn.textContent = t("exec.running"); out.innerHTML = "";
+    try {
+      const started = await postJSON("/api/execution_simplification/start", {
+        config: state.config, paths: Math.min(state.paths || 2000, 2000),
+        seed: state.seed || 96000 });
+      if (!started.job) throw new Error(started.error || "no job");
+      for (;;) {
+        await new Promise(r => setTimeout(r, 500));
+        const progress = await revGet("/api/progress?job=" + encodeURIComponent(started.job));
+        if (progress.error) throw new Error(progress.error);
+        if (progress.done) break;
+      }
+      const result = await revGet("/api/result?job=" + encodeURIComponent(started.job));
+      if (revision !== state.revision) return;
+      out.innerHTML = executionStressHtml(result);
+    } catch (e) {
+      out.innerHTML = `<div class="callout warn"><p>${esc(e.message || String(e))}</p></div>`;
+    } finally {
+      btn.disabled = false; btn.textContent = t("exec.run");
     }
   }
 
@@ -5549,8 +6207,8 @@
       "Spending: real-constant by default, adjusted by GK guardrails; an age-related spending decline (the “retirement smile”, ≈−1%/yr real) can be turned on in Assumptions."],
     ["房产 / 租金：出租房净收入按录入的起止年龄（含首尾）提供税后可花现金，并按美国 CPI 指数化；退休前进入应税账户，退休后先覆盖开销、剩余再进应税。未单独建模出租房价值、升值、出售所得、空置、维修或税——这些应已包含在你填的净租金里。住房租买模块另算自住现金流，且无汇率通道。",
       "Property / rent: entered net rental income provides after-tax spendable cash over the inclusive start/end ages and is indexed to US CPI; before retirement it enters taxable, and after retirement it covers spending before any surplus enters taxable. Rental-property value, appreciation, sale proceeds, vacancy, repairs, and tax are not separately modeled; those should already be reflected in the net-rent input. The rent-vs-buy module separately models primary-home cash flows and has no FX channel."],
-    ["住房模块（可选）：住房现金流走事件通道，不进 GK 消费预算——FI 门槛仍按你填的全口径年开销算，「年开销中的住房预算」逐年退回以免双计。蒙特卡洛中的固定名义按揭以购房年已实现 CPI 锚定，再按每条路径的后续已实现 CPI 折实；确定性图仍使用配置的平均通胀。买方房净值不进模拟组合（非流动），只在对比页单独列示；未建模：出售换现、房贷利息抵税、PMI、HELOC。",
-      "Housing module (optional): housing cash flows use the event channel, outside the GK budget — the FI threshold stays on your full expenses figure, with the declared in-expenses housing budget refunded yearly to avoid double counting. Monte Carlo anchors the fixed nominal mortgage to realized CPI at purchase and deflates it with each path's subsequent realized CPI; the deterministic chart still uses configured mean inflation. Home equity never enters the simulated portfolio (illiquid) — it is shown separately on the comparison panel. Not modeled: sale proceeds, mortgage-interest deduction, PMI, HELOC."],
+    ["住房模块（可选）：工作年份的替换后净住房成本先进入可负担瀑布，压低 401(k)/HSA/IRA/应税储蓄；退休年份继续走现金事件。FI 门槛仍按你填的全口径年开销算，「年开销中的住房预算」逐年退回以免双计。蒙特卡洛按揭的 realized-CPI 偏差由事件层补差。买方房净值不进模拟组合；未建模：出售换现、房贷利息抵税、PMI、HELOC。",
+      "Housing module (optional): net replacement housing cost enters the affordability waterfall during working years, reducing 401(k)/HSA/IRA/taxable saving; retirement years remain cash events. The FI threshold stays on your full expenses figure, and the in-expenses housing budget is refunded to avoid double counting. The event layer reconciles realized-CPI mortgage drift. Home equity stays outside the portfolio. Not modeled: sale proceeds, mortgage-interest deduction, PMI, HELOC."],
     ["城市库参数：内置目的地的生活成本 / 汇率 / 税 / 医疗为<b>示意默认值</b>，非精确报价——请按你的真实情况核对修改。一个目的地提供的是生活成本比、汇率波动、当地通胀、医疗成本、社保海外折减和<b>一个平坦提取税率</b>这几个参数，<b>不是一套税制</b>：当地税档、当地资本利得规则、税收协定、财富税与弃籍税均不建模，模型内部只区分「本国」与「已搬迁」两种税基。",
       "City library: each destination's cost / FX / tax / healthcare are <b>illustrative defaults</b>, not precise quotes — verify and edit for your real situation. A destination supplies cost of living, FX volatility, local inflation, healthcare costs, an SS-abroad haircut and <b>one flat withdrawal-tax rate</b> — <b>not a tax system</b>: local brackets, local capital-gains rules, tax treaties, wealth taxes and exit taxes are not modeled, and the model distinguishes only two tax bases, home and relocated."],
     ["年度规则的精确 vintage、维护状态与计划值差异现在随每次结果绑定，并显示在概览、结论、JSON 与报告中。`current` 只表示未超过本应用的复核期限；`stale` 或 `review_required` 的正式结论必须先核对当年官方数字。死亡率仍为 SSA 类拟合。",
@@ -5560,7 +6218,7 @@
     ["其他资产：现金/其他流动资产并入应税桶（同等税务处理）；自住房净值默认不计入模拟（非流动），除非设定「某年出售变现」。普通「其他资产」不模拟房产增值；出租净现金流仅在启用收入流时建模。",
       "Other assets: cash/other liquid fold into the taxable bucket (same tax treatment); home equity is excluded (illiquid) unless you set a planned sale. The generic Other Assets section does not model appreciation; net rental cash flow is modeled only when its income stream is enabled."],
     ["收入流（年金/租金/兼职/RSU）：统一按今日美元、税后可花现金处理；退休前进入应税账户，退休后先抵年度消费需求，剩余才进入应税账户。兼职从「录入的最早年龄」与「实际 FIRE 后第一年」中较晚者起，RSU 从下一模拟年起归属准确 N 次。非 COLA 年金在首次计划支付时按当时已实现 CPI 锚定名义金额，之后名义固定。重要近似：这些金额不直接计入普通收入、MAGI、ACA 或 IRMAA；只会通过减少组合提取间接影响它们，因此可能高估 ACA 补贴，并低估税与 IRMAA。",
-      "Income streams (pension/rental/part-time/RSU) are today's-dollar, after-tax spendable cash: before retirement they enter taxable; after retirement they cover annual spending first and only the surplus enters taxable. Part-time starts at the later of its entered earliest age and the first year after actual FIRE; RSU pays exactly N times starting next modeled year. A non-COLA pension is anchored to realized CPI at its first scheduled payment and stays nominally fixed thereafter. Important approximation: these amounts do not directly enter ordinary income, MAGI, ACA, or IRMAA; they affect those only indirectly by reducing portfolio withdrawals, so the model may overstate ACA subsidies and understate tax and IRMAA."],
+      "Income streams (pension/rental/part-time/RSU) are today's-dollar, after-tax spendable cash: before retirement they enter taxable; after retirement they cover annual spending first and only the surplus enters taxable. Traditional DB pension mode calculates service years x accrual rate x final-average salary from facts you enter; it does not infer them from simulated work paths or apply early-retirement, survivor, vesting or lump-sum terms. Part-time starts at the later of its entered earliest age and the first year after actual FIRE; RSU pays exactly N times starting next modeled year. A non-COLA pension is anchored to realized CPI at its first scheduled payment and stays nominally fixed thereafter. Important approximation: these amounts do not directly enter ordinary income, MAGI, ACA, or IRMAA; they affect those only indirectly by reducing portfolio withdrawals, so the model may overstate ACA subsidies and understate tax and IRMAA."],
     ["人生事件：FIRE 前的支出只从应税账户扣（不动退休账户），FIRE 后按引擎提取顺序融资；任何未付足的强制支出都会记录年龄/缺口并把该路径判为失败，不再静默截断。事件金额为今日美元、按 CPI 调整。",
       "Life events: pre-FIRE outflows draw only from taxable; post-FIRE they use the engine withdrawal order. Any mandatory outflow that cannot be paid in full records its age/shortfall and fails that path instead of being silently truncated. Amounts are today's $, CPI-indexed."],
     ["序列回测：只把三条人工构造的坏开局套在 FI 门槛后的退休阶段；不是历史指数逐年回放、不覆盖积累期，也不给发生概率。若要抽样真实历史顺序，请改用高级设置里的历史块收益模式。",
@@ -5616,13 +6274,33 @@
                `to you, it is a question for a professional.`)}</p></div>`;
   }
 
+  // `server/limitations.py` authors its disclosures with Markdown-style
+  // `**bold**`, while this file's own general list is written with real <b>
+  // tags. The page escaped the server's text and inserted it verbatim, so
+  // every one of those markers reached the user as literal asterisks --
+  // measured on a real run: 46 of them on one conclusions page, out of 127
+  // across the 53 rules. Two conventions for one thing, and the one that
+  // travelled over the API was the one nobody looked at.
+  //
+  // Escaped FIRST and the markers converted afterwards. That order is the
+  // whole safety argument: this can only ever emit <strong>, and nothing the
+  // server interpolated into a sentence can become markup.
+  function limitationHtml(raw) {
+    return esc(String(raw == null ? "" : raw))
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  }
+
   async function renderPersonalLimitations() {
     const host = $("limPersonal");
     if (!host || !state.config) return;
     try {
       const v = await postJSON("/api/limitations",
                                { config: state.config, language: L });
-      PERSONAL_LIMITATIONS = (v.triggered || []).map(row => row.text);
+      // Converted once, here at the boundary, so the panel and the export
+      // carry the same fragments -- and the same convention as the general
+      // list they are concatenated with, which has always been HTML.
+      const rendered = (v.triggered || []).map(row => limitationHtml(row.text));
+      PERSONAL_LIMITATIONS = rendered;
       if (!v.triggered.length) {
         host.innerHTML = "";
         return;
@@ -5631,8 +6309,8 @@
         `<div class="panel"><div class="panel-title sm">${tt(
            `你这份配置触发了 ${v.count} 条`,
            `${v.count} of these are about your configuration`)}</div>` +
-        `<ul class="lim">${v.triggered.map(row =>
-           `<li>${esc(row.text)}</li>`).join("")}</ul>` +
+        `<ul class="lim">${rendered.map(html =>
+           `<li>${html}</li>`).join("")}</ul>` +
         `<p class="cap">${tt("除此之外，下面那份通用清单同样适用 —— 它们与你怎么配置无关。",
                              "These are in addition to the general list below, which holds whatever you configure.")}</p></div>`;
     } catch (err) {
@@ -5786,7 +6464,7 @@
   function runFwd() {
     const mu = +$("kMu").value / 100, sd = +$("kSd").value / 100, sav = +$("kSav").value, swr = +$("kSwr").value / 100;
     const N = 2000, startAge = +get(state.config, "state.start_age") || 30, maxY = +get(state.config, "state.accum_years") || 25;
-    const w0 = ["initial.pretax_401k", "initial.roth_ira", "initial.hsa", "initial.taxable"].reduce((a, p) => a + (+get(state.config, p) || 0), 0);
+    const w0 = ["initial.pretax_401k", "initial.gov_457b", "initial.roth_ira", "initial.hsa", "initial.taxable"].reduce((a, p) => a + (+get(state.config, p) || 0), 0);
     const fireTarget = (+get(state.config, "state.expenses_y0") || 40000) / swr, t0 = performance.now();
     const fireAges = [], byYear = Array.from({ length: maxY + 1 }, () => []);
     for (let i = 0; i < N; i++) {
@@ -5806,7 +6484,9 @@
   function resetFwd() {
     const swr = (+get(state.config, "state.swr_pref") || 0.0333) * 100;
     const _shift = (+get(state.config, "returns.equity_mu_shift") || 0) * 100;
-    $("kMu").value = (6.4 + _shift).toFixed(1); $("kSd").value = 17.6; $("kSav").value = Math.min(140000, Math.max(20000, estSavings())); $("kSwr").value = swr.toFixed(2);
+    $("kMu").value = (6.4 + _shift).toFixed(1); $("kSd").value = 17.6; $("kSav").value = (SAV.state === "ok" && SAV.savings != null)
+      ? Math.min(140000, Math.max(20000, SAV.savings))
+      : $("kSav").value;   // no answer: leave the slider where the user had it $("kSwr").value = swr.toFixed(2);
     syncK(); runFwd();
   }
   function syncK() { $("kMuVal").textContent = (+$("kMu").value).toFixed(1) + "%"; $("kSdVal").textContent = (+$("kSd").value).toFixed(1) + "%"; $("kSavVal").textContent = money(+$("kSav").value); $("kSwrVal").textContent = (+$("kSwr").value).toFixed(2) + "%"; }
@@ -6083,6 +6763,7 @@
       });
       const r = await postJSON("/api/save_file", {
         kind: "briefing", pack, results: {},
+        config: state.config,
         name: get(state.config, "name") || "fire",
       });
       toast(tt("已保存到 ", "Saved to ") + r.path.replace(/^.*\/(Downloads\/)/, "~/$1"));
@@ -6128,6 +6809,7 @@
     $("stepsMini").style.display = view === "wizard" ? "" : "none";
     $("restartBtn").style.display = (view === "welcome") ? "none" : "";
     if (view === "welcome") { renderPlans(); renderRecoveredDrafts(); renderStanding(); }
+    if (view === "welcome") renderFamilyLinks();
     if (view === "wizard") { buildRail(); buildStep(); updateStepsMini(); }
     if (view === "help") buildHelp();
     if (view === "precision") buildPrecision();
@@ -6969,6 +7651,11 @@
       const { digest } = await readFreshLegacyDigest();
       return storageGet("/api/storage/recovered-drafts", digest);
     },
+    async parentIdentities(planId) {
+      const { digest } = await readFreshLegacyDigest();
+      return storageGet("/api/storage/parent-identities?plan_id="
+                        + encodeURIComponent(planId), digest);
+    },
     createPlan(plan, options) {
       return storageWrite("/api/storage/plan",
                           { kind: "plan", body: { plan } }, options);
@@ -7001,6 +7688,33 @@
         normalized_config: normalizedConfig,
         display_name: displayName,
       } }, options);
+    },
+    createParentIdentityLink(householdPlanId, parentPlanId, options) {
+      return storageWrite("/api/storage/parent-identity-link", {
+        kind: "parent-identity-link", body: {
+          relation: "parent_identity",
+          household_plan_id: householdPlanId,
+          parent_plan_id: parentPlanId,
+        }
+      }, options);
+    },
+    evaluateParentIdentity(link, parentSlotIndex, sameDateConfirmed,
+                           asOfDate, options) {
+      return storageWrite("/api/storage/parent-identity-evaluation", {
+        kind: "parent-identity-evaluation", body: {
+          link_id: link.link_id,
+          household_plan_version_id: link.household_current_version_id,
+          parent_plan_version_id: link.parent_current_version_id,
+          parent_slot_index: parentSlotIndex,
+          same_date_confirmed: sameDateConfirmed,
+          as_of_date: sameDateConfirmed ? asOfDate : null,
+        }
+      }, options);
+    },
+    endParentIdentityLink(linkId, options) {
+      return storageWrite("/api/storage/parent-identity-link-end", {
+        kind: "parent-identity-link-end", body: { link_id: linkId }
+      }, options);
     },
     observe: observeLegacyDigest,
     cutover: runPublicCutover,
@@ -7051,7 +7765,8 @@
     // if you add a rendered surface, add its branch or it will stick in the old
     // language until its next natural re-render (audited 2026-07-10).
     if (state.view === "welcome") {
-      renderPersonas(); renderPlans(); renderRecoveredDrafts(); renderStanding();
+      renderPersonas(); renderPlans(); renderRecoveredDrafts();
+      renderFamilyLinks(); renderStanding();
     }
     if (state.view === "wizard") { buildRail(); buildStep(); $("saveHint").textContent = ""; }
     if (state.view === "precision") buildPrecision();
@@ -7062,6 +7777,12 @@
       // params — clear them instead of leaving stale-language content
       ["fanDrill", "termDrill"].forEach(id => { const e = $(id); if (e) e.style.display = "none"; });
       const th = $("termHint"); if (th) th.textContent = t("drill.term.hint");
+      // The career-break comparison is BUILT content with stored numbers, so
+      // it is re-rendered rather than cleared: re-running it would cost two
+      // more simulations to say the same thing in the other language.
+      if (state.careerBreak && $("cbOut")) {
+        $("cbOut").innerHTML = careerBreakHtml(state.careerBreak);
+      }
       resultTabs(); showPage(state.page);
     }
   }
@@ -7103,6 +7824,10 @@
   // fills, and every mutation refreshes before returning.
   const PLANS_KEY = "fire_plans_v1";
   let _sqlitePlans = [];
+  // Includes soft-deleted Plans for relationship-history discovery. Ordinary
+  // plan controls use `_sqlitePlans`; the family audit surface uses this full
+  // projection so two deleted endpoints cannot make retained evidence vanish.
+  let _sqlitePlanUniverse = [];
 
   function sqlitePlanToRecord(plan) {
     // The UI's record shape, built from the archive row rather than from a
@@ -7145,17 +7870,19 @@
     },
 
     async refresh() {
-      if (!storageIsAuthoritative()) { _sqlitePlans = []; return this.list(); }
+      if (!storageIsAuthoritative()) {
+        _sqlitePlans = []; _sqlitePlanUniverse = []; return this.list();
+      }
       try {
         const payload = await storageApi.plans();
-        _sqlitePlans = (payload.plans || [])
-          .filter(plan => plan.status !== "deleted")
-          .map(sqlitePlanToRecord)
-          .sort((a, b) => b.ts - a.ts);
+        _sqlitePlanUniverse = (payload.plans || [])
+          .map(sqlitePlanToRecord).sort((a, b) => b.ts - a.ts);
+        _sqlitePlans = _sqlitePlanUniverse
+          .filter(plan => plan.status !== "deleted");
       } catch (e) {
         // A read that fails must not silently present an empty plan list as
         // "you have no plans"; that is indistinguishable from data loss.
-        _sqlitePlans = [];
+        _sqlitePlans = []; _sqlitePlanUniverse = [];
         toast(storageRefusalMessage(e), true);
       }
       return this.list();
@@ -7271,11 +7998,398 @@
         displayName || tt("恢复的草稿", "Recovered draft"));
       // Both lists move: the draft leaves this one and a Plan joins the other.
       await recoveredStore.refresh();
+      await familyLinkStore.refresh();
       await planStore.refresh();
       return saved;
     },
   };
   window.FIRERecoveredDrafts = recoveredStore;
+
+  // B15's first family slice is deliberately smaller than a family graph. It
+  // stores one directed household-plan -> parent-plan assertion and immutable
+  // comparisons of explicit ages and person-specific mortality-sex inputs. Nothing here merges plans, infers a
+  // person, grants consent, or changes a simulation input.
+  const familyLinkStore = {
+    links: [],
+    selectedEvidence: new Set(),
+    schemaInstalled: false,
+    evidenceKey(linkId, evaluationId) {
+      return `${linkId}:${evaluationId}`;
+    },
+    async refresh() {
+      if (!storageIsAuthoritative()) {
+        this.links = []; this.selectedEvidence.clear();
+        this.schemaInstalled = false; return [];
+      }
+      const byId = new Map();
+      let installed = false;
+      // Archived plans remain in the plan list and their relationship history
+      // remains readable. Only the create controls below require active plans.
+      for (const plan of _sqlitePlanUniverse) {
+        try {
+          const payload = await storageApi.parentIdentities(plan.id);
+          installed = installed || Boolean(payload.schema_installed);
+          (payload.links || []).forEach(link => byId.set(link.link_id, link));
+        } catch (e) {
+          this.links = []; this.schemaInstalled = false;
+          toast(storageRefusalMessage(e), true);
+          return [];
+        }
+      }
+      this.links = Array.from(byId.values()).sort((a, b) =>
+        String(b.created_at).localeCompare(String(a.created_at)));
+      const valid = new Set();
+      this.links.forEach(link => (link.evaluations || []).forEach(evaluation =>
+        valid.add(this.evidenceKey(link.link_id, evaluation.evaluation_id))));
+      this.selectedEvidence.forEach(key => {
+        if (!valid.has(key)) this.selectedEvidence.delete(key);
+      });
+      this.schemaInstalled = installed;
+      return this.links;
+    },
+    async create(householdId, parentId) {
+      await storageApi.createParentIdentityLink(householdId, parentId);
+      await this.refresh();
+    },
+    async evaluate(link, slot, confirmed, asOfDate) {
+      await storageApi.evaluateParentIdentity(link, slot, confirmed, asOfDate);
+      await this.refresh();
+    },
+    async end(linkId) {
+      await storageApi.endParentIdentityLink(linkId);
+      await this.refresh();
+    },
+    queue() {
+      return window.FIREFamilyQueue.project(this.links);
+    },
+    selectedEntries() {
+      const entries = [];
+      this.links.forEach(link => (link.evaluations || []).forEach(evaluation => {
+        if (!this.selectedEvidence.has(
+              this.evidenceKey(link.link_id, evaluation.evaluation_id))) return;
+        entries.push({
+          relationship: {
+            relation: link.relation, link_id: link.link_id,
+            household_plan_id: link.household_plan_id,
+            household_display_name: link.household_display_name,
+            household_status: link.household_status,
+            parent_plan_id: link.parent_plan_id,
+            parent_display_name: link.parent_display_name,
+            parent_status: link.parent_status,
+            created_at: link.created_at, ended_at: link.ended_at,
+            ended_reason: link.ended_reason,
+          },
+          evaluation,
+        });
+      }));
+      return entries;
+    },
+  };
+  window.FIREFamilyLinks = familyLinkStore;
+
+  function familyFindingText(row) {
+    if (!row) return "";
+    if (!row.applicable) {
+      return tt(`未比较（${row.reason_code}）`, `Not compared (${row.reason_code})`);
+    }
+    if (row.finding === "match") return tt("年龄一致", "Ages match");
+    return tt(`年龄相差 ${row.delta_years} 年`,
+              `Ages differ by ${row.delta_years} years`);
+  }
+
+  function familySexFindingText(row) {
+    if (!row) return tt("性别：未记录", "Sex: not recorded");
+    if (!row.applicable) {
+      return tt(`性别未比较（${row.reason_code}）`,
+                `Sex not compared (${row.reason_code})`);
+    }
+    if (row.finding === "match") return tt("性别一致", "Sex matches");
+    return tt("性别不一致", "Sex differs");
+  }
+
+  function familyFreshnessText(row) {
+    const labels = {
+      current: ["当前", "current"],
+      stale_version: ["计划输入已更新", "plan inputs changed"],
+      stale_lifecycle: ["计划状态曾变化", "plan lifecycle changed"],
+      inactive: ["计划当前未启用", "plan currently inactive"],
+      ended: ["关联已结束", "link ended"],
+    };
+    const pair = labels[row && row.freshness] || ["未知", "unknown"];
+    return tt(pair[0], pair[1]);
+  }
+
+  function familyValue(value) {
+    return value === null || value === undefined || value === ""
+      ? tt("不适用", "N/A") : String(value);
+  }
+
+  function renderFamilyEvaluation(row, linkId) {
+    const sex = row.sex_evaluation;
+    const selected = familyLinkStore.selectedEvidence.has(
+      familyLinkStore.evidenceKey(linkId, row.evaluation_id));
+    const summary = `${familyFindingText(row)} · ${familySexFindingText(sex)} · ${familyFreshnessText(row)}`;
+    const field = (zhLabel, enLabel, value, mono) =>
+      `<div class="pm"><b>${tt(zhLabel, enLabel)}:</b> `
+      + `<span${mono ? ' class="mono"' : ""}>${esc(familyValue(value))}</span></div>`;
+    return `<div class="family-evaluation-receipt">
+      <label class="family-evidence-select"><input type="checkbox" data-evidence-select
+        data-evidence-link="${esc(linkId)}" data-evidence-id="${esc(row.evaluation_id)}"
+        ${selected ? "checked" : ""}> ${tt("加入家庭证据摘要", "Include in family evidence brief")}</label>
+      <details class="family-evaluation" data-evaluation="${esc(row.evaluation_id)}">
+      <summary>${esc(summary)}</summary>
+      ${field("家庭计划版本", "Household version", row.household_plan_version_id, true)}
+      ${field("父母计划版本", "Parent version", row.parent_plan_version_id, true)}
+      ${field("父母槽位", "Parent slot", `${row.parent_slot_index} · ${row.parent_slot_label}`, false)}
+      <div class="cap"><b>${tt("年龄证据", "Age evidence")}</b></div>
+      ${field("共同日期", "Common date", row.as_of_date, false)}
+      ${field("家庭计划中的父母年龄", "Parent age in household plan", row.household_age, false)}
+      ${field("父母计划年龄", "Age in parent plan", row.parent_age, false)}
+      ${field("判定", "Finding", row.finding, false)}
+      ${field("年龄差（父母计划 - 家庭计划）", "Age delta (parent plan - household plan)", row.delta_years, false)}
+      ${field("原因代码", "Reason code", row.reason_code, true)}
+      ${field("原因", "Reason", row.reason, false)}
+      <div class="cap"><b>${tt("性别证据", "Sex evidence")}</b></div>
+      ${sex ? field("家庭计划中的父母性别", "Parent sex in household plan", sex.household_sex, false) : ""}
+      ${sex ? field("父母计划死亡率性别", "Mortality sex in parent plan", sex.parent_sex, false) : ""}
+      ${sex ? field("判定", "Finding", sex.finding, false) : field("判定", "Finding", null, false)}
+      ${sex ? field("原因代码", "Reason code", sex.reason_code, true) : ""}
+      ${sex ? field("原因", "Reason", sex.reason, false) : ""}
+      ${field("新鲜度", "Freshness", row.freshness, true)}
+      </details></div>`;
+  }
+
+  function familyQueueDetail(item) {
+    if (item.reason_code === "not_evaluated") {
+      return tt("尚未核对", "Not yet evaluated");
+    }
+    if (item.reason_code === "sex_not_recorded") {
+      return tt("旧记录没有性别证据", "Older record has no sex evidence");
+    }
+    if (item.category === "stale") {
+      return familyFreshnessText({ freshness: item.freshness });
+    }
+    if (item.detector === "age") return familyFindingText(item);
+    if (item.detector === "sex") return familySexFindingText(item);
+    return item.reason_code;
+  }
+
+  function renderFamilyQueue() {
+    const projection = familyLinkStore.queue();
+    const labels = {
+      contradiction: ["当前矛盾", "Current contradictions"],
+      stale: ["已过期证据", "Stale evidence"],
+      match: ["当前一致", "Current matches"],
+      na: ["不适用与待核对", "N/A and pending"],
+    };
+    const detector = {
+      age: ["年龄", "Age"], sex: ["性别", "Sex"],
+      evaluation: ["核对", "Review"],
+    };
+    const groups = projection.category_order.map(category => {
+      const items = projection.groups[category];
+      const rows = items.length ? items.map(item => {
+        const needsReview = item.actionable
+          && (item.category === "stale" || item.category === "na");
+        const action = needsReview
+          ? item.category === "stale"
+            ? tt("重新核对", "Recheck") : tt("开始核对", "Start review")
+          : item.evaluation_id ? tt("查看证据", "View evidence")
+          : tt("查看关联", "View link");
+        return `<div class="family-queue-item" data-queue-category="${category}">
+          <span><b>${esc(item.household_display_name)}</b> → <b>${esc(item.parent_display_name)}</b>
+          <small>${tt(detector[item.detector][0], detector[item.detector][1])} · ${esc(familyQueueDetail(item))}</small></span>
+          <button class="btn-ghost sm" data-queue-link="${esc(item.link_id)}"
+            ${item.evaluation_id && !needsReview ? `data-queue-evaluation="${esc(item.evaluation_id)}"` : ""}>${action}</button>
+        </div>`;
+      }).join("") : `<div class="family-queue-empty">${tt("没有项目", "No items")}</div>`;
+      return `<section class="family-queue-group" data-queue-group="${category}">
+        <h4>${tt(labels[category][0], labels[category][1])} <span>${items.length}</span></h4>
+        ${rows}</section>`;
+    }).join("");
+    const count = familyLinkStore.selectedEvidence.size;
+    return `<div class="family-queue"><div class="family-queue-head">${tt(
+      "核对队列", "Review queue")}</div>
+      <div class="family-export-row"><span>${tt(
+        `已选择 ${count} 条不可变核对记录`,
+        `${count} immutable receipt${count === 1 ? "" : "s"} selected`)}</span>
+        <button class="btn-ghost sm" data-family-export ${count ? "" : "disabled"}>${tt(
+          "导出所选家庭证据", "Export selected evidence")}</button></div>${groups}</div>`;
+  }
+
+  function updateFamilyExportControl() {
+    const button = document.querySelector("[data-family-export]");
+    if (!button) return;
+    const count = familyLinkStore.selectedEvidence.size;
+    button.disabled = !count;
+    const label = button.previousElementSibling;
+    if (label) label.textContent = tt(
+      `已选择 ${count} 条不可变核对记录`,
+      `${count} immutable receipt${count === 1 ? "" : "s"} selected`);
+  }
+
+  async function exportFamilyEvidence() {
+    let evidence;
+    try {
+      await familyLinkStore.refresh();
+      evidence = familyLinkStore.selectedEntries();
+    } catch (err) {
+      toast(tt("刷新证据失败：", "Could not refresh evidence: ")
+        + (err.message || err), true);
+      return;
+    }
+    if (!evidence.length) {
+      toast(tt("先勾选至少一条核对记录", "Select at least one receipt first"), true);
+      return;
+    }
+    const ok = confirm(tt(
+      "这份导出未经脱敏，包含真实计划名称、年龄与性别输入。\n\n" +
+      "它不证明身份、同意、法律授权、赡养能力或整体计划一致性。\n\n" +
+      `确定导出所选 ${evidence.length} 条核对记录吗？`,
+      "This export is NOT de-identified. It contains real plan names, ages, and sex inputs.\n\n" +
+      "It does not prove identity, consent, legal authority, support capacity, or whole-plan consistency.\n\n" +
+      `Export the ${evidence.length} selected receipt${evidence.length === 1 ? "" : "s"}?`));
+    if (!ok) return;
+    try {
+      const first = evidence[0].relationship.household_display_name || "family";
+      const result = await postJSON("/api/save_file", {
+        kind: "family_evidence", evidence, language: L,
+        name: `${first}-family-evidence`, results: {}, config: state.config,
+      });
+      toast(tt("Markdown 与 JSON 已保存到 Downloads", "Markdown and JSON saved to Downloads"));
+      return result;
+    } catch (err) {
+      toast(tt("导出失败：", "Export failed: ") + (err.message || err), true);
+    }
+  }
+
+  function renderFamilyLinks() {
+    const box = document.getElementById("familyLinkBox");
+    const body = document.getElementById("familyLinkBody");
+    if (!box || !body) return;
+    if (!storageIsAuthoritative()) {
+      box.style.display = "none"; body.innerHTML = ""; return;
+    }
+    box.style.display = "";
+    const active = _sqlitePlans.filter(plan => plan.status === "active");
+    const choices = active.map(plan =>
+      `<option value="${esc(plan.id)}">${esc(plan.name || plan.id)}</option>`).join("");
+    const disclosure = tt(
+      "这里只比较两个计划里明确填写的年龄和性别；性别必须是明确的男/女输入，通用死亡率表记为不适用。它不验证真实身份或同意，也不会合并两个计划。",
+      "This only compares explicit age and sex inputs in two plans. Sex must be an explicit male/female input; a unisex mortality table is N/A. It does not verify identity or consent, and it never merges plans.");
+    const creator = active.length >= 2 ? `
+      <div class="plan-row" data-family-create>
+        <select data-household aria-label="household plan">${choices}</select>
+        <span class="pm">→</span>
+        <select data-parent aria-label="parent plan">${choices}</select>
+        <button class="btn-ghost sm" data-create>${tt("建立关联", "Link plans")}</button>
+      </div>` : `<p class="cap">${tt("需要至少两个启用的计划。", "At least two active plans are required.")}</p>`;
+    const history = familyLinkStore.links.map(link => {
+      const household = _sqlitePlanUniverse.find(
+        plan => plan.id === link.household_plan_id);
+      const slots = (((household || {}).config || {}).parents || {}).parents || [];
+      const slotOptions = slots.map((parent, index) =>
+        `<option value="${index}">${esc(parent.label || `parent[${index}]`)}</option>`).join("");
+      const evaluations = (link.evaluations || []).length
+        ? `<div class="family-evaluations">${link.evaluations.map(
+            evaluation => renderFamilyEvaluation(evaluation, link.link_id)).join("")}</div>`
+        : `<div class="pm">${tt("尚未比较", "Not yet compared")}</div>`;
+      const inactive = link.household_status !== "active"
+                       || link.parent_status !== "active";
+      const status = link.ended_at ? tt("已结束", "ended")
+        : inactive ? tt("只读：端点未启用", "read-only: endpoint inactive")
+        : tt("有效", "active");
+      const compare = link.ended_at || inactive ? "" : `
+        <select data-slot ${slotOptions ? "" : "disabled"}>${slotOptions || `<option>${tt("没有父母输入", "No parent input")}</option>`}</select>
+        <label class="pm"><input type="checkbox" data-confirm> ${tt("两个年龄属于同一天", "Both ages describe the same date")}</label>
+        <input type="date" data-date disabled>
+        <button class="btn-ghost sm" data-evaluate ${slotOptions ? "" : "disabled"}>${tt("比较年龄和性别", "Compare age and sex")}</button>`;
+      const inactiveReason = inactive && !link.ended_at
+        ? `<span class="pm">${tt(
+            `不能比较：家庭端为 ${link.household_status}，父母端为 ${link.parent_status}`,
+            `Cannot compare: household is ${link.household_status}; parent is ${link.parent_status}`)}</span>` : "";
+      const end = link.ended_at ? "" :
+        `<button class="btn-ghost sm" data-end>${tt("结束关联", "End link")}</button>`;
+      return `<div class="plan-row" data-link="${esc(link.link_id)}">
+        <span><b>${esc(link.household_display_name)}</b> → <b>${esc(link.parent_display_name)}</b><br>${evaluations}</span>
+        <span class="pm">${status}</span>${inactiveReason}${compare}${end}</div>`;
+    }).join("");
+    body.innerHTML = `${renderFamilyQueue()}<p class="cap">${disclosure}</p>${creator}${history}`;
+
+    const create = body.querySelector("[data-family-create]");
+    if (create) {
+      const household = create.querySelector("[data-household]");
+      const parent = create.querySelector("[data-parent]");
+      if (parent.options.length > 1) parent.selectedIndex = 1;
+      create.querySelector("[data-create]").addEventListener("click", async () => {
+        if (household.value === parent.value) {
+          toast(tt("两个端点必须是不同计划", "Choose two different plans"), true); return;
+        }
+        try { await familyLinkStore.create(household.value, parent.value); renderFamilyLinks(); }
+        catch (e) { toast(storageRefusalMessage(e), true); }
+      });
+    }
+    body.querySelectorAll("[data-link]").forEach(row => {
+      const link = familyLinkStore.links.find(x => x.link_id === row.dataset.link);
+      const confirmBox = row.querySelector("[data-confirm]");
+      const date = row.querySelector("[data-date]");
+      if (confirmBox && date) confirmBox.addEventListener("change", () => {
+        date.disabled = !confirmBox.checked;
+        if (confirmBox.checked && !date.value) {
+          date.value = new Date().toISOString().slice(0, 10);
+        }
+      });
+      const evaluate = row.querySelector("[data-evaluate]");
+      if (evaluate) evaluate.addEventListener("click", async () => {
+        try {
+          await familyLinkStore.evaluate(
+            link, Number(row.querySelector("[data-slot]").value),
+            confirmBox.checked, confirmBox.checked ? date.value : null);
+          renderFamilyLinks();
+        } catch (e) { toast(storageRefusalMessage(e), true); }
+      });
+      const end = row.querySelector("[data-end]");
+      if (end) end.addEventListener("click", async () => {
+        try { await familyLinkStore.end(link.link_id); renderFamilyLinks(); }
+        catch (e) { toast(storageRefusalMessage(e), true); }
+      });
+    });
+    body.querySelectorAll("[data-evidence-select]").forEach(input => {
+      input.addEventListener("change", () => {
+        const key = familyLinkStore.evidenceKey(
+          input.dataset.evidenceLink, input.dataset.evidenceId);
+        if (input.checked) familyLinkStore.selectedEvidence.add(key);
+        else familyLinkStore.selectedEvidence.delete(key);
+        updateFamilyExportControl();
+      });
+    });
+    const exportButton = body.querySelector("[data-family-export]");
+    if (exportButton) exportButton.addEventListener("click", exportFamilyEvidence);
+    body.querySelectorAll("[data-queue-link]").forEach(button => {
+      button.addEventListener("click", () => {
+        const row = Array.from(body.querySelectorAll("[data-link]")).find(
+          item => item.dataset.link === button.dataset.queueLink);
+        if (!row) return;
+        const evaluationId = button.dataset.queueEvaluation;
+        const details = evaluationId ? Array.from(
+          row.querySelectorAll("[data-evaluation]")).find(
+            item => item.dataset.evaluation === evaluationId) : null;
+        if (details) details.open = true;
+        const target = details
+          ? details.querySelector("summary")
+          : row.querySelector("[data-slot], [data-evaluate], [data-end]") || row;
+        row.classList.remove("family-queue-target");
+        void row.offsetWidth;
+        row.classList.add("family-queue-target");
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (!target.hasAttribute("tabindex")
+            && !/^(BUTTON|SELECT|SUMMARY)$/.test(target.tagName)) {
+          target.setAttribute("tabindex", "-1");
+        }
+        target.focus({ preventScroll: true });
+      });
+    });
+  }
 
   function renderRecoveredDrafts() {
     const box = document.getElementById("recoveredBox");
@@ -7467,6 +8581,7 @@
       $("resumeDraft").style.display = _workingDraft ? "" : "none";
       renderPlans();
       renderRecoveredDrafts();
+      renderFamilyLinks();
       renderStorageBanner();
       await offerCutover();
       toast(tt("已迁移到本地数据库", "Moved into the local database"));
@@ -7524,6 +8639,7 @@
     }
     toast(tt(`已保存计划「${name}」`, `Saved plan "${name}"`));
     if (state.view === "welcome") { renderPlans(); renderRecoveredDrafts(); renderStanding(); }
+    if (state.view === "welcome") renderFamilyLinks();
   }
   function timelineLabel(event) {
     if (event.kind === "plan_version") return tt("输入版本", "Input version");
@@ -7719,7 +8835,9 @@
       row.querySelector(".pn").addEventListener("change", async ev => {
         const next = ev.target.value;
         pl.name = next; if (pl.config) pl.config.name = next;
-        if (await planStore.rename(pl, next)) renderPlans();
+        if (await planStore.rename(pl, next)) {
+          await familyLinkStore.refresh(); renderPlans(); renderFamilyLinks();
+        }
       });
       row.querySelector('[data-a="open"]').addEventListener("click", () => {
         state.config = normalizeConfig(pl.config);
@@ -7727,13 +8845,17 @@
         state.quick = false; state.step = 0; goto("wizard");
       });
       row.querySelector('[data-a="dup"]').addEventListener("click", async () => {
-        if (await planStore.duplicate(pl)) renderPlans();
+        if (await planStore.duplicate(pl)) {
+          await familyLinkStore.refresh(); renderPlans(); renderFamilyLinks();
+        }
       });
       const timeline = row.querySelector('[data-a="timeline"]');
       if (timeline) timeline.addEventListener("click", () => showPlanTimeline(pl, row, timeline));
       row.querySelector('[data-a="del"]').addEventListener("click", async () => {
         if (!confirm(tt(`删除计划「${pl.name}」？`, `Delete plan "${pl.name}"?`))) return;
-        if (await planStore.remove(pl)) renderPlans();
+        if (await planStore.remove(pl)) {
+          await familyLinkStore.refresh(); renderPlans(); renderFamilyLinks();
+        }
       });
       list.appendChild(row);
     });
@@ -7841,21 +8963,53 @@
     const spend = +$("qSpend").value || 0, port = +$("qPort").value || 0, ret = +$("qRet").value || 0;
     const spouseInc = +$("qSpouse").value || 0;
     if (income <= 0 || ret <= 0) { toast(tt("请把 5 个数字填完整", "Please fill all five numbers"), true); return; }
-    // representative allocator: 401k -> roth -> hsa from the after-tax savings budget
+    // Representative allocator: 401k -> roth -> hsa from the after-tax savings
+    // budget. The HSA leg is opt-in and carries the user's OWN eligibility
+    // facts. It used to allocate to an HSA unconditionally, and from the day
+    // the eligibility contract landed that made every quick estimate a 400
+    // ("contributions.hsa_coverage_tier must be 'self_only' or 'family'") --
+    // the app's front door, refused, with all five numbers filled in.
     const limits = (state.rulePackDefaults || {}).contribution_limits || {};
+    const tierCaps = (state.rulePackDefaults || {}).hsa_tier_limits || {};
     const preCap = +limits.pretax_401k_limit_y1 || 0;
     const rothCap = +limits.roth_ira_limit_y1 || 0;
-    const hsaCap = +limits.hsa_limit_y1 || 0;
+    const tier = ($("qHsa") || {}).value || "none";
+    // The tier's own statutory base. No age-55 catch-up: the quick estimate
+    // under-credits rather than crediting room it has not asked about.
+    const hsaCap = tier === "none" ? 0
+      : (+tierCaps[tier] || +limits.hsa_limit_y1 || 0);
     const budget = Math.max(0, income * 0.76 - spend);
     const pre = Math.min(preCap, Math.round(budget));
     const roth = Math.min(rothCap, Math.round(Math.max(0, budget - pre)));
     const hsa = Math.min(hsaCap, Math.round(Math.max(0, budget - pre - roth)));
+    let hsaFacts = {};
+    if (tier !== "none") {
+      const ded = +$("qHsaDed").value, oop = +$("qHsaOop").value;
+      const through = +$("qHsaThrough").value;
+      if (!$("qHsaClear").checked || !($("qHsaDed").value !== "" && ded > 0)
+          || !($("qHsaOop").value !== "" && oop > 0)
+          || !($("qHsaThrough").value !== "" && Number.isInteger(through)
+               && through >= age)) {
+        toast(t("quick.hsa.need"), true); return;
+      }
+      // Whether these clear the statutory HDHP floors and ceilings is the
+      // server's answer, not the page's: one copy of that rule, next to the
+      // pack it reads.
+      hsaFacts = {
+        hsa_coverage_tier: tier, hsa_deductible_y1: ded,
+        hsa_out_of_pocket_max_y1: oop,
+        hsa_disqualifying_other_coverage: false,
+        hsa_medicare_enrolled: false, hsa_claimed_as_dependent: false,
+        hsa_eligible_through_age: through,
+      };
+    }
     clearActivePlanRef(); state.config = normalizeConfig({
       name: tt("速估", "Quick estimate"),
       state: { start_age: age, expenses_y0: ret },
       contributions: { base_salary_pre: income, bonus_pre: 0, ot_income_pre: 0,
                        annual_spending_now: spend, pretax_401k_limit_y1: pre,
-                       roth_ira_limit_y1: roth, hsa_limit_y1: hsa },
+                       roth_ira_limit_y1: roth, hsa_limit_y1: hsa,
+                       ...hsaFacts },
       initial: { pretax_401k: Math.round(port * 0.5), roth_ira: Math.round(port * 0.15),
                  hsa: 0, taxable: Math.round(port * 0.35) },
       household: spouseInc > 0 ? {
@@ -7895,6 +9049,7 @@
     await legacyStore.refreshAuthority();
     await planStore.refresh();
     await recoveredStore.refresh();
+    await familyLinkStore.refresh();
     // Read the side-store before deciding whether to offer Resume: this is the
     // whole of ruling row 3 — after a restart the draft comes from disk, not
     // from a variable that a restart just cleared.
@@ -7906,6 +9061,7 @@
     renderPersonas();
     renderPlans();
     renderRecoveredDrafts();
+    renderFamilyLinks();
     renderStorageBanner();
     await offerCutover();
     const migrateButton = document.getElementById("migrateBtn");
@@ -7919,6 +9075,10 @@
     $("logModal").addEventListener("click", e => { if (e.target === $("logModal")) closeLog(); });
     $("copyDiag").addEventListener("click", copyDiag);
     $("robustBtn").addEventListener("click", runRobustness);
+    $("qHsa").addEventListener("change", () => {
+      $("qHsaFacts").style.display =
+        $("qHsa").value === "none" ? "none" : "";
+    });
     $("quickGo").addEventListener("click", quickRun);
     $("impCfgWelcome").addEventListener("click", () => $("impFileWelcome").click());
     $("impFileWelcome").addEventListener("change", ev => importConfig(ev.target.files[0]));
@@ -7944,6 +9104,8 @@
     $("sensRun").addEventListener("click", runSens); $("swrRun").addEventListener("click", runSwr);
     $("claimRun").addEventListener("click", runClaim); $("btRun").addEventListener("click", runBt);
     if ($("beqRun")) $("beqRun").addEventListener("click", runBequestCheck);
+    if ($("cbRun")) $("cbRun").addEventListener("click", runCareerBreakCheck);
+    if ($("execRun")) $("execRun").addEventListener("click", runExecutionStress);
     if ($("alocRun")) $("alocRun").addEventListener("click", runAssetLocation);
     if ($("rschRun")) $("rschRun").addEventListener("click", runRothSchedule);
     if ($("frRun")) $("frRun").addEventListener("click", runFundedRatio); $("rothRun").addEventListener("click", runRoth); $("stratRun").addEventListener("click", runStrategies);

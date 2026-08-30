@@ -43,7 +43,7 @@ ARCHIVE_SCHEMA_VERSION = 6
 # live archive is v8 the moment a cutover completes, so a backup taken after one
 # is a v8 backup, and refusing it left a cut-over install with no way to take a
 # package at all.
-SUPPORTED_SOURCE_SCHEMA_VERSIONS = ("6", "7", "8", "9", "10")
+SUPPORTED_SOURCE_SCHEMA_VERSIONS = ("6", "7", "8", "9", "10", "11", "12")
 ABSENT_LOGICAL_SHA256 = (
     "98d9795836406c36f08d4ebe3ef610815eb8786d86cd500b6249d9f3c8b91a42")
 EMPTY_TARGET_HASH = (
@@ -390,7 +390,15 @@ def _json_safe_value(value: Any) -> Any:
 
 
 def _logical_row_hash(conn: sqlite3.Connection, table: str, row_id: str) -> str:
-    """Hash one v7 evidence target without depending on SQLite page layout."""
+    """Hash one v7 evidence target without depending on later additive columns.
+
+    v7 fixed the identity of the row shape that existed at v7.  v11 adds the
+    lifecycle-only ``plans.status_revision`` counter; including that later
+    column would make installing an additive schema look like the imported v7
+    plan had been rewritten.  The counter has its own v11 trigger and lineage
+    validation, while the historical target hash remains byte-compatible with
+    the evidence that was originally recorded.
+    """
     allowed = {
         "plans": "id", "plan_versions": "id", "recovered_drafts": "draft_id",
         "legacy_checkin_evidence": "evidence_id",
@@ -403,7 +411,16 @@ def _logical_row_hash(conn: sqlite3.Connection, table: str, row_id: str) -> str:
         + _quote_identifier(key) + " = ?", (row_id,)).fetchone()
     if row is None:
         raise RecoveryError("evidence target row is missing")
-    values = {name: _json_safe_value(row[name]) for name in row.keys()}
+    ignored = {"status_revision"} if table == "plans" else set()
+    values = {name: _json_safe_value(row[name]) for name in row.keys()
+              if name not in ignored}
+    if table == "plans":
+        # A migration target fixes which Plan was created, not its later
+        # lifecycle. Imported and user-created Plans enter as active; status is
+        # the supported soft-delete/archive boundary and is intentionally
+        # mutable. Canonicalising that one field preserves the original row
+        # identity while v11's monotone revision records every real change.
+        values["status"] = "active"
     return _sha256_json({"table": table, "row": values})
 
 
@@ -669,6 +686,53 @@ def _validate_v8_lineage(conn: sqlite3.Connection) -> None:
             raise RecoveryError("v8 lineage points to missing evidence")
 
 
+def _validate_v11_parent_identity(conn: sqlite3.Connection) -> None:
+    """Validate historical endpoint/version bindings beyond SQLite's FKs."""
+    bad_link = conn.execute(
+        "SELECT l.link_id FROM parent_identity_links l "
+        "LEFT JOIN plans hp ON hp.id=l.household_plan_id "
+        "LEFT JOIN plans pp ON pp.id=l.parent_plan_id "
+        "WHERE hp.id IS NULL OR pp.id IS NULL "
+        "OR l.household_plan_id=l.parent_plan_id "
+        "OR l.relation!='parent_identity' "
+        "OR ((l.ended_at IS NULL)!=(l.ended_reason IS NULL)) LIMIT 1"
+    ).fetchone()
+    if bad_link is not None:
+        raise RecoveryError("v11 parent identity link is invalid")
+    bad_evaluation = conn.execute(
+        "SELECT e.evaluation_id FROM parent_identity_evaluations e "
+        "JOIN parent_identity_links l ON l.link_id=e.link_id "
+        "JOIN plans hp ON hp.id=l.household_plan_id "
+        "JOIN plans pp ON pp.id=l.parent_plan_id "
+        "LEFT JOIN plan_versions hv ON hv.id=e.household_plan_version_id "
+        "LEFT JOIN plan_versions pv ON pv.id=e.parent_plan_version_id "
+        "WHERE hv.id IS NULL OR pv.id IS NULL "
+        "OR hv.plan_id!=l.household_plan_id OR pv.plan_id!=l.parent_plan_id "
+        "OR e.household_status_revision>hp.status_revision "
+        "OR e.parent_status_revision>pp.status_revision LIMIT 1"
+    ).fetchone()
+    if bad_evaluation is not None:
+        raise RecoveryError("v11 parent identity evaluation lineage is invalid")
+
+
+def _validate_v12_parent_identity_sex(conn: sqlite3.Connection) -> None:
+    """Validate each additive sex row against its immutable age-row root."""
+    bad = conn.execute(
+        "SELECT s.sex_evaluation_id FROM parent_identity_sex_evaluations s "
+        "LEFT JOIN parent_identity_evaluations a "
+        "ON a.evaluation_id=s.age_evaluation_id "
+        "WHERE a.evaluation_id IS NULL OR a.link_id!=s.link_id "
+        "OR a.household_plan_version_id!=s.household_plan_version_id "
+        "OR a.parent_plan_version_id!=s.parent_plan_version_id "
+        "OR a.household_status_revision!=s.household_status_revision "
+        "OR a.parent_status_revision!=s.parent_status_revision "
+        "OR a.parent_slot_index!=s.parent_slot_index "
+        "OR a.parent_slot_label!=s.parent_slot_label LIMIT 1"
+    ).fetchone()
+    if bad is not None:
+        raise RecoveryError("v12 parent identity sex evaluation lineage is invalid")
+
+
 def validate_archive_connection(conn: sqlite3.Connection) -> dict:
     """Run the single archive validator used before every logical identity."""
     try:
@@ -686,6 +750,10 @@ def validate_archive_connection(conn: sqlite3.Connection) -> dict:
                 conn, include_archive_resolution=(version >= 8))
         if version >= 8:
             _validate_v8_lineage(conn)
+        if version >= 11:
+            _validate_v11_parent_identity(conn)
+        if version >= 12:
+            _validate_v12_parent_identity_sex(conn)
         return {"schema_version": version, "database_state": "present"}
     except (PERSISTENCE.PersistenceError, sqlite3.Error, RecoveryError) as exc:
         if isinstance(exc, RecoveryError):
@@ -3787,10 +3855,12 @@ _ADDITIVE_STAGE_STEPS = (
     (7, "install_v8_schema", "M2"),
     (8, "install_v9_schema", "the check-in ledger"),
     (9, "install_v10_schema", "the decision record"),
+    (10, "install_v11_schema", "the parent identity record"),
+    (11, "install_v12_schema", "the parent identity sex evidence"),
 )
 
 #: Highest archive schema a restore stage can be brought to.
-MAX_STAGE_SCHEMA_VERSION = 10
+MAX_STAGE_SCHEMA_VERSION = 12
 
 
 def _migrate_stage_to_target(path: Path, target_schema_version: int) -> None:

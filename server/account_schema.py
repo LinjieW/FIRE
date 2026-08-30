@@ -12,7 +12,7 @@ Phase 2 is where the engine reads it. Splitting them is deliberate: a
 representation nobody proved equivalent is a bad foundation for new semantics,
 and the test beside this file is the proof.
 
-**Six dimensions, not the three the idea bank listed.** Measured against
+**Seven dimensions, not the three the idea bank listed.** Measured against
 `withdraw_with_seasoning_v94` and the tax path, the four buckets differ by
 order, withdrawal rate, early-withdrawal penalty, seasoning, contribution
 limit and forced distribution. The two the idea bank missed are the awkward
@@ -22,6 +22,11 @@ ones:
   touched yet" -- the Roth ladder's five-year rule, which the engine already
   models via `roth_locked_amount`. A schema without it cannot express a
   feature that already ships.
+* **Tax character** is the seventh, and arrived later (Roadmap 10.0 Phase 2,
+  OPEN_ITEMS E36) for an honest reason: the first six were measured against a
+  withdrawal function that applies a RATE, and a solver that computes a real
+  bracketed bill needs to know which BASE a draw lands in instead. See
+  `CHARACTER_ORDINARY` for why the rate name cannot be made to answer that.
 * **Ordering** was hardcoded in a function body. User ruling 2026-08-18: the
   type carries a DEFAULT and a strategy may override it. The default belongs
   to the jurisdiction because tax law makes some orders obviously better; the
@@ -47,6 +52,25 @@ RATE_HSA = "withdrawal_tax_hsa"
 #: have started applying a multiplication the engine never performed.
 RATE_NONE = None
 
+#: What KIND of income a withdrawal from this account is, for an engine that
+#: computes a real tax bill rather than applying a rate. Ordinary income goes
+#: through the ordinary brackets; a capital gain is stacked on top of them at
+#: preferential rates; untaxed money never appears in either.
+#:
+#: **This is a seventh dimension, not a restatement of the sixth.** The rate
+#: name above cannot produce it, because the two engines disagree about the
+#: same name: `withdraw_with_seasoning_v94` reads a real
+#: `withdrawal_tax_hsa` off the plan for `us_hsa`, while
+#: `fire_tax_true.solve_retirement_year` never taxes an HSA draw at all. A
+#: mapping from rate name to character would have had to encode that
+#: disagreement somewhere, and "somewhere" would have been inside the tax
+#: module -- which is precisely the hardcoding this file exists to remove.
+#: Declaring it here puts the asymmetry where it can be read and proved.
+CHARACTER_ORDINARY = "ordinary"
+CHARACTER_CAPITAL_GAIN = "capital_gain"
+#: Contributes to no tax base at all -- again a MECHANISM, not a rate of zero.
+CHARACTER_UNTAXED = None
+
 
 class AccountType:
     """One account type, in six dimensions.
@@ -59,6 +83,7 @@ class AccountType:
 
     def __init__(self, key: str, *, field: Optional[str], jurisdiction: str,
                  default_order: int, withdrawal_rate: Optional[str],
+                 tax_character: Optional[str] = CHARACTER_UNTAXED,
                  early_penalty_rate: float = 0.0,
                  early_penalty_age: Optional[float] = None,
                  seasoned: bool = False,
@@ -71,6 +96,8 @@ class AccountType:
         #: Lower is drawn first. A DEFAULT -- see the module docstring.
         self.default_order = default_order
         self.withdrawal_rate = withdrawal_rate
+        #: Which tax base a withdrawal lands in. See the module constants.
+        self.tax_character = tax_character
         self.early_penalty_rate = early_penalty_rate
         self.early_penalty_age = early_penalty_age
         #: Money that cannot be touched until it has aged. True here means the
@@ -91,7 +118,7 @@ class AccountType:
 US_ACCOUNT_TYPES = (
     AccountType(
         "us_taxable", field="taxable", jurisdiction="US", default_order=1,
-        withdrawal_rate=RATE_TAXABLE,
+        withdrawal_rate=RATE_TAXABLE, tax_character=CHARACTER_CAPITAL_GAIN,
         note_cn="应税账户。先取它，因为它没有年龄门槛也没有罚金 —— "
                 "代价是它一路上都在交税，那部分由股息拖累与成本基础单独建模。",
         note_en="The taxable account. Drawn first because it has no age gate "
@@ -99,7 +126,8 @@ US_ACCOUNT_TYPES = (
                 "which the dividend drag and cost basis model separately."),
     AccountType(
         "us_pretax_401k", field="pretax_401k", jurisdiction="US",
-        default_order=2, withdrawal_rate=RATE_TRADITIONAL,
+        default_order=3, withdrawal_rate=RATE_TRADITIONAL,
+        tax_character=CHARACTER_ORDINARY,
         early_penalty_rate=0.10, early_penalty_age=59.5,
         contribution_limited=True, forced_distribution=True,
         note_cn="税前 401(k)。59.5 岁前取要付 10% 罚金，且到龄后必须开始提取（RMD）——"
@@ -109,15 +137,57 @@ US_ACCOUNT_TYPES = (
                 "mandatory. 'May draw' and 'must draw' are different things "
                 "and this schema keeps them apart."),
     AccountType(
-        "us_hsa", field="hsa", jurisdiction="US", default_order=3,
-        withdrawal_rate=RATE_HSA, contribution_limited=True,
+        "us_hsa", field="hsa", jurisdiction="US", default_order=4,
+        withdrawal_rate=RATE_HSA, tax_character=CHARACTER_UNTAXED,
+        contribution_limited=True,
         note_cn="HSA。合规医疗支出下提取免税，因此排在 Roth 之前但在应税与税前之后。",
         note_en="The HSA. Withdrawals for qualified medical costs are "
                 "untaxed, which is why it sits ahead of the Roth but behind "
                 "taxable and pre-tax."),
+    # NOT YET REACHABLE FROM A PLAN, deliberately. There is no
+    # `initial.gov_457b` leaf and no contribution limit for it, because
+    # `fire_tax_true.solve_retirement_year` still names the four original
+    # buckets by hand (lines reading `accounts.taxable`, `accounts.pretax_401k`
+    # and so on). Until that solver is generalised, a plan with a 457(b)
+    # balance would have it drawn correctly on the simple path and IGNORED
+    # ENTIRELY by the true-tax engine -- which is OPEN_ITEMS E34 again, just
+    # on the other path. Giving users the leaf first would be shipping the
+    # defect this declaration exists to remove. See OPEN_ITEMS E36.
     AccountType(
-        "us_roth_ira", field="roth_ira", jurisdiction="US", default_order=4,
-        withdrawal_rate=RATE_NONE, seasoned=True, contribution_limited=True,
+        "us_gov_457b", field="gov_457b", jurisdiction="US", default_order=2,
+        withdrawal_rate=RATE_TRADITIONAL, tax_character=CHARACTER_ORDINARY,
+        contribution_limited=True,
+        forced_distribution=True,
+        # NO early_penalty_rate, and that is the entire reason this type
+        # exists separately rather than being folded into the pre-tax 401(k)
+        # the way the CSV import still folds it. A governmental 457(b) is the
+        # one tax-deferred account a separated employee may draw at any age
+        # without the 10% penalty, which for a plan that retires at 40 is not
+        # a detail -- measured on a plan-heavy saver, 52 of 54 paths paid that
+        # penalty, a median of $81,694 nominal.
+        #
+        # Drawn at order 2, ahead of the pre-tax 401(k), for the same reason:
+        # if two accounts are taxed identically on the way out and only one
+        # carries a penalty before 59.5, the penalty-free one goes first. The
+        # order is static rather than age-aware because after 59.5 the two are
+        # taxed the same and the choice stops mattering.
+        note_cn="政府 457(b)。**离职后任何年龄提取都没有 10% 提前提取罚金** ——"
+                "这是它唯一值得单独建模的理由,也正是提前退休最在意的那一点。"
+                "提取税率与税前 401(k) 相同,所以排在它前面:两个出口税一样,"
+                "只有一个有罚金,当然先走没罚金的那个。"
+                "它的缴款限额与 401(k)/403(b) **各算各的**,可以两边都缴满。",
+        note_en="A governmental 457(b). Its one distinguishing feature is that "
+                "a separated employee may draw it at ANY age with no 10% early "
+                "withdrawal penalty, which is precisely what an early "
+                "retirement cares about. Taxed the same as the pre-tax 401(k) "
+                "on the way out, so it is drawn first: same exit tax, and only "
+                "one of them carries a penalty. Its contribution limit is "
+                "SEPARATE from the 401(k)/403(b) one, so a person with both "
+                "may fill each."),
+    AccountType(
+        "us_roth_ira", field="roth_ira", jurisdiction="US", default_order=5,
+        withdrawal_rate=RATE_NONE, tax_character=CHARACTER_UNTAXED,
+        seasoned=True, contribution_limited=True,
         note_cn="Roth IRA。最后取，因为它增长免税 —— 留得越久越值钱。"
                 "**它是唯一带熟成的类型**：转换进来的钱五年内不能动，"
                 "而那不是税率问题，是可及性问题。",
@@ -166,3 +236,39 @@ def resolve_order(override: Optional[list] = None,
             "withdrawal order leaves out %s -- a partial order would draw "
             "them somewhere nobody chose" % (missing,))
     return named
+
+
+def ordered_types(override: Optional[list] = None,
+                  jurisdiction: str = "US") -> tuple:
+    """`resolve_order`, resolved to the types themselves.
+
+    Every engine that draws accounts needs exactly this, and two of them now
+    do. The path juggling that lets an engine module reach this package stays
+    at each call site (the engine must not depend on the server package at
+    import time), but the ORDERING RULE lives here once -- a second copy of it
+    is how two paths start disagreeing about the same plan.
+    """
+    return tuple(BY_KEY[key] for key in resolve_order(override, jurisdiction))
+
+
+def reinvestment_type(override: Optional[list] = None,
+                      jurisdiction: str = "US"):
+    """Where money that has to come back out of the tax solver goes.
+
+    An RMD is a forced draw: the law can make a household take out more than
+    it needs to spend, and the excess has to land somewhere. It lands in the
+    first capital-gain account in draw order -- the one already being drawn
+    down, and the only kind that can accept an unlimited deposit.
+
+    A jurisdiction that declares no such account is REFUSED rather than
+    defaulted, because the alternative is a forced withdrawal that leaves the
+    accounts and never arrives anywhere. Money vanishing is the failure this
+    project treats as worst; it keeps the arithmetic looking complete.
+    """
+    for account in ordered_types(override, jurisdiction):
+        if account.tax_character == CHARACTER_CAPITAL_GAIN:
+            return account
+    raise ValueError(
+        "%s declares no capital-gain account, so a forced distribution "
+        "larger than the year's need would have nowhere to be reinvested "
+        "and would simply disappear" % (jurisdiction,))

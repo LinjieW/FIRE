@@ -117,9 +117,9 @@ def check_income_stream_copy():
           "generally understates PTC below 300% FPL" in src
           and "can overstate it below 100% FPL" in src
           and "可能高估 PTC" in src)
-    check("HSA limitation states self-only and no family cap",
-          "2026 $4,400" in src and "self-only" in src
-          and "family HSA cap" in src)
+    check("HSA controls require eligibility facts and expose family coverage",
+          "HSA coverage tier" in src and "HDHP out-of-pocket max" in src
+          and '"family"' in src and "eligible through age" in src)
     check("FRA limitation states the 1960-and-later cohort",
           "1960-and-later birth cohort" in src
           and "1960 年及以后出生 cohort" in src)
@@ -463,6 +463,83 @@ def drive(window):
 
         # ---- flow 2: wizard walk -> precision ----
         js(window, 'document.getElementById("startFresh").click()')
+
+        # ---- E37: the governmental 457(b) is a field a user can fill ----
+        # Driven rather than grepped: the whole arc from E34 to E37 was about
+        # an account that existed everywhere except where somebody could use
+        # it, and four of the five defects were silent.
+        b457 = '.field[data-path="initial.gov_457b"] input[type="number"]'
+        for _ in range(8):
+            if js(window, '!!document.querySelector(%r)' % b457):
+                break
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.2)
+        check("the wizard has a governmental 457(b) balance field",
+              bool(js(window, '!!document.querySelector(%r)' % b457)))
+        rows_js = ('[...document.querySelectorAll("#wizHoldings tr")]'
+                   '.map(r=>r.textContent).join("|")')
+        before_rows = js(window, rows_js) or ""
+        js(window, 'const b=document.querySelector(%r);'
+                   ' b.value="150000";'
+                   ' b.dispatchEvent(new Event("input", {bubbles:true}));' % b457)
+        time.sleep(0.4)
+        after_rows = js(window, rows_js) or ""
+        # The TOTAL is the claim, not the row: three of the six places the
+        # page listed the buckets are sums, and missing one understates net
+        # worth. Measured: $205K before, $355K after, on a $150,000 entry.
+        check("a 457(b) balance reaches the sidebar's simulated total",
+              before_rows != after_rows and "$150K" in after_rows
+              and "$205K" in before_rows and "$355K" in after_rows,
+              (before_rows[-160:], after_rows[-160:]))
+        js(window, 'const b=document.querySelector(%r);'
+                   ' b.value="0";'
+                   ' b.dispatchEvent(new Event("input", {bubbles:true}));' % b457)
+        time.sleep(0.3)
+        js(window, 'document.getElementById("startFresh").click()')
+
+        # ---- E33: the sidebar's savings figure is the ENGINE's ----
+        # This is the seam that failed. The page used to compute the figure
+        # itself, and at a $45,000 salary it said the household saved 87% of
+        # gross while the engine had them $3,662 a year short. Both sides had
+        # tests; nobody tested that the two numbers were the same number.
+        cell = 'document.getElementById("wizSavingsCell")'
+        check("the wizard sidebar has a savings cell", bool(js(window, f'!!{cell}')))
+        wait_js(window, f'{cell} && /[0-9]/.test({cell}.textContent)', timeout=12)
+        savings_text = js(window, f'{cell} ? {cell}.textContent : ""') or ""
+        check("the sidebar savings figure arrives from the server",
+              bool(re.search(r"[0-9]", savings_text)), savings_text)
+        # Find the savings-mode control, stepping forward until it appears.
+        mode_sel = '.field[data-path="contributions.savings_mode"] select'
+        for _ in range(8):
+            if js(window, f'!!document.querySelector({mode_sel!r})'):
+                break
+            js(window, 'document.getElementById("wizNext").click()')
+            time.sleep(0.2)
+        check("the savings-mode control is reachable in the wizard",
+              bool(js(window, f'!!document.querySelector({mode_sel!r})')))
+
+        def savings_at(rate):
+            js(window, f"""const m=document.querySelector({mode_sel!r});
+              m.value="savings_rate"; m.dispatchEvent(new Event("change", {{bubbles:true}}));""")
+            time.sleep(0.3)
+            js(window, f"""const r=document.querySelector('.field[data-path="contributions.savings_rate"] input');
+              if (r) {{ r.value="{rate}"; r.dispatchEvent(new Event("input", {{bubbles:true}})); }}""")
+            # The request is debounced, so poll rather than sleep a guess.
+            time.sleep(1.2)
+            return js(window, f'{cell} ? {cell}.textContent : ""') or ""
+
+        low, high = savings_at(10), savings_at(50)
+        # The whole defect in one assertion: this used to return the same
+        # number for both, because the page's own function never read
+        # `savings_mode` at all -- the control the user had just moved did
+        # nothing to the figure beside it.
+        check("moving the savings-rate control moves the sidebar figure",
+              low != high and bool(re.search(r"[0-9]", low)) and bool(re.search(r"[0-9]", high)),
+              f"{low!r} vs {high!r}")
+        js(window, f"""const m=document.querySelector({mode_sel!r});
+          m.value="residual"; m.dispatchEvent(new Event("change", {{bubbles:true}}));""")
+        time.sleep(0.3)
+        js(window, 'document.getElementById("startFresh").click()')
         for _ in range(3):
             js(window, 'document.getElementById("wizNext").click()')
             time.sleep(0.15)
@@ -782,6 +859,51 @@ def drive(window):
                          ' o.length === 2 && o.includes("intermediate")'
                          ' && o.includes("range")'))
 
+        # A dial gated on a NUMBER, not on a checkbox. Only checkboxes and
+        # selects rebuilt the step, so typing an HSA amount left the plan in a
+        # state the server refuses -- "contributions.hsa_coverage_tier must be
+        # 'self_only' or 'family' for a non-zero HSA contribution" -- with
+        # every control that could answer it absent from the DOM. Twenty-one
+        # controls sat behind three numeric gates; ten of them here. It
+        # shipped in v10.0-installed-30 and was found by typing into the page,
+        # so the check types too.
+        js(window, 'for (const b of document.querySelectorAll("#wizardRail button"))'
+                   ' { if (/收入与储蓄|Income/.test(b.textContent)) { b.click(); break; } }')
+        time.sleep(0.4)
+        check("an HSA amount is a numeric gate and its facts are hidden first",
+              js(window, 'const f = document.querySelector('
+                         '\'.field[data-path="contributions.hsa_coverage_tier"]\');'
+                         ' !f || getComputedStyle(f).display === "none"'))
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="contributions.hsa_limit_y1"] input\');'
+                   ' el.value = "4400";'
+                   ' el.dispatchEvent(new Event("input", {bubbles: true}));'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+        for path in ("contributions.hsa_coverage_tier",
+                     "contributions.hsa_deductible_y1",
+                     "contributions.hsa_out_of_pocket_max_y1",
+                     "contributions.hsa_eligible_through_age"):
+            check("typing an HSA amount reveals %s" % path.split(".")[-1],
+                  js(window, 'const f = document.querySelector('
+                             '`.field[data-path="%s"]`);'
+                             ' !!f && getComputedStyle(f).display !== "none"'
+                             % path))
+        # And the revealed money/age boxes arrive EMPTY, not at 0 -- their
+        # defaults are null and 0 would be an answer nobody gave (U39).
+        for path in ("contributions.hsa_deductible_y1",
+                     "contributions.hsa_eligible_through_age"):
+            check("the revealed %s is blank, not a zero" % path.split(".")[-1],
+                  js(window, 'const i = document.querySelector('
+                             '`.field[data-path="%s"] input`);'
+                             ' !!i && i.value === ""' % path))
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="contributions.hsa_limit_y1"] input\');'
+                   ' el.value = "0";'
+                   ' el.dispatchEvent(new Event("input", {bubbles: true}));'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+
         js(window, 'document.getElementById("restartBtn").click()')
         time.sleep(0.3)
 
@@ -803,9 +925,60 @@ def drive(window):
                      '[...document.querySelectorAll(".view")].find(v=>v.classList.contains("show")).id === "v-results"',
                      timeout=60)
         check("quick estimate reaches results", ok)
+
+        # The recap panel exists so a user can check what they told the model,
+        # and nothing measured it. `initial.gov_457b` joined the array it reads
+        # without a row of its own, so every label below shifted by one and a
+        # user's Roth was shown as their HSA -- with a correct total, because
+        # the total sums the array. Shipped in v10.0-installed-30 and found by
+        # driving the page. This asserts the quick allocator's own split:
+        # $150,000 -> 50% pre-tax, 15% Roth, 35% taxable, and no 457(b) or HSA
+        # unless the user asked for one.
+        recap = js(window, '(() => {const out = {};'
+                   '[...document.querySelectorAll("#inputsRecapBody .recap-row")]'
+                   '.forEach(r => { const k = (r.querySelector(".rk")||{}).textContent;'
+                   ' const v = (r.querySelector(".rv")||{}).textContent;'
+                   ' if (k) out[k.trim()] = (v||"").trim(); });'
+                   'return JSON.stringify(out);})()') or "{}"
+        recap = json.loads(recap)
+        for label, expected in (("401(k) / IRA·pre", "$75,000"),
+                                ("Roth", "$22,500"),
+                                ("HSA", "$0"),
+                                ("应税账户", "$52,500")):
+            check("recap reports the %s balance the quick estimate built"
+                  % label, recap.get(label) == expected,
+                  "%s=%r" % (label, recap.get(label)))
+
         verdict = js(window, '(document.querySelector("#verdict .v-main")||{}).textContent || ""')
         check("verdict sentence rendered", len(verdict or "") > 20)
         check("verdict carries its sampling interval", "±" in (js(window, '(document.querySelector("#verdict .v-sub")||{}).textContent || ""') or ""))
+        # The gauge used to have paths and a number in the DOM while the SVG
+        # itself was 0×0 in WKWebView: it was a flex item with only max-width,
+        # so WebKit collapsed its used size and painted nothing in the card.
+        # DOM children and dash offsets both looked healthy, which is why the
+        # earlier reveal checks could not see the user's blank gauge. Measure
+        # the actual visible box on the real overview page.
+        gauge_layout_raw = js(window, '''JSON.stringify((() => {
+          const g = document.getElementById("gauge");
+          const wrap = g && g.parentElement;
+          const r = g && g.getBoundingClientRect();
+          const wr = wrap && wrap.getBoundingClientRect();
+          return {width: r ? r.width : 0, height: r ? r.height : 0,
+                  wrapHeight: wr ? wr.height : 0,
+                  paths: g ? g.querySelectorAll("path").length : 0,
+                  text: (g && g.querySelector("text") || {}).textContent || ""};
+        })())''') or "{}"
+        try:
+            gauge_layout = json.loads(gauge_layout_raw)
+        except (TypeError, ValueError):
+            gauge_layout = {}
+        check("overview gauge occupies a visible WKWebView layout box",
+              gauge_layout.get("width", 0) >= 200
+              and gauge_layout.get("height", 0) >= 140
+              and gauge_layout.get("wrapHeight", 0) >= 140
+              and gauge_layout.get("paths", 0) >= 2
+              and "%" in gauge_layout.get("text", ""),
+              str(gauge_layout))
         # The tier in words, checked in the REAL page rather than in the
         # source: a colourblind reader's only way to know which of three
         # states this plan is in.
@@ -828,7 +1001,8 @@ def drive(window):
             tabs[i].click();
             var big = Array.prototype.slice.call(document.querySelectorAll("svg"))
               .filter(function(e){ var r = e.getBoundingClientRect();
-                                   return r.width > 200 && r.height > 80; });
+                                   return e.id !== "gauge" &&
+                                          r.width > 200 && r.height > 80; });
             if (big.length) return "found:" + i;
           }
           return "none";
@@ -836,6 +1010,7 @@ def drive(window):
         moved = js(window, """(function(){
           var svgs = Array.prototype.slice.call(document.querySelectorAll("svg"));
           var svg = svgs.filter(function(e){ var r=e.getBoundingClientRect();
+                                             if (e.id === "gauge") return false;
                                              return r.width > 200 && r.height > 80; })[0];
           if (!svg) return "no-svg:" + svgs.length;
           var r = svg.getBoundingClientRect();
@@ -939,6 +1114,31 @@ def drive(window):
         # ---- flow 6: dynamic stress content remains localized ----
         js(window, '([...document.querySelectorAll(".rtab")].find(b=>b.dataset.p==="stress")||{click(){}}).click()')
         time.sleep(0.4)
+
+        # B4 must cross the actual page seam, not merely prove that a button,
+        # route and study each exist.  This exact missing-config gap kept the
+        # decision panel broken for two releases while both sides tested green.
+        js(window, 'document.getElementById("execRun").click()')
+        execution_done = wait_js(
+            window,
+            '!document.getElementById("execRun").disabled && '
+            'document.getElementById("execOut").textContent.trim().length > 0',
+            timeout=120)
+        execution_text = js(
+            window,
+            'document.getElementById("execOut").textContent || ""') or ""
+        execution_rows = js(
+            window,
+            'document.querySelectorAll("#execOut tbody tr").length') or 0
+        check("execution stress crosses current config, job, poll and result",
+              execution_done and execution_rows == 4,
+              execution_text[:360])
+        check("execution stress renders numeric evidence without a verdict",
+              "结果，不是裁定" in execution_text and "差异" in execution_text,
+              execution_text[:360])
+        check("execution stress renders the base-location proof boundary",
+              "未搬迁的 base-location" in execution_text,
+              execution_text[:360])
 
         # ---- Phase 1: Roth grid disclosure, before and after a run ----------
         # The endpoint is mocked only for this UI contract check.  The real
@@ -1333,6 +1533,16 @@ def _archive_count(db_path, table):
         return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     except sqlite3.Error:
         return 0
+    finally:
+        conn.close()
+
+
+def _archive_user_version(db_path):
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
+    except sqlite3.Error:
+        return None
     finally:
         conn.close()
 
@@ -1952,6 +2162,10 @@ def drive_storage_seam(window):
     # so it cannot share an archive with the plan-bearing flow.
     _with_isolated_seam(window, SEAM_PORT, _drive_draft_only_cutover)
     _with_isolated_seam(window, _free_port(), _drive_storage_seam_checks)
+    # B15 has to be driven as a product composition, not only through its API:
+    # the defect class this repository has paid for is a backend and a page that
+    # are each green while the control between them cannot complete one action.
+    _with_isolated_seam(window, _free_port(), _drive_parent_identity)
     _with_isolated_seam(window, _free_port(), _drive_archive_lineage)
     # B1 needs a fence that is *held*, so it must not share an archive with a
     # scenario that finalizes one.
@@ -1962,6 +2176,220 @@ def drive_storage_seam(window):
     # them run before a cutover and two after, and a shared archive would make
     # the first pair post-cutover whether they wanted to be or not.
     _with_isolated_seam(window, _free_port(), _drive_round5_compositions)
+
+
+def _drive_parent_identity(window, db_path):
+    """B15: link, compare, translate and end through real WKWebView controls."""
+    plans = [
+        {"id": "family-household", "name": "Household",
+         "config": {"config_version": 2, "state": {"start_age": 45},
+                    "parents": {"mode": "scenario", "parents": [
+                        {"label": "Mom", "current_age": 72,
+                         "sex": "female"}]}}},
+        {"id": "family-parent", "name": "Parent",
+         "config": {"config_version": 2, "state": {"start_age": 72},
+                    "mortality": {"sex": "female"}}},
+    ]
+    encoded = json.dumps(json.dumps(plans, ensure_ascii=False))
+    js(window, 'localStorage.clear(); localStorage.setItem("fire_plans_v1", '
+               + encoded + '); location.reload()')
+    time.sleep(3.0)
+    js(window, "window.confirm = () => true")
+    js(window, 'document.getElementById("migrateBtn").click()')
+    cutover = wait_js(
+        window, 'FIREStorage.authority().status === "sqlite_preferred"',
+        timeout=35)
+    check("B15 family link cutover reaches SQLite authority", cutover)
+    visible = wait_js(
+        window, '(() => { const b=document.getElementById("familyLinkBox"); '
+                'return !!b && b.offsetParent !== null && '
+                '!!b.querySelector("[data-family-create]"); })()', timeout=20)
+    check("B15 family controls are reachable only after SQLite authority", visible)
+
+    # Select by the persisted config shape, not by migration-generated ids or
+    # display names: normalization may supply a config-level name which is what
+    # the plan row intentionally renders after cutover.
+    js(window, '''(() => {
+      const row=document.querySelector("[data-family-create]");
+      const h=row.querySelector("[data-household]");
+      const p=row.querySelector("[data-parent]");
+      const plans=FIREPlanStore.list();
+      const household=plans.find(x => (((x.config||{}).parents||{}).parents||[]).length);
+      const parent=plans.find(x => x.id !== household.id);
+      h.value=household.id; p.value=parent.id;
+      row.querySelector("[data-create]").click();
+    })()''')
+    linked = wait_js(window, 'document.querySelectorAll("[data-link]").length === 1',
+                     timeout=25)
+    check("B15 a real Link plans click persists and renders one link", linked)
+    check("B15 link write installed archive schema v12",
+          _archive_user_version(db_path) == 12,
+          str(_archive_user_version(db_path)))
+    check("8.0 review queue treats a new link as pending, not a match",
+          js(window, '''(() =>
+            document.querySelectorAll('[data-queue-group="na"] .family-queue-item').length === 1
+            && document.querySelectorAll('[data-queue-group="match"] .family-queue-item').length === 0
+          )()'''))
+    js(window, '''document.querySelector(
+      '[data-queue-group="na"] [data-queue-link]').click()''')
+    check("8.0 pending action focuses review controls without auto-evaluating",
+          js(window, '''(() => {
+            const row=document.querySelector('[data-link]');
+            return document.activeElement === row.querySelector('[data-slot]')
+              && row.querySelectorAll('[data-evaluation]').length === 0;
+          })()''') and _archive_count(
+              db_path, "parent_identity_evaluations") == 0)
+
+    js(window, '''(() => {
+      const row=document.querySelector("[data-link]");
+      const c=row.querySelector("[data-confirm]");
+      c.checked=true; c.dispatchEvent(new Event("change"));
+      row.querySelector("[data-date]").value="2026-08-20";
+      row.querySelector("[data-evaluate]").click();
+    })()''')
+    evaluated = wait_js(
+        window, 'document.querySelector("[data-link]").textContent.indexOf("年龄一致") >= 0',
+        timeout=25)
+    check("B15 a real Compare click shows the measured match", evaluated)
+    check("B15 the same Compare click shows the sex sub-result",
+          "性别一致" in
+          (js(window, 'document.getElementById("familyLinkBody").textContent') or ""))
+    check("8.0 review queue projects age and sex as two current matches",
+          js(window, '''(() =>
+            document.querySelectorAll('[data-queue-group="match"] .family-queue-item').length === 2
+            && document.querySelectorAll('[data-queue-group="na"] .family-queue-item').length === 0
+          )()'''))
+    check("8.0 evidence brief defaults to no selected receipts",
+          js(window, '''(() =>
+            document.querySelectorAll('[data-evidence-select]').length === 1
+            && document.querySelectorAll('[data-evidence-select]:checked').length === 0
+            && document.querySelector('[data-family-export]').disabled
+          )()'''))
+    js(window, '''(() => {
+      const c=document.querySelector('[data-evidence-select]');
+      c.checked=true; c.dispatchEvent(new Event('change'));
+    })()''')
+    check("8.0 one explicit receipt selection carries its age and sex root",
+          js(window, '''(() => {
+            const entries=FIREFamilyLinks.selectedEntries();
+            return entries.length === 1
+              && entries[0].evaluation.evaluation_id
+              && entries[0].evaluation.sex_evaluation.sex_evaluation_id
+              && !document.querySelector('[data-family-export]').disabled;
+          })()'''))
+    js(window, '''document.querySelector(
+      '[data-queue-group="match"] [data-queue-link]').click()''')
+    check("8.0 queue action navigates to and opens immutable evidence",
+          js(window, '''(() => {
+            const row=document.querySelector('[data-link]');
+            const details=row.querySelector('[data-evaluation]');
+            return details.open && row.classList.contains('family-queue-target')
+              && details.contains(document.activeElement);
+          })()'''))
+    # Re-evaluate through the freshly rendered controls. The audit requirement
+    # is plural history, not a latest-value card that happens to have a table
+    # behind it.
+    js(window, '''(() => {
+      const row=document.querySelector("[data-link]");
+      const c=row.querySelector("[data-confirm]");
+      c.checked=true; c.dispatchEvent(new Event("change"));
+      row.querySelector("[data-date]").value="2026-08-20";
+      row.querySelector("[data-evaluate]").click();
+    })()''')
+    two_rows = wait_js(
+        window, 'document.querySelectorAll("[data-link] .family-evaluation").length === 2',
+        timeout=25)
+    check("B15 both immutable evaluations render in the product history", two_rows)
+    check("8.0 adding history does not silently select it or lose the prior choice",
+          js(window, '''document.querySelectorAll('[data-evidence-select]').length === 2
+            && document.querySelectorAll('[data-evidence-select]:checked').length === 1
+            && FIREFamilyLinks.selectedEntries().length === 1'''))
+    check("B15 both comparisons are immutable archive evaluations",
+          _archive_count(db_path, "parent_identity_evaluations") == 2,
+          str(_archive_count(db_path, "parent_identity_evaluations")))
+    check("B15 the same two actions persisted two sex evidence rows",
+          _archive_count(db_path, "parent_identity_sex_evaluations") == 2,
+          str(_archive_count(db_path, "parent_identity_sex_evaluations")))
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        pins = conn.execute(
+            "SELECT household_plan_version_id,parent_plan_version_id "
+            "FROM parent_identity_evaluations ORDER BY evaluation_id LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    audit_text = js(window, 'document.getElementById("familyLinkBody").textContent') or ""
+    check("B15 exact version pins and common date are available in the UI audit",
+          bool(pins) and pins[0] in audit_text and pins[1] in audit_text
+          and "2026-08-20" in audit_text, audit_text[:500])
+    check("B15 reason and freshness are available in the UI audit",
+          "measured_match" in audit_text and "current" in audit_text,
+          audit_text[:500])
+
+    js(window, 'document.querySelector("#langToggle [data-lang=en]").click()')
+    check("B15 dynamic family disclosure switches to English",
+          "does not verify identity or consent" in
+          (js(window, 'document.getElementById("familyLinkBody").textContent') or ""))
+    check("8.0 dynamic review queue switches all group headings to English",
+          all(label in
+              (js(window, 'document.getElementById("familyLinkBody").textContent') or "")
+              for label in ("Current contradictions", "Stale evidence",
+                            "Current matches", "N/A and pending")))
+    check("8.0 language rerender preserves explicit evidence selection",
+          js(window, '''document.querySelectorAll('[data-evidence-select]:checked').length === 1
+            && FIREFamilyLinks.selectedEntries().length === 1
+            && document.getElementById('familyLinkBody').textContent
+                 .indexOf('Include in family evidence brief') >= 0'''))
+
+    # Soft-delete the parent endpoint through the real plan-row control. The
+    # link becomes read-only, keeps both evaluations, and explains why Compare
+    # is no longer offered.
+    js(window, '''(() => {
+      const plans=FIREPlanStore.list();
+      const index=plans.findIndex(x => !((((x.config||{}).parents||{}).parents||[]).length));
+      document.querySelectorAll("#plansList .plan-row")[index]
+        .querySelector("[data-a=del]").click();
+    })()''')
+    inactive = wait_js(
+        window, '(() => { const row=document.querySelector("[data-link]"); '
+                'return !!row && !row.querySelector("[data-evaluate]") && '
+                'row.textContent.indexOf("Cannot compare") >= 0 && '
+                'row.querySelectorAll(".family-evaluation").length === 2; })()',
+        timeout=25)
+    check("B15 inactive endpoint keeps history and removes Compare with a reason",
+          inactive)
+    check("8.0 lifecycle-stale matches move only to stale, never contradiction",
+          js(window, '''(() =>
+            document.querySelectorAll('[data-queue-group="stale"] .family-queue-item').length === 4
+            && document.querySelectorAll('[data-queue-group="contradiction"] .family-queue-item').length === 0
+            && document.querySelectorAll('[data-queue-group="match"] .family-queue-item').length === 0
+          )()'''))
+
+    # Delete the remaining endpoint too. Ordinary plan rows disappear, but the
+    # family audit uses the unfiltered server projection and must remain found.
+    js(window, '''(() => {
+      document.querySelector("#plansList .plan-row [data-a=del]").click();
+    })()''')
+    both_deleted = wait_js(
+        window, 'document.querySelectorAll("#plansList .plan-row").length === 0 '
+                '&& document.querySelectorAll("[data-link] .family-evaluation").length === 2',
+        timeout=25)
+    check("B15 history remains discoverable after both endpoints are deleted",
+          both_deleted)
+
+    js(window, 'document.querySelector("[data-link] [data-end]").click()')
+    ended = wait_js(
+        window, 'document.querySelector("[data-link]").textContent.indexOf("ended") >= 0',
+        timeout=25)
+    check("B15 a real End link click retains and marks the history", ended)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM parent_identity_links WHERE ended_at IS NOT NULL"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    check("B15 ended link remains stored rather than deleted", count == 1, str(count))
 
 
 def _drive_storage_seam_checks(window, db_path):

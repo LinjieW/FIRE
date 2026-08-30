@@ -397,6 +397,8 @@ def project_stratified_v93(
     friction: float = 0.0,
     obbba: OBBBAParams = None,
     alive_by_year: Optional[Sequence[tuple[bool, bool]]] = None,
+    capture_ss_earnings: bool = False,
+    student_debt=None,
 ) -> list[dict]:
     """
     Wraps project_stratified_v8 and adds OBBBA boost to taxable account
@@ -410,6 +412,8 @@ def project_stratified_v93(
         returns, inflations, promotion_year, bonus_pcts_per_year,
         initial, contrib_params, promo_params, tax, state, friction,
         alive_by_year=alive_by_year,
+        capture_ss_earnings=capture_ss_earnings,
+        student_debt=student_debt,
     )
 
     if obbba.mode == OBBBAMode.OFF:

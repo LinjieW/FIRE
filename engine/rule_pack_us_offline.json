@@ -965,6 +965,183 @@
         "oasi_payable_at_depletion_low_cost": null,
         "report_year": 2026
       }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "retirement_catch_up_limits",
+      "label": "US catch-up contributions and the annual additions cap",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "Nominal 2026 statutory dollar amounts, carried verbatim. The SECURE 2.0 higher catch-up applies to employees who ATTAIN age 60, 61, 62 or 63 during the year and REPLACES the age-50 amount for those years rather than adding to it; ages 64+ revert to the age-50 amount. The 415(c) figure is the employee-plus-employer annual additions cap and excludes catch-up contributions, which sit outside it. No family HSA cap and no 403(b)/457 special catch-ups are modelled.",
+        "sources": [
+          "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500",
+          "https://www.irs.gov/retirement-plans/cola-increases-for-dollar-limitations-on-benefits-and-contributions"
+        ],
+        "verified_as_of": "2026-08-22"
+      },
+      "provenance_status": "official_irs_2026_statutory_amounts",
+      "scope": "Age-50 and SECURE 2.0 age 60-63 catch-up amounts, IRA catch-up, and the section 415(c) annual additions limit.",
+      "source_vintage": "2026",
+      "values": {
+        "additions_limit_415c": 72000.0,
+        "catch_up_age": 50,
+        "catch_up_ira_age50": 1100.0,
+        "catch_up_workplace_age50": 8000.0,
+        "secure2_catch_up_age_max": 63,
+        "secure2_catch_up_age_min": 60,
+        "secure2_catch_up_workplace": 11250.0
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "ira_income_phase_outs",
+      "label": "US IRA income phase-out ranges",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "Nominal 2026 MAGI ranges, carried verbatim as [start, end] pairs. Contribution room falls linearly to zero across the range. The traditional-IRA ranges are DEDUCTION phase-outs and apply only to a taxpayer covered by a workplace plan; the Roth ranges are CONTRIBUTION phase-outs. Married-filing-separately (0 to 10,000 for both) is not carried because this engine models single and joint filers only.",
+        "sources": [
+          "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
+        ],
+        "verified_as_of": "2026-08-22"
+      },
+      "provenance_status": "official_irs_2026_statutory_amounts",
+      "scope": "Roth IRA contribution and traditional IRA deduction MAGI phase-out ranges, single and married filing jointly.",
+      "source_vintage": "2026",
+      "values": {
+        "roth_mfj": [
+          242000.0,
+          252000.0
+        ],
+        "roth_single": [
+          153000.0,
+          168000.0
+        ],
+        "traditional_covered_mfj": [
+          129000.0,
+          149000.0
+        ],
+        "traditional_covered_single": [
+          81000.0,
+          91000.0
+        ],
+        "traditional_spouse_covered_mfj": [
+          242000.0,
+          252000.0
+        ]
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "fica_payroll_tax",
+      "label": "US payroll tax (FICA): Social Security and Medicare",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "Employee-side rates only; the employer share is not a cost to the modelled household and is excluded. Pre-tax 401(k) and HSA deferrals do NOT reduce Social Security or Medicare wages, so FICA is charged on gross earnings. The 0.9 percent Additional Medicare threshold carried here is the FILING threshold (200,000 single / 250,000 joint), not the 200,000 employer WITHHOLDING trigger, which applies regardless of filing status; for a single filer the two coincide. Self-employment (SECA) rates are not modelled.",
+        "sources": [
+          "https://www.irs.gov/publications/p15",
+          "https://www.irs.gov/taxtopics/tc751",
+          "https://www.ssa.gov/oact/cola/cbb.html"
+        ],
+        "verified_as_of": "2026-08-22"
+      },
+      "provenance_status": "official_irs_ssa_2026_rates",
+      "scope": "Employee Social Security and Medicare rates, the Social Security wage base, and the Additional Medicare tax.",
+      "source_vintage": "2026",
+      "values": {
+        "additional_medicare_rate": 0.009,
+        "additional_medicare_threshold_mfj": 250000.0,
+        "additional_medicare_threshold_single": 200000.0,
+        "medicare_rate": 0.0145,
+        "social_security_rate": 0.062,
+        "social_security_wage_base": 184500.0
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "self_employment_tax",
+      "label": "US self-employment tax (SECA)",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "SECA rates are the COMBINED employer and employee rates: 12.4 percent is 6.2 twice and 2.9 percent is 1.45 twice, which is why half of the bill is called the employer-equivalent portion. Both are applied to net earnings from self-employment, which is 92.35 percent of NET PROFIT (Schedule C / F / K-1) -- not of gross receipts and not of AGI. The Social Security component stops at the same wage base as employee FICA; the Medicare component does not stop. The deduction is 50 percent of the TOTAL SE tax, an adjustment to income on Schedule 1 line 15, and the 0.9 percent Additional Medicare Tax is NOT in that base -- it is computed separately on Form 8959, so it is neither halved nor deducted. The IRS self-employment topic page was NOT used for any dollar figure: it carries a stale 2024 wage base. The wage base and the Additional Medicare thresholds are not repeated here; they live in `fica_payroll_tax` and are read from there, so the two components cannot disagree.",
+        "sources": [
+          "https://www.irs.gov/publications/p505",
+          "https://www.irs.gov/publications/p15",
+          "https://www.irs.gov/businesses/small-businesses-self-employed/self-employment-tax-social-security-and-medicare-taxes"
+        ],
+        "verified_as_of": "2026-08-23"
+      },
+      "provenance_status": "official_irs_pub505_2026_worksheet",
+      "scope": "Self-employment tax rates, the net-earnings factor, and the deductible share, for tax year 2026.",
+      "source_vintage": "2026",
+      "values": {
+        "deductible_share_of_se_tax": 0.5,
+        "net_earnings_factor": 0.9235,
+        "se_medicare_rate": 0.029,
+        "se_social_security_rate": 0.124
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "plan_shape_limits",
+      "label": "US retirement plan shapes and HSA eligibility",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "Shipped ahead of the code that reads it, the same way the 415(c) cap was: a cited figure waiting in a dated pack is cheaper and safer than one recalled later. The engine now reads the 401(a)(17), SEP/self-employed rate conversion, SIMPLE base and age catch-up limits, and governmental 457(b) deferral limit; the 403(b) special catch-up and HSA/HDHP fields are now read by their product contracts. Four things a naive reading gets wrong. (1) The SEP percentage is 25 percent for a common-law EMPLOYEE but 20 percent for a SELF-EMPLOYED person, because their own contribution reduces the compensation it is computed on: rate / (1 + rate) = 0.25 / 1.25. (2) The 403(b) 15-year catch-up is the LEAST of three amounts and is applied BEFORE the age-50 catch-up, and the two are additive. (3) The 457(b) special final-three-years catch-up CANNOT be combined with the age-50 catch-up in the same year. (4) A 457(b) limit is SEPARATE from the 401(k)/403(b) limit, so a person with both may defer the full amount to each; 403(b) and 401(k) instead SHARE one 402(g) limit. DELIBERATELY ABSENT: the separate SECURE 2.0 higher-tier SIMPLE catch-up tied to the enhanced small-employer tier. The higher DEFERRAL tier (18,100) is published for 2026 and is here; the ordinary SIMPLE age-50 catch-up (4,000) and age-60-through-63 catch-up (5,250) are also here and are now read by the engine. A distinct enhanced-tier catch-up figure is not recorded; the 3,850 that circulates is the 2025 amount. Recording it as a 2026 figure would be the exact mistake this pack exists to prevent. ADDED 2026-08-24 (OPEN_ITEMS E37): deferral_limit_457b_governmental, the section 457(e)(15) elective deferral limit for 2026, 24500 (from 23500 in 2025) per Notice 2025-67. It is recorded SEPARATELY even though it equals the 402(g) figure this year, because point (4) above is what makes it worth having: they are two limits that happen to coincide in 2026, and a reader who reused the 401(k) constant would silently lose that the day they diverge.",
+        "sources": [
+          "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500",
+          "https://www.irs.gov/pub/irs-drop/rp-25-19.pdf",
+          "https://www.irs.gov/publications/p560",
+          "https://www.irs.gov/retirement-plans/cola-increases-for-dollar-limitations-on-benefits-and-contributions",
+          "https://www.irs.gov/retirement-plans/how-much-salary-can-you-defer-if-youre-eligible-for-more-than-one-retirement-plan"
+        ],
+        "verified_as_of": "2026-08-29"
+      },
+      "provenance_status": "official_irs_cola_table_and_rev_proc_2025_19",
+      "scope": "Plan-shape contribution limits (403(b), 457(b), SEP, SIMPLE), the annual compensation limit, and HSA/HDHP eligibility thresholds.",
+      "source_vintage": "2026",
+      "values": {
+        "annual_compensation_limit_401a17": 360000.0,
+        "catchup_403b_15yr_annual": 3000.0,
+        "catchup_403b_15yr_lifetime": 15000.0,
+        "catchup_403b_15yr_service_years_required": 15,
+        "hdhp_min_deductible_family": 3400.0,
+        "hdhp_min_deductible_self_only": 1700.0,
+        "hdhp_max_out_of_pocket_family": 17000.0,
+        "hdhp_max_out_of_pocket_self_only": 8500.0,
+        "hsa_catch_up_age": 55,
+        "hsa_catch_up_amount": 1000.0,
+        "hsa_limit_family": 8750.0,
+        "hsa_limit_self_only": 4400.0,
+        "sep_rate_common_law_employee": 0.25,
+        "sep_rate_self_employed": 0.2,
+        "simple_catch_up_age50": 4000.0,
+        "simple_catch_up_age60_63": 5250.0,
+        "simple_deferral_limit": 17000.0,
+        "simple_deferral_limit_small_employer": 18100.0,
+        "simple_small_employer_max_employees": 25,
+        "deferral_limit_457b_governmental": 24500.0
+      }
+    },
+    {
+      "coverage_year": 2026,
+      "id": "espp_section_423",
+      "label": "Section 423 employee stock purchase plan limits",
+      "maintenance_due_on": "2026-12-31",
+      "provenance": {
+        "conversion": "The 25000 limit is measured at grant-date fair market value for each calendar year in which the option is outstanding, not at payroll deductions or purchase-date value. The 0.15 rate is the maximum discount implied by the statutory floor of 85 percent of the lesser of grant-date or exercise-date fair market value. This product's first contract supports annual same-calendar-year grant and purchase offerings only; multi-year option accrual is not collapsed into this annual ceiling.",
+        "sources": [
+          "https://www.govinfo.gov/content/pkg/CFR-2025-title26-vol7/pdf/CFR-2025-title26-vol7-part1-subjectgroup-id111.pdf",
+          "https://www.irs.gov/publications/p525"
+        ],
+        "verified_as_of": "2026-08-29"
+      },
+      "provenance_status": "official_cfr_and_irs_publication",
+      "scope": "Section 423 annual grant-date fair-market-value ceiling and maximum purchase discount for annual offerings.",
+      "source_vintage": "2025 CFR / 2025 Publication 525",
+      "values": {
+        "annual_grant_fmv_limit": 25000.0,
+        "max_discount_rate": 0.15
+      }
     }
   ],
   "delivery": "offline_embedded",
@@ -1198,6 +1375,209 @@
         "https://www.ssa.gov/oact/TR/2026/II_A_highlights.html",
         "https://www.ssa.gov/oact/TR/2026/IV_B_LRest.html",
         "https://www.ssa.gov/news/en/press/releases/2026-06-09.html"
+      ]
+    },
+    {
+      "component_id": "retirement_catch_up_limits",
+      "field_group": "catch_up_amounts",
+      "fields": [
+        "catch_up_workplace_age50",
+        "catch_up_ira_age50",
+        "secure2_catch_up_workplace"
+      ],
+      "note": "2026 nominal statutory catch-up amounts. The SECURE 2.0 amount replaces the age-50 amount for ages 60-63 rather than stacking on it.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500",
+        "https://www.irs.gov/retirement-plans/cola-increases-for-dollar-limitations-on-benefits-and-contributions"
+      ]
+    },
+    {
+      "component_id": "retirement_catch_up_limits",
+      "field_group": "annual_additions_cap",
+      "fields": [
+        "additions_limit_415c"
+      ],
+      "note": "Section 415(c)(1)(A) employee-plus-employer cap for 2026; catch-up contributions sit outside it.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/retirement-plans/cola-increases-for-dollar-limitations-on-benefits-and-contributions"
+      ]
+    },
+    {
+      "component_id": "retirement_catch_up_limits",
+      "field_group": "catch_up_age_boundaries",
+      "fields": [
+        "catch_up_age",
+        "secure2_catch_up_age_min",
+        "secure2_catch_up_age_max"
+      ],
+      "note": "Statutory age boundaries, not modelling choices.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
+      ]
+    },
+    {
+      "component_id": "ira_income_phase_outs",
+      "field_group": "roth_contribution_phase_outs",
+      "fields": [
+        "roth_single",
+        "roth_mfj"
+      ],
+      "note": "2026 MAGI ranges over which Roth IRA contribution room falls to zero.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
+      ]
+    },
+    {
+      "component_id": "ira_income_phase_outs",
+      "field_group": "traditional_deduction_phase_outs",
+      "fields": [
+        "traditional_covered_single",
+        "traditional_covered_mfj",
+        "traditional_spouse_covered_mfj"
+      ],
+      "note": "Deduction phase-outs for a taxpayer covered by a workplace plan, plus the spouse-covered range.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
+      ]
+    },
+    {
+      "component_id": "fica_payroll_tax",
+      "field_group": "payroll_tax_rates",
+      "fields": [
+        "social_security_rate",
+        "social_security_wage_base",
+        "medicare_rate"
+      ],
+      "note": "Employee-side 2026 rates and the OASDI contribution and benefit base. Pre-tax deferrals do not reduce FICA wages.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p15",
+        "https://www.ssa.gov/oact/cola/cbb.html"
+      ]
+    },
+    {
+      "component_id": "fica_payroll_tax",
+      "field_group": "additional_medicare",
+      "fields": [
+        "additional_medicare_rate",
+        "additional_medicare_threshold_single",
+        "additional_medicare_threshold_mfj"
+      ],
+      "note": "Filing thresholds, not the employer withholding trigger; for a single filer the two coincide at 200,000.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p15",
+        "https://www.irs.gov/taxtopics/tc751"
+      ]
+    },
+    {
+      "component_id": "self_employment_tax",
+      "field_group": "seca_rates",
+      "fields": [
+        "se_social_security_rate",
+        "se_medicare_rate",
+        "net_earnings_factor"
+      ],
+      "note": "Combined employer+employee rates, applied to 92.35 percent of net profit. Taken from the dated 2026 Pub 505 worksheet, not from the undated topic page (which still shows a 2024 wage base).",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p505"
+      ]
+    },
+    {
+      "component_id": "self_employment_tax",
+      "field_group": "seca_deduction",
+      "fields": [
+        "deductible_share_of_se_tax"
+      ],
+      "note": "Half of the TOTAL SE tax, above the line on Schedule 1 line 15. The 0.9 percent Additional Medicare Tax is outside this base.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p505"
+      ]
+    },
+    {
+      "component_id": "plan_shape_limits",
+      "field_group": "plan_deferral_limits",
+      "fields": [
+        "simple_deferral_limit",
+        "simple_deferral_limit_small_employer",
+        "simple_catch_up_age50",
+        "simple_catch_up_age60_63",
+        "simple_small_employer_max_employees",
+        "annual_compensation_limit_401a17"
+      ],
+      "note": "From the IRS COLA table for 2026. The higher-tier SIMPLE CATCH-UP is absent on purpose: it is not in that table for 2026.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/retirement-plans/cola-increases-for-dollar-limitations-on-benefits-and-contributions"
+      ]
+    },
+    {
+      "component_id": "plan_shape_limits",
+      "field_group": "sep_and_403b_shapes",
+      "fields": [
+        "sep_rate_common_law_employee",
+        "sep_rate_self_employed",
+        "catchup_403b_15yr_annual",
+        "catchup_403b_15yr_lifetime",
+        "catchup_403b_15yr_service_years_required"
+      ],
+      "note": "The SEP self-employed rate is derived, not a separate statute: 0.25 / 1.25 = 0.20, because the contribution reduces its own base.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/publications/p560"
+      ]
+    },
+    {
+      "component_id": "plan_shape_limits",
+      "field_group": "hsa_hdhp_eligibility",
+      "fields": [
+        "hsa_limit_self_only",
+        "hsa_limit_family",
+        "hsa_catch_up_amount",
+        "hsa_catch_up_age",
+        "hdhp_min_deductible_self_only",
+        "hdhp_min_deductible_family",
+        "hdhp_max_out_of_pocket_self_only",
+        "hdhp_max_out_of_pocket_family"
+      ],
+      "note": "Rev. Proc. 2025-19. `hsa_limit_self_only` duplicates the value in `contribution_limits.hsa_limit_y1`; it is carried here so the four HDHP thresholds have their eligibility partner beside them.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/pub/irs-drop/rp-25-19.pdf"
+      ]
+    },
+    {
+      "component_id": "plan_shape_limits",
+      "field_group": "gov_457b_deferral_limit",
+      "fields": [
+        "deferral_limit_457b_governmental"
+      ],
+      "note": "Section 457(e)(15) for 2026, from Notice 2025-67 by way of the IRS newsroom release. The IRS page on being eligible for more than one plan is cited alongside it because the SEPARATENESS is the modelled fact, not the dollar amount: 'You have a separate deferral limit if you're also eligible to participate in a 457(b) plan', and 'It is not combined with your deferrals made to a 403(b) or other plans.'",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500",
+        "https://www.irs.gov/retirement-plans/how-much-salary-can-you-defer-if-youre-eligible-for-more-than-one-retirement-plan"
+      ]
+    },
+    {
+      "component_id": "espp_section_423",
+      "field_group": "annual_grant_value_and_discount",
+      "fields": [
+        "annual_grant_fmv_limit",
+        "max_discount_rate"
+      ],
+      "note": "Section 423 annual grant-date FMV limit and the 85-percent purchase-price floor expressed as a maximum discount. The runtime supports annual same-year grant/purchase offerings; multi-year outstanding-option allocation remains outside the first contract.",
+      "source_class": "official_primary",
+      "sources": [
+        "https://www.govinfo.gov/content/pkg/CFR-2025-title26-vol7/pdf/CFR-2025-title26-vol7-part1-subjectgroup-id111.pdf",
+        "https://www.irs.gov/publications/p525"
       ]
     }
   ],
