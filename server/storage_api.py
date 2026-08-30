@@ -61,6 +61,7 @@ import sqlite3
 from typing import Any, Optional
 
 import persistence as PERSISTENCE
+import parent_identity as PARENT_IDENTITY
 import recovery as RECOVERY
 
 
@@ -159,6 +160,9 @@ _PRIMARY_OBJECT_FIELD = {
     "plan-status": "plan_id",
     "draft": "plan_id",
     "observation": "operation_id",
+    "parent-identity-link": "link_id",
+    "parent-identity-evaluation": "evaluation_id",
+    "parent-identity-link-end": "link_id",
 }
 
 
@@ -371,6 +375,143 @@ class StorageSeam:
                     "authority_receipt": state["receipt_sha256"],
                     "generation_id": state["generation_id"],
                     "recovered_drafts": self._read_recovered_drafts()}
+
+    def parent_identities(self, plan_id: str, *,
+                          authority_receipt: Optional[str] = None,
+                          legacy_digest: Optional[str] = None) -> dict:
+        """Pure history read for every parent link touching one Plan."""
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            raise StorageError("plan_id is required", code="invalid_projection",
+                               http_status=422)
+        with self._lock:
+            state = self._authority_state()
+            self._require_read_authority(
+                state, authority_receipt=authority_receipt,
+                legacy_digest=legacy_digest)
+            if state["authority_status"] != "sqlite_preferred":
+                raise StorageError(
+                    "parent identities are served only under sqlite authority",
+                    code="source_changed", http_status=409)
+            installed, links = self._read_parent_identities(plan_id)
+            return {
+                "format": "fire-parent-identities-v1",
+                "authority_receipt": state["receipt_sha256"],
+                "generation_id": state["generation_id"],
+                "schema_installed": installed,
+                "plan_id": plan_id,
+                "links": links,
+                **({} if installed else {
+                    "reason": "parent_identity_schema_not_installed"}),
+            }
+
+    @staticmethod
+    def _tip_in_conn(conn: sqlite3.Connection, plan_id: str) -> Optional[str]:
+        rows = conn.execute(
+            "SELECT v.id FROM plan_versions v WHERE v.plan_id=? AND NOT EXISTS "
+            "(SELECT 1 FROM plan_versions c WHERE c.parent_version_id=v.id)",
+            (plan_id,)).fetchall()
+        return rows[0][0] if len(rows) == 1 else None
+
+    @staticmethod
+    def _freshness(link: sqlite3.Row, evaluation: sqlite3.Row,
+                   household_tip: Optional[str],
+                   parent_tip: Optional[str]) -> tuple[str, str]:
+        if link["ended_at"] is not None:
+            return "ended", "the parent identity link has ended"
+        if link["household_status"] != "active":
+            return "inactive", "the household plan is %s" % link["household_status"]
+        if link["parent_status"] != "active":
+            return "inactive", "the parent plan is %s" % link["parent_status"]
+        if (int(evaluation["household_status_revision"])
+                != int(link["household_status_revision"])
+                or int(evaluation["parent_status_revision"])
+                != int(link["parent_status_revision"])):
+            return "stale_lifecycle", "a linked plan changed lifecycle after this check"
+        if (evaluation["household_plan_version_id"] != household_tip
+                or evaluation["parent_plan_version_id"] != parent_tip):
+            return "stale_version", "a linked plan has a newer input version"
+        return "current", "both pinned versions and lifecycle revisions are current"
+
+    def _read_parent_identities(self, plan_id: str) -> tuple[bool, list[dict]]:
+        path = str(self.recovery.archive_path)
+        try:
+            conn = PERSISTENCE._readonly_connect(path)
+        except OSError as exc:
+            raise StorageError("archive is unavailable",
+                               code="cost_or_storage_unavailable",
+                               http_status=503) from exc
+        try:
+            RECOVERY.validate_archive_connection(conn)
+            if not PERSISTENCE.PersistenceStore._schema_v11_complete(conn):
+                return False, []
+            if conn.execute("SELECT 1 FROM plans WHERE id=?", (plan_id,)).fetchone() is None:
+                raise StorageError("plan is unknown", code="invalid_projection",
+                                   http_status=422)
+            rows = conn.execute(
+                "SELECT l.*, hp.display_name household_display_name, "
+                "hp.status household_status, hp.status_revision household_status_revision, "
+                "pp.display_name parent_display_name, pp.status parent_status, "
+                "pp.status_revision parent_status_revision "
+                "FROM parent_identity_links l "
+                "JOIN plans hp ON hp.id=l.household_plan_id "
+                "JOIN plans pp ON pp.id=l.parent_plan_id "
+                "WHERE l.household_plan_id=? OR l.parent_plan_id=? "
+                "ORDER BY l.created_at DESC,l.link_id DESC", (plan_id, plan_id)
+            ).fetchall()
+            out = []
+            for link in rows:
+                household_tip = self._tip_in_conn(conn, link["household_plan_id"])
+                parent_tip = self._tip_in_conn(conn, link["parent_plan_id"])
+                evaluations = []
+                for row in conn.execute(
+                        "SELECT * FROM parent_identity_evaluations "
+                        "WHERE link_id=? ORDER BY created_at DESC,evaluation_id DESC",
+                        (link["link_id"],)).fetchall():
+                    freshness, freshness_reason = self._freshness(
+                        link, row, household_tip, parent_tip)
+                    item = dict(row)
+                    item["applicable"] = bool(item["applicable"])
+                    item.update({"freshness": freshness,
+                                 "freshness_reason": freshness_reason})
+                    if PERSISTENCE.PersistenceStore._schema_v12_complete(conn):
+                        sex_row = conn.execute(
+                            "SELECT * FROM parent_identity_sex_evaluations "
+                            "WHERE age_evaluation_id=?", (row["evaluation_id"],)
+                        ).fetchone()
+                        if sex_row is not None:
+                            sex_freshness, sex_freshness_reason = self._freshness(
+                                link, sex_row, household_tip, parent_tip)
+                            sex_item = dict(sex_row)
+                            sex_item["applicable"] = bool(sex_item["applicable"])
+                            sex_item.update({"freshness": sex_freshness,
+                                             "freshness_reason": sex_freshness_reason})
+                            item["sex_evaluation"] = sex_item
+                    evaluations.append(item)
+                out.append({
+                    "link_id": link["link_id"], "relation": link["relation"],
+                    "household_plan_id": link["household_plan_id"],
+                    "household_display_name": link["household_display_name"],
+                    "household_status": link["household_status"],
+                    "household_current_version_id": household_tip,
+                    "parent_plan_id": link["parent_plan_id"],
+                    "parent_display_name": link["parent_display_name"],
+                    "parent_status": link["parent_status"],
+                    "parent_current_version_id": parent_tip,
+                    "created_at": link["created_at"],
+                    "ended_at": link["ended_at"],
+                    "ended_reason": link["ended_reason"],
+                    "evaluations": evaluations,
+                })
+            return True, out
+        except StorageError:
+            raise
+        except (PERSISTENCE.PersistenceError, RECOVERY.RecoveryError,
+                sqlite3.Error) as exc:
+            raise StorageError("archive state is not readable",
+                               code="invalid_projection",
+                               http_status=422) from exc
+        finally:
+            conn.close()
 
     def _read_recovered_drafts(self) -> list[dict]:
         """Eligible, unpromoted recovered drafts, read-only."""
@@ -797,6 +938,280 @@ class StorageSeam:
 
         return self._write("plan-duplicate", body, mutate, **stores)
 
+    @staticmethod
+    def _install_parent_identity(store: Any) -> bool:
+        """Bring a staged archive to v12 on its first parent-identity write."""
+        with store._transaction() as conn:
+            current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if current == 12:
+                if not PERSISTENCE.PersistenceStore._schema_v12_complete(conn):
+                    raise StorageError("parent identity schema is incomplete",
+                                       code="invalid_projection", http_status=422)
+                return False
+            release = getattr(store, "app_release_id", "fire-modeling-3.0")
+            try:
+                for expected, install in (
+                        (6, PERSISTENCE.PersistenceStore.install_v7_schema),
+                        (7, PERSISTENCE.PersistenceStore.install_v8_schema),
+                        (8, PERSISTENCE.PersistenceStore.install_v9_schema),
+                        (9, PERSISTENCE.PersistenceStore.install_v10_schema),
+                        (10, PERSISTENCE.PersistenceStore.install_v11_schema),
+                        (11, PERSISTENCE.PersistenceStore.install_v12_schema)):
+                    if current <= expected:
+                        install(conn, app_release_id=release)
+                        current = int(conn.execute(
+                            "PRAGMA user_version").fetchone()[0])
+            except PERSISTENCE.PersistenceError as exc:
+                raise StorageError(
+                    "this archive cannot take parent identities: %s" % exc,
+                    code="invalid_projection", http_status=422) from None
+            return True
+
+    @staticmethod
+    def _require_text(body: dict, key: str) -> str:
+        value = body.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise StorageError("%s is required" % key,
+                               code="invalid_projection", http_status=422)
+        return value.strip()
+
+    def create_parent_identity_link(self, body: Any, **stores: Any) -> dict:
+        body = self._version_body(body, {"relation", "household_plan_id",
+                                         "parent_plan_id"})
+        relation = self._require_text(body, "relation")
+        household_plan_id = self._require_text(body, "household_plan_id")
+        parent_plan_id = self._require_text(body, "parent_plan_id")
+        if relation != PARENT_IDENTITY.RELATION:
+            raise StorageError("relation must be parent_identity",
+                               code="invalid_projection", http_status=422)
+        if household_plan_id == parent_plan_id:
+            raise StorageError("a plan cannot be its own parent identity endpoint",
+                               code="invalid_projection", http_status=422)
+
+        def mutate(store, object_key):
+            installed = self._install_parent_identity(store)
+            link_id = "pil_" + object_key[:32]
+            with store._transaction() as conn:
+                existing = conn.execute(
+                    "SELECT link_id FROM parent_identity_links WHERE link_id=?",
+                    (link_id,)).fetchone()
+                if existing is not None:
+                    return True, {"link_id": link_id,
+                                  "schema_installed": installed}
+                endpoints = conn.execute(
+                    "SELECT id,status FROM plans WHERE id IN (?,?)",
+                    (household_plan_id, parent_plan_id)).fetchall()
+                statuses = {row["id"]: row["status"] for row in endpoints}
+                if household_plan_id not in statuses or parent_plan_id not in statuses:
+                    raise StorageError("a parent identity endpoint is unknown",
+                                       code="invalid_projection", http_status=422)
+                inactive = [(pid, statuses[pid]) for pid in
+                            (household_plan_id, parent_plan_id)
+                            if statuses[pid] != "active"]
+                if inactive:
+                    raise StorageError(
+                        "parent identity endpoint is %s" % inactive[0][1],
+                        code="parent_identity_inactive", http_status=409)
+                prior = conn.execute(
+                    "SELECT link_id FROM parent_identity_links "
+                    "WHERE household_plan_id=? AND parent_plan_id=? "
+                    "AND ended_at IS NULL", (household_plan_id,
+                                              parent_plan_id)).fetchone()
+                if prior is not None:
+                    raise StorageError(
+                        "an active parent identity link already exists",
+                        code="parent_identity_conflict", http_status=409)
+                conn.execute(
+                    "INSERT INTO parent_identity_links "
+                    "(link_id,relation,household_plan_id,parent_plan_id,created_at) "
+                    "VALUES (?,?,?,?,?)", (link_id, relation,
+                                             household_plan_id, parent_plan_id,
+                                             PERSISTENCE.utc_now()))
+            return False, {"link_id": link_id,
+                           "schema_installed": installed}
+
+        return self._write("parent-identity-link", body, mutate, **stores)
+
+    def evaluate_parent_identity(self, body: Any, **stores: Any) -> dict:
+        body = self._version_body(body, {
+            "link_id", "household_plan_version_id", "parent_plan_version_id",
+            "parent_slot_index", "same_date_confirmed", "as_of_date"})
+        link_id = self._require_text(body, "link_id")
+        household_version = self._require_text(
+            body, "household_plan_version_id")
+        parent_version = self._require_text(body, "parent_plan_version_id")
+        slot = body.get("parent_slot_index")
+        confirmed = body.get("same_date_confirmed")
+        if isinstance(slot, bool) or not isinstance(slot, int) or slot < 0:
+            raise StorageError("parent_slot_index must be a non-negative integer",
+                               code="invalid_projection", http_status=422)
+        if not isinstance(confirmed, bool):
+            raise StorageError("same_date_confirmed must be a boolean",
+                               code="invalid_projection", http_status=422)
+        if not confirmed and body.get("as_of_date") not in (None, ""):
+            raise StorageError("as_of_date must be empty when the date is not confirmed",
+                               code="invalid_projection", http_status=422)
+
+        def mutate(store, object_key):
+            installed = self._install_parent_identity(store)
+            evaluation_id = "pie_" + object_key[:32]
+            sex_evaluation_id = "pise_" + object_key[:32]
+            with store._transaction() as conn:
+                existing = conn.execute(
+                    "SELECT evaluation_id FROM parent_identity_evaluations "
+                    "WHERE evaluation_id=?", (evaluation_id,)).fetchone()
+                if existing is not None:
+                    sex_existing = conn.execute(
+                        "SELECT sex_evaluation_id FROM "
+                        "parent_identity_sex_evaluations WHERE age_evaluation_id=?",
+                        (evaluation_id,)).fetchone()
+                    if sex_existing is None:
+                        raise StorageError(
+                            "parent identity evaluation bundle is incomplete",
+                            code="invalid_projection", http_status=422)
+                    return True, {"evaluation_id": evaluation_id,
+                                  "age_evaluation_id": evaluation_id,
+                                  "sex_evaluation_id": sex_existing[0],
+                                  "link_id": link_id,
+                                  "schema_installed": installed}
+                link = conn.execute(
+                    "SELECT l.*, hp.status household_status, "
+                    "hp.status_revision household_status_revision, "
+                    "pp.status parent_status, "
+                    "pp.status_revision parent_status_revision "
+                    "FROM parent_identity_links l "
+                    "JOIN plans hp ON hp.id=l.household_plan_id "
+                    "JOIN plans pp ON pp.id=l.parent_plan_id "
+                    "WHERE l.link_id=?", (link_id,)).fetchone()
+                if link is None:
+                    raise StorageError("parent identity link is unknown",
+                                       code="parent_identity_link_unknown",
+                                       http_status=404)
+                if link["ended_at"] is not None:
+                    raise StorageError("parent identity link has ended",
+                                       code="parent_identity_conflict",
+                                       http_status=409)
+                for endpoint, status in (
+                        ("household", link["household_status"]),
+                        ("parent", link["parent_status"])):
+                    if status != "active":
+                        raise StorageError(
+                            "%s plan is %s" % (endpoint, status),
+                            code="parent_identity_inactive", http_status=409)
+                household_tip = self._tip_in_conn(
+                    conn, link["household_plan_id"])
+                parent_tip = self._tip_in_conn(conn, link["parent_plan_id"])
+                if household_tip != household_version or parent_tip != parent_version:
+                    raise StorageError(
+                        "evaluation versions must be the unique current endpoint tips",
+                        code="version_conflict", http_status=409)
+                household_row = conn.execute(
+                    "SELECT plan_id,source_config_json,normalized_config_json "
+                    "FROM plan_versions WHERE id=?", (household_version,)).fetchone()
+                parent_row = conn.execute(
+                    "SELECT plan_id,source_config_json,normalized_config_json "
+                    "FROM plan_versions WHERE id=?", (parent_version,)).fetchone()
+                if (household_row is None or parent_row is None
+                        or household_row["plan_id"] != link["household_plan_id"]
+                        or parent_row["plan_id"] != link["parent_plan_id"]):
+                    raise StorageError("a pinned version belongs to another endpoint",
+                                       code="version_conflict", http_status=409)
+                try:
+                    measured = PARENT_IDENTITY.evaluate(
+                        household_source=json.loads(
+                            household_row["source_config_json"]),
+                        household_normalized=json.loads(
+                            household_row["normalized_config_json"]),
+                        parent_source=json.loads(parent_row["source_config_json"]),
+                        parent_normalized=json.loads(
+                            parent_row["normalized_config_json"]),
+                        parent_slot_index=slot,
+                        same_date_confirmed=confirmed,
+                        as_of_date=(body.get("as_of_date") or None))
+                    measured_sex = PARENT_IDENTITY.evaluate_sex(
+                        household_source=json.loads(
+                            household_row["source_config_json"]),
+                        household_normalized=json.loads(
+                            household_row["normalized_config_json"]),
+                        parent_source=json.loads(parent_row["source_config_json"]),
+                        parent_normalized=json.loads(
+                            parent_row["normalized_config_json"]),
+                        parent_slot_index=slot)
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise StorageError(str(exc), code="invalid_projection",
+                                       http_status=422) from None
+                created_at = PERSISTENCE.utc_now()
+                conn.execute(
+                    "INSERT INTO parent_identity_evaluations "
+                    "(evaluation_id,link_id,household_plan_version_id,"
+                    "parent_plan_version_id,household_status_revision,"
+                    "parent_status_revision,parent_slot_index,parent_slot_label,"
+                    "as_of_date,as_of_basis,detector_version,household_age,"
+                    "parent_age,applicable,finding,delta_years,reason_code,reason,"
+                    "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (evaluation_id, link_id, household_version, parent_version,
+                     int(link["household_status_revision"]),
+                     int(link["parent_status_revision"]), slot,
+                     measured["parent_slot_label"], measured["as_of_date"],
+                     measured["as_of_basis"], measured["detector_version"],
+                     measured["household_age"], measured["parent_age"],
+                     1 if measured["applicable"] else 0, measured["finding"],
+                     measured["delta_years"], measured["reason_code"],
+                     measured["reason"], created_at))
+                conn.execute(
+                    "INSERT INTO parent_identity_sex_evaluations "
+                    "(sex_evaluation_id,age_evaluation_id,link_id,"
+                    "household_plan_version_id,parent_plan_version_id,"
+                    "household_status_revision,parent_status_revision,"
+                    "parent_slot_index,parent_slot_label,detector_version,"
+                    "household_sex,parent_sex,applicable,finding,reason_code,"
+                    "reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (sex_evaluation_id, evaluation_id, link_id,
+                     household_version, parent_version,
+                     int(link["household_status_revision"]),
+                     int(link["parent_status_revision"]), slot,
+                     measured_sex["parent_slot_label"],
+                     measured_sex["detector_version"],
+                     measured_sex["household_sex"], measured_sex["parent_sex"],
+                     1 if measured_sex["applicable"] else 0,
+                     measured_sex["finding"], measured_sex["reason_code"],
+                     measured_sex["reason"], created_at))
+            return False, {"evaluation_id": evaluation_id,
+                           "age_evaluation_id": evaluation_id,
+                           "sex_evaluation_id": sex_evaluation_id,
+                           "link_id": link_id, "schema_installed": installed,
+                           **measured, "sex": measured_sex}
+
+        return self._write("parent-identity-evaluation", body, mutate, **stores)
+
+    def end_parent_identity_link(self, body: Any, **stores: Any) -> dict:
+        body = self._version_body(body, {"link_id"})
+        link_id = self._require_text(body, "link_id")
+
+        def mutate(store, object_key):
+            installed = self._install_parent_identity(store)
+            with store._transaction() as conn:
+                row = conn.execute(
+                    "SELECT ended_at FROM parent_identity_links WHERE link_id=?",
+                    (link_id,)).fetchone()
+                if row is None:
+                    raise StorageError("parent identity link is unknown",
+                                       code="parent_identity_link_unknown",
+                                       http_status=404)
+                if row["ended_at"] is not None:
+                    raise StorageError("parent identity link has already ended",
+                                       code="parent_identity_conflict",
+                                       http_status=409)
+                ended_at = PERSISTENCE.utc_now()
+                conn.execute(
+                    "UPDATE parent_identity_links SET ended_at=?,ended_reason=? "
+                    "WHERE link_id=?", (ended_at, "user_ended", link_id))
+            return False, {"link_id": link_id, "ended_at": ended_at,
+                           "ended_reason": "user_ended",
+                           "schema_installed": installed}
+
+        return self._write("parent-identity-link-end", body, mutate, **stores)
+
     def set_plan_status(self, body: Any, **stores: Any) -> dict:
         """`POST /api/storage/plan-status` — archive or soft-delete a Plan.
 
@@ -814,14 +1229,25 @@ class StorageSeam:
             tip = _require_tip(store, body["plan_id"],
                                body["expected_current_version_id"])
             with store._transaction() as conn:
-                current = conn.execute("SELECT status FROM plans WHERE id=?",
-                                       (body["plan_id"],)).fetchone()[0]
-                if current == body["status"]:
+                columns = {row[1] for row in conn.execute(
+                    "PRAGMA table_info(plans)")}
+                has_revision = "status_revision" in columns
+                current = conn.execute(
+                    "SELECT status%s FROM plans WHERE id=?" %
+                    (",status_revision" if has_revision else ""),
+                    (body["plan_id"],)).fetchone()
+                current_status = current["status"]
+                if current_status == body["status"]:
                     return True, {"plan_id": body["plan_id"],
                                   "current_version_id": tip,
                                   "status": body["status"]}
-                conn.execute("UPDATE plans SET status=? WHERE id=?",
-                             (body["status"], body["plan_id"]))
+                if has_revision:
+                    conn.execute(
+                        "UPDATE plans SET status=?,status_revision=status_revision+1 "
+                        "WHERE id=?", (body["status"], body["plan_id"]))
+                else:
+                    conn.execute("UPDATE plans SET status=? WHERE id=?",
+                                 (body["status"], body["plan_id"]))
             return False, {"plan_id": body["plan_id"],
                            "current_version_id": tip,
                            "status": body["status"]}

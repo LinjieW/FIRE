@@ -96,6 +96,7 @@ import limitations as LIMITATIONS_MOD  # noqa: E402
 import sampling_error as SAMPLING_ERROR  # noqa: E402
 import throughput as THROUGHPUT  # noqa: E402
 import briefing_pack as BRIEFING_PACK  # noqa: E402
+import family_evidence as FAMILY_EVIDENCE  # noqa: E402
 import life_transitions as LIFE_TRANSITIONS  # noqa: E402
 from decision_lab import (  # noqa: E402
     SWEEP_CAP, SENS_CAP,
@@ -199,6 +200,9 @@ _IDEMPOTENT_POST_PATHS = (
     "/api/storage/plan", "/api/storage/plan-version",
     "/api/storage/plan-duplicate", "/api/storage/plan-status",
     "/api/storage/draft", "/api/storage/observe",
+    "/api/storage/parent-identity-link",
+    "/api/storage/parent-identity-evaluation",
+    "/api/storage/parent-identity-link-end",
 )
 
 # Synchronous routes that actually start FIRE-engine work. Background starters
@@ -210,6 +214,11 @@ _SYNC_ENGINE_PREFLIGHT_ROUTES = frozenset({
     "/api/roth_opt", "/api/drill", "/api/rentbuy", "/api/story",
     "/api/live", "/api/strategies", "/api/robustness", "/api/sweep",
     "/api/sensitivity", "/api/backtest",
+    # OPEN_ITEMS E33. The wizard sidebar's savings figure. It belongs in this
+    # set for the same reason as the rest -- it maps a config and runs engine
+    # code -- and it is the cheapest member by a wide margin: one year, no
+    # paths, no RNG.
+    "/api/estimate/savings",
 })
 
 
@@ -1327,6 +1336,75 @@ def start_bequest_job(cfg, body, seed) -> str:
     return jid
 
 
+def start_career_break_job(cfg, body, seed) -> str:
+    """Keep working, or take the planned break (Roadmap 9.0 Phase 3).
+
+    Two complete simulations at one seed, so it belongs on the background
+    channel with the other paired comparisons rather than blocking a request.
+
+    `_preflight_config` runs BEFORE the thread and is the whole reason an
+    unusable break -- zero years, a start age before the plan begins, a break
+    running past the last working year -- is named to the user instead of
+    producing a run that quietly models something shorter than what they
+    typed. Refusing inside the worker would surface as a failed job.
+
+    Progress is coarse for the same reason it is coarse next door: the
+    comparison runs both arms internally and takes no callback, and a smooth
+    bar over work this function cannot see would report a confidence it does
+    not have.
+    """
+    _preflight_config(cfg)         # refusal before the thread, not inside it
+    paths = int(body.get("paths", 2_000))
+    jid = _new_job()
+
+    def work():
+        try:
+            _job_set(jid, pct=0.05,
+                     stage="running the plan with and without the break")
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            out = ENG.career_break_comparison(cfg, paths, seed)
+            _job_set(jid, result=out, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
+def start_execution_simplification_job(cfg, body, seed) -> str:
+    """B4: paired age-80 execution-complexity stress.
+
+    Two complete simulations belong on the background channel.  The transition
+    age is intentionally not request-configurable: Sol reviewed age 80, and a
+    hidden user-controlled age would be a saved-plan field by another name.
+    """
+    _preflight_config(cfg)
+    paths = max(1, min(int(body.get("paths", 2_000)), 10_000))
+    jid = _new_job()
+
+    def work():
+        try:
+            _job_set(jid, pct=0.05,
+                     stage="running paired age-80 execution paths")
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            out = ENG.execution_simplification_stress(
+                cfg, paths, seed, transition_age=80)
+            _job_set(jid, result=out, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
 def start_roth_schedule_job(cfg, body, seed) -> str:
     """Multi-year conversion schedules, priced and left unranked.
 
@@ -1662,6 +1740,27 @@ class Handler(BaseHTTPRequestHandler):
             except RECOVERY.RecoveryError as exc:
                 return self._json({"error": _public_error(exc),
                                    "code": "recovery_failed"}, 409)
+        if path == "/api/storage/parent-identities":
+            plan_id = (parse_qs(urlparse(self.path).query).get("plan_id")
+                       or [""])[0]
+            try:
+                return self._json(
+                    STORAGE.StorageSeam(_recovery_manager()).parent_identities(
+                        plan_id,
+                        authority_receipt=self.headers.get(
+                            "X-FIRE-Authority-Receipt"),
+                        legacy_digest=self.headers.get(
+                            "X-FIRE-Legacy-Digest")))
+            except STORAGE.StorageError as exc:
+                return self._json({"error": str(exc), "code": exc.code,
+                                   **exc.payload}, exc.http_status)
+            except RECOVERY.ManualRecoveryRequired as exc:
+                return self._json({"error": str(exc),
+                                   "code": "manual_recovery_required",
+                                   **_latched_authority_payload()}, 423)
+            except RECOVERY.RecoveryError as exc:
+                return self._json({"error": _public_error(exc),
+                                   "code": "recovery_failed"}, 409)
         if path == "/api/guardrail/status":
             # Phase 4's home-page light, read from the plan's real check-in
             # history. Deliberately GET and deliberately cheap: it runs no
@@ -1947,13 +2046,22 @@ class Handler(BaseHTTPRequestHandler):
                                        "code": "recovery_failed"}, 400)
             if path in ("/api/storage/plan", "/api/storage/plan-version",
                         "/api/storage/plan-duplicate", "/api/storage/plan-status",
-                        "/api/storage/draft"):
+                        "/api/storage/draft",
+                        "/api/storage/parent-identity-link",
+                        "/api/storage/parent-identity-evaluation",
+                        "/api/storage/parent-identity-link-end"):
                 seam_method = {
                     "/api/storage/plan": "create_plan",
                     "/api/storage/plan-version": "create_plan_version",
                     "/api/storage/plan-duplicate": "duplicate_plan",
                     "/api/storage/plan-status": "set_plan_status",
                     "/api/storage/draft": "save_draft",
+                    "/api/storage/parent-identity-link":
+                        "create_parent_identity_link",
+                    "/api/storage/parent-identity-evaluation":
+                        "evaluate_parent_identity",
+                    "/api/storage/parent-identity-link-end":
+                        "end_parent_identity_link",
                 }[path]
                 try:
                     return self._json(
@@ -2407,8 +2515,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": str(exc)}, 400)
                 return self._json(out)
             if path == "/api/import_ssa":
-                # D2: SSA statement XML -> AIME/PIA. Local-only; coarse
-                # aggregates returned, earnings history never echoed.
+                # D2: SSA statement XML -> AIME/PIA plus a local-only,
+                # yearless top-35 sufficient statistic. Raw XML, names and
+                # calendar-keyed earnings history are never echoed or stored.
                 import ssa_import
                 r = ssa_import.import_statement(
                     str(body.get("text") or ""),
@@ -2642,6 +2751,24 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:      # noqa: BLE001
                     return self._json({"error": _public_error(exc)}, 400)
                 return self._json({"job": jid})
+            if path == "/api/career_break/start":
+                # Same polling channel as every other paired comparison:
+                # /api/progress, /api/result, /api/cancel.
+                try:
+                    jid = start_career_break_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
+            if path == "/api/execution_simplification/start":
+                try:
+                    jid = start_execution_simplification_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
             if path == "/api/frontier":
                 # S2: background job — same polling channel.
                 jid = start_frontier_job(cfg, body.get("paths", 1200), seed,
@@ -2666,6 +2793,16 @@ class Handler(BaseHTTPRequestHandler):
                 # = the client bumps the seed.
                 n = max(60, min(int(body.get("paths", 150)), 500))
                 return self._json(ENG.story(cfg, n, seed))
+            if path == "/api/estimate/savings":
+                # OPEN_ITEMS E33. Deliberately synchronous and deliberately
+                # NOT a job: this is a single year of arithmetic, and a job
+                # would turn every keystroke in the wizard into a polling
+                # loop. Deliberately thin, too -- the answer comes from
+                # `ENG.estimate_first_year_savings`, which runs the engine's
+                # own contribution code under the engine lock. Anything
+                # computed here instead would be the third implementation of
+                # a number that already has one too many.
+                return self._json(ENG.estimate_first_year_savings(cfg))
             if path == "/api/live":
                 # I1: live-tweak mode — one SYNCHRONOUS Quick evaluation for
                 # the overview sliders (~1.5s @1500). Same seed as the panel's
@@ -2792,6 +2929,27 @@ class Handler(BaseHTTPRequestHandler):
                                             "json")
                     with fj:
                         json.dump(pack.get("json") or {}, fj, indent=1,
+                                  ensure_ascii=False)
+                    return self._json({
+                        "path": "~/Downloads/" + os.path.basename(out),
+                        "json_path": "~/Downloads/" + os.path.basename(outj)})
+                elif kind == "family_evidence":
+                    try:
+                        pack = FAMILY_EVIDENCE.build(
+                            body.get("evidence"),
+                            language=str(body.get("language") or "zh"))
+                    except (TypeError, ValueError) as exc:
+                        return self._json({
+                            "error": str(exc),
+                            "code": "invalid_family_evidence"}, 400)
+                    f, out = _open_export(
+                        ddir, f"{safe}_family_evidence_{stamp}", "md")
+                    with f:
+                        f.write(pack["markdown"])
+                    fj, outj = _open_export(
+                        ddir, f"{safe}_family_evidence_{stamp}", "json")
+                    with fj:
+                        json.dump(pack["json"], fj, indent=1,
                                   ensure_ascii=False)
                     return self._json({
                         "path": "~/Downloads/" + os.path.basename(out),

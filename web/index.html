@@ -57,6 +57,20 @@
         <label><span data-i18n="quick.port">现有可投资产 $</span><input type="number" id="qPort" value="150000" step="5000"></label>
         <label><span data-i18n="quick.ret">退休后年支出 $</span><input type="number" id="qRet" value="45000" step="1000"></label>
         <label><span data-i18n="quick.spouse">配偶税前收入 $（可选）</span><input type="number" id="qSpouse" value="0" step="1000"></label>
+        <label><span data-i18n="quick.hsa">HSA（需 HDHP）</span><select id="qHsa">
+          <option value="none" data-i18n="quick.hsa.none">不缴 / 没有 HDHP</option>
+          <option value="self_only" data-i18n="quick.hsa.self">仅本人 HDHP</option>
+          <option value="family" data-i18n="quick.hsa.family">家庭 HDHP</option>
+        </select></label>
+      </div>
+      <!-- Empty on purpose. A pre-filled deductible would be this app
+           assuming an HDHP nobody stated, which is the thing the HSA
+           eligibility contract exists to forbid. -->
+      <div class="qc-grid" id="qHsaFacts" style="display:none">
+        <label><span data-i18n="quick.hsa.ded">HDHP 免赔额 $</span><input type="number" id="qHsaDed" step="100" min="0"></label>
+        <label><span data-i18n="quick.hsa.oop">HDHP 自付上限 $</span><input type="number" id="qHsaOop" step="100" min="0"></label>
+        <label><span data-i18n="quick.hsa.through">HSA 资格保持到几岁</span><input type="number" id="qHsaThrough" step="1" min="18" max="120"></label>
+        <label><span data-i18n="quick.hsa.clear">无其他保障 / 非 Medicare / 非 dependent</span><input type="checkbox" id="qHsaClear"></label>
       </div>
       <button class="btn-run" id="quickGo" data-i18n="quick.go">速估 →</button>
     </div>
@@ -79,6 +93,10 @@
     <div class="plans-box" id="recoveredBox" style="display:none">
       <div class="personas-head" data-i18n="recovered.head">迁移过来的草稿：</div>
       <div id="recoveredList"></div>
+    </div>
+    <div class="plans-box" id="familyLinkBox" style="display:none">
+      <div class="personas-head" data-i18n="family.head">家庭计划关联：</div>
+      <div id="familyLinkBody"></div>
     </div>
     <div class="personas-head" data-i18n="persona.head">或从一个像你的人开始：</div>
     <div class="personas" id="personas"></div>
@@ -607,6 +625,14 @@
       <p class="sec-kicker" data-i18n="concl.kicker">以下每条都由你这次跑出的数字生成，随输入改变。计算越多板块（敏感性/SWR/搬迁），结论越完整。</p>
       <div class="callout hidden" id="rulePackConclusionStatus" role="status"></div>
       <div id="conclusions"></div>
+      <div class="panel" style="margin-top:18px" id="careerBreakPanel">
+        <div class="panel-title sm" data-i18n="cb.title">继续工作，还是休这一段假</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="cb.kicker">同一个计划、同一个种子跑两遍，只差「休不休」这一件事。先看 FIRE 时间和几笔具体的钱——成功率在这个引擎上通常两边都是 100%，因为提取规则靠砍消费吸收损失，看它会以为休假没有代价。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="cbRun" data-i18n="cb.run">▶ 比较：继续工作 vs 计划休假</button>
+        </div>
+        <div id="cbOut" style="margin-top:12px"></div>
+      </div>
       <div class="panel" style="margin-top:18px" id="bequestPanel">
         <div class="panel-title sm" data-i18n="beq.title">这个计划靠继承吗</div>
         <p class="panel-note" style="margin:6px 0 10px" data-i18n="beq.kicker">把计划原样跑一遍，再用同一个种子跑一遍「遗产没到账」，只差这一件事。看的是中位消费而不是成功率——护栏会靠砍消费吸收损失，所以成功率可能一动不动而生活水平掉一截。</p>
@@ -614,6 +640,14 @@
           <button class="btn-ghost" id="beqRun" data-i18n="beq.run">▶ 检查是否依赖继承</button>
         </div>
         <div id="beqOut" style="margin-top:12px"></div>
+      </div>
+      <div class="panel" style="margin-top:18px" id="executionPanel">
+        <div class="panel-title sm" data-i18n="exec.title">80 岁后，计划还能不能照做</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="exec.kicker">同一批人生按路径隔离后再跑一次：从 80 岁第一笔退休付款起，只保留固定实际提取、不再新增 Roth 转换、冻结未来股债目标变化。它测执行复杂度，不预测认知衰退；当前引擎仍按目标股比隐式再平衡，所以不是字面上的「不再平衡」。本刀固定跑未搬迁的 base-location 臂，计划里的搬迁设置不在这次差异里。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="execRun" data-i18n="exec.run">▶ 跑 80 岁执行简化压力测试</button>
+        </div>
+        <div id="execOut" style="margin-top:12px"></div>
       </div>
       <div class="panel" style="margin-top:18px" id="fundedPanel">
         <div class="panel-title sm" data-i18n="fr.title">第二把尺子：你已经有的，够不够你欠的</div>
@@ -690,6 +724,7 @@
 <script src="motion.js"></script>
 <script src="charts.js"></script>
 <script src="destination_catalog.js"></script>
+<script src="family_queue.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

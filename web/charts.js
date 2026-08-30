@@ -194,25 +194,60 @@
     // collapse-then-fill inside a rAF callback, so a paused/starved frame leaves a full, correct gauge.
     if (opts.animate && window.matchMedia && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
       requestAnimationFrame(() => {
+        // `settle` is the only way this animation is allowed to end. Every
+        // exit -- normal finish, thrown error, starved frames -- goes through
+        // it, so the gauge cannot come to rest in the hidden state the reveal
+        // starts from.
+        let done = false;
+        const settle = () => {
+          if (done) return;
+          done = true;
+          if (valArc) { valArc.style.strokeDashoffset = "0"; valArc.style.strokeDasharray = ""; }
+          pctTxt.textContent = pct(p, 1);
+        };
         try {
           let len = 0;
           if (valArc) {
             len = valArc.getTotalLength();
+            // A zero or non-finite length means the arc cannot be measured --
+            // hiding it then would remove it with nothing able to bring it
+            // back. Leave the gauge as drawn and skip the reveal: a complete
+            // gauge without its animation is a far better failure than an
+            // animation that ends invisible.
+            if (!(len > 0) || !isFinite(len)) { settle(); return; }
             valArc.style.strokeDasharray = len;
             valArc.style.strokeDashoffset = len;
             valArc.getBoundingClientRect();
           }
           const dur = 900, t0 = performance.now();
+          // requestAnimationFrame stops firing while the window is hidden or
+          // unfocused. If that happens BETWEEN hiding the arc and filling it
+          // back in, the chain never resumes and the user is left with an
+          // empty semicircle -- which is exactly the state this app shipped
+          // in, silently, because the catch below used to be empty.
+          // setTimeout still runs when rAF does not, so it is the backstop.
+          const guard = setTimeout(settle, dur + 1200);
           const step = now => {
+            if (done) return;
             const t = Math.min(1, (now - t0) / dur);
             const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
             if (valArc) valArc.style.strokeDashoffset = len * (1 - e);   // same curve as the number
             pctTxt.textContent = pct(p * e, 1);
             if (t < 1) requestAnimationFrame(step);
-            else { if (valArc) valArc.style.strokeDashoffset = "0"; pctTxt.textContent = pct(p, 1); }
+            else { clearTimeout(guard); settle(); }
           };
           requestAnimationFrame(step);
-        } catch (e) {}
+          // Coming back to a hidden tab resumes rAF, but the guard may already
+          // have settled it; `done` makes both paths idempotent.
+          document.addEventListener("visibilitychange", function once() {
+            if (!document.hidden && !done) { clearTimeout(guard); settle(); }
+            document.removeEventListener("visibilitychange", once);
+          });
+        } catch (e) {
+          // Restore, never swallow. An empty catch here is what turned a
+          // failed animation into a gauge that was simply absent.
+          settle();
+        }
       });
     }
   }

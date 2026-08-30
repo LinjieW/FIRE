@@ -53,6 +53,11 @@ ROOT_FILES: dict[str, str] = {
     "AppIcon.icns": "bundle_asset",
     "ADVERSARIAL_AUDIT_2026-07-12.md": "documentation",
     "ATTRIBUTION_ROBUSTNESS_PROTOCOL.md": "documentation",
+    # Landed as a root file in a31d235 without a class here, so the release
+    # identity gate had been red since. Preflight does not see it: it checks
+    # RUNTIME files, and this is a research note.
+    "ESPP_CONTRACT_RESEARCH_2026-08-29.md": "documentation",
+    "ROADMAP_11.0.md": "documentation",
     "ATTRIBUTION_PROTOCOL_BLOCK_CONDITIONS_2026-07-21.md": "documentation",
     "DESIGN_APPLE_UIUX_2026-07.md": "documentation",
     "DESIGN_M4_BROWSER_CUTOVER_2026-07-25.md": "documentation",
@@ -65,11 +70,24 @@ ROOT_FILES: dict[str, str] = {
     "PHASE1_RULE_PACK_CONTRACT.md": "documentation",
     "PROGRESS_3.0.md": "documentation",
     "README.md": "documentation",
+    # The repository-level permission grant. It is a source/repository
+    # contract, not a runtime input. This classifier file IS itself a tracked
+    # runtime-identity dependency, so editing this map moves the current source
+    # identity even though LICENSE bytes do not enter a bundle.
+    "LICENSE": "repository_contract",
+    # The project-continuity charter tells a lawful recipient where the tested
+    # succession and recovery paths are and states the access boundary.
+    "CONTINUITY_CHARTER.md": "documentation",
     "ROADMAP_3.0.md": "documentation",
     "ROADMAP_4.0.md": "documentation",
     "ROADMAP_5.0.md": "documentation",
     "ROADMAP_6.0.md": "documentation",
     "ROADMAP_7.0.md": "documentation",
+    "ROADMAP_8.0.md": "documentation",
+    "ROADMAP_9.0.md": "documentation",
+    "ROADMAP_10.0.md": "documentation",
+    "CALIBRATION_REPORT_9.0.md": "calibration_evidence",
+    "CALIBRATION_REPORT_10.0.md": "calibration_evidence",
     # The naming migration contract. Documentation: it constrains what a
     # rename may touch (and, as importantly, what it may not -- the
     # historical records) and ships nothing into the bundle.
@@ -128,6 +146,12 @@ RUNTIME_TOOL_FILES = {
 # bundled-JS changes do that.
 RELEASE_ONLY_TOOL_FILES = {
     "tools/promote.py": "release_orchestrator",
+    # Roadmap 9's read-side historical calibration audit. It consumes engine
+    # data and emits evidence but is never imported or bundled by the App.
+    # Naming it here keeps that boundary explicit: adding an audit must not
+    # silently change the runtime identity it is meant to evaluate.
+    "tools/calibration_backtest.py": "calibration_evidence",
+    "tools/roadmap10_combined_evidence.py": "calibration_evidence",
     # Reads the build's artefacts to author release notes and ships nothing
     # into the bundle, so it is release-only rather than part of the runtime
     # identity. Classified here because the manifest builder refuses an
@@ -150,6 +174,17 @@ RELEASE_ONLY_TOOL_FILES = {
     # repository has gone stale at least once, and one of them told the other
     # owner the project was at Phase 0 eleven days after Phase 0 shipped.
     "tools/project_status.py": "session_status_reporter",
+    # The 3.6-second check that runs BEFORE the full gate: mutation targets
+    # whose quoted engine line has moved, the attribution inventory, the
+    # registry's stance split, the pack hash, the four shipped digests. It
+    # ships nothing and nothing at runtime reads it -- it exists because on
+    # 2026-08-24 the 45-minute gate was used as a search tool seven times in
+    # one session, about four hours (lesson 35).
+    #
+    # It also found its OWN gap the first time it ran: adding this very file
+    # moved the release identity, and the preflight did not check that class.
+    # It does now.
+    "tools/preflight.py": "pre_gate_checker",
 }
 
 # When each hand-run observation in `build_package`'s `test_evidence` block was
@@ -227,6 +262,13 @@ EXCLUDED_TOP_LEVEL: dict[str, str] = {
     "CODEX_HANDOFF_2026-08-12.md": "one-off handoff package for the next "
                                    "owner, written against the baton's §6 "
                                    "template. Not a baton and not source",
+    "CODEX_HANDOFF_2026-08-19.md": "one-off handoff package covering 7.0's "
+                                   "remainder and 8.0. Registered here at the "
+                                   "same time it was written -- the third "
+                                   "time this session a new file entered a "
+                                   "classified tree unregistered, and the "
+                                   "third time a gate caught it rather than "
+                                   "anybody remembering",
     "RELEASE_PLAYBOOK.md": "internal release procedure, not application source",
     "IDEA_BANK.md": "forward idea material outside this release scope",
     "IDEA_BANK_PLAYBOOK.md": "forward idea material outside this release scope",

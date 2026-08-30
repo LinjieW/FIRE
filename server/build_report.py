@@ -79,6 +79,17 @@ _RULE_PACK_COMPONENT_IDS = frozenset({
     # which is the validator working -- it is a fixed set on purpose.
     "us_state_archetypes",
     "ssa_trust_fund",
+    # Roadmap 10.0: the statutory amounts fetched to close OPEN_ITEMS U29.
+    "retirement_catch_up_limits",
+    "ira_income_phase_outs",
+    "fica_payroll_tax",
+    # Roadmap 10.0 Phase 2, fetched under the user's 2026-08-23 network
+    # authorisation.
+    "self_employment_tax",
+    "plan_shape_limits",
+    # Roadmap 10.0 Phase 2, U38=C: the section 423 annual grant-date FMV
+    # ceiling and the 85%-of-FMV purchase floor read as a max discount.
+    "espp_section_423",
 })
 _RULE_PACK_STATUSES = frozenset({"current", "stale", "review_required"})
 _RULE_PACK_COMPONENT_STATUSES = _RULE_PACK_STATUSES | {"not_used_at_run"}
@@ -111,6 +122,17 @@ _RULE_PACK_SOURCE_BY_COMPONENT = {
     # produce a federal projection nobody published, wearing the pack's
     # vintage.
     "ssa_trust_fund": frozenset({"pack"}),
+    # Statutory dollar amounts and rates: read from the pack or not read at
+    # all. A plan cannot supply its own 415(c) cap, catch-up amount, IRA
+    # phase-out range or payroll-tax rate to match or override -- those are
+    # the law, not a household's circumstances, and a plan able to edit them
+    # could produce a figure nobody legislated wearing the pack's vintage.
+    "retirement_catch_up_limits": frozenset({"pack"}),
+    "ira_income_phase_outs": frozenset({"pack"}),
+    "fica_payroll_tax": frozenset({"pack"}),
+    "self_employment_tax": frozenset({"pack"}),
+    "plan_shape_limits": frozenset({"pack"}),
+    "espp_section_423": frozenset({"pack"}),
 }
 _RULE_PACK_EVALUATION_BASIS = "config_applicability_not_path_instrumentation"
 

@@ -30,7 +30,15 @@ _BUCKET_RULES = (
     ("health savings", "hsa"),
     ("401", "pretax_401k"),
     ("403", "pretax_401k"),
-    ("457", "pretax_401k"),
+    # OPEN_ITEMS E37. This used to fold a 457 into the pre-tax 401(k), which
+    # charged it a 10% early-withdrawal penalty it does not have -- the one
+    # feature that makes a governmental 457(b) worth modelling separately, and
+    # the one an early retiree cares about most. It has its own bucket now.
+    #
+    # **This changes an import that already worked**: money a user imported
+    # from a 457 moves from the penalised bucket to an unpenalised one. That
+    # is the correction, not a side effect, and `limitations` says so.
+    ("457", "gov_457b"),
     ("traditional", "pretax_401k"),
     ("rollover", "pretax_401k"),
     ("sep", "pretax_401k"),
@@ -42,7 +50,20 @@ _BUCKET_RULES = (
     ("trust", "taxable"),
 )
 
-BUCKETS = ("pretax_401k", "roth_ira", "hsa", "taxable")
+#: Derived from the declaration rather than written out, so a bucket the
+#: importer can produce is always a bucket the engine can hold.
+def _buckets():
+    import os
+    import sys
+    server = os.path.dirname(os.path.abspath(__file__))
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    import account_schema as _schema
+    return tuple(account.field for account in _schema.US_ACCOUNT_TYPES
+                 if account.field)
+
+
+BUCKETS = _buckets()
 
 
 def _norm(s: str) -> str:

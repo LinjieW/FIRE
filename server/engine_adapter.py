@@ -43,6 +43,7 @@ import fire_v8_model
 import fire_v9_8_model as V98
 from fire_v9_8_model import (
     HousePriceProcess,
+    RetainedStockProcess,
     HumanCapitalParams,
     BlockySpendingParams,
     SSTrustFundParams,
@@ -52,7 +53,10 @@ from fire_v9_8_model import (
 )
 from fire_v6_model import AccountStack, State, TaxParams, RelocationParams
 from fire_v7_model import TaxParamsChina, V7Config, Regime, REGIMES
-from fire_v8_model import PromotionParams, V8ContributionParams, HouseholdParams, LayoffParams
+from fire_v8_model import (PromotionParams, V8ContributionParams, HouseholdParams,
+                           LayoffParams, CareerBreakParams, compile_career_break,
+                           LifestyleCreepParams, sample_lifestyle_creep,
+                           DisabilityParams, sample_ssdi_entitlement)
 from fire_v9_1_model import (
     MedicalParams, ACAParams, ACAScenario,
     MortalityParams, MORTALITY_MALE, MORTALITY_FEMALE,
@@ -76,16 +80,22 @@ from guaranteed_income import (
     compile_all as _compile_guaranteed,
 )
 import guaranteed_income as GI
+import ssa_import as SSA_IMPORT
+import student_debt as STUDENT_DEBT
 from fire_tax_true import TrueTaxParams
+from fire_tax_true import ORD_SINGLE as TRUE_ORD_SINGLE
 from funded_ratio import FundedRatioParams
 from fire_rule_pack import US_STATE_ARCHETYPES
 from fire_rule_pack import (
     rule_pack_for_run as _rule_pack_for_run,
     rule_pack_reference_defaults as _rule_pack_reference_defaults,
+    PLAN_SHAPE_RULES, ESPP_RULES,
 )
 from fire_v95_actual_baseline import INITIAL_STACK_ACTUAL, match_excludes_bonus
 
 ENGINE_VERSION = "v9.8-rc"
+LIFESTYLE_CREEP_SEED_OFFSET = 17_000_000
+DISABILITY_SEED_OFFSET = 19_000_000
 
 
 class ConfigIncomplete(ValueError):
@@ -137,9 +147,1288 @@ def check_config(cfg: dict) -> None:
     _validate_dividend_drag(cfg)
     _validate_state_archetype(cfg)
     _validate_funded_ratio(cfg)
+    _validate_career_break(cfg)
+    _validate_layoff(cfg)
+    _validate_savings_mode(cfg)
+    _validate_tax_model(cfg)
+    _validate_accumulation_state_rate(cfg)
+    _validate_employment_type(cfg)
+    _validate_workplace_plan(cfg)
+    _validate_hsa_eligibility(cfg)
+    _validate_temporary_expenses(cfg)
+    _validate_variable_income(cfg)
+    _validate_spouse_variable_income(cfg)
+    _validate_spouse_promotion(cfg)
+    _validate_second_promotions(cfg)
+    _validate_rsu_vest(cfg)
+    _validate_rsu_retained(cfg)
+    _validate_espp(cfg)
+    _validate_gov_457b(cfg)
+    _validate_ssa_basis(cfg)
+    _validate_student_debt(cfg)
+    _validate_lifestyle_creep(cfg)
+    _validate_disability(cfg)
     build_kwargs(cfg, False)
     if bool((cfg.get("relocation") or {}).get("enabled", False)):
         build_kwargs(cfg, True)
+
+
+def _validate_ssa_basis(cfg: dict) -> None:
+    """Refuse a malformed or stale exact-replay basis before any draws.
+
+    The stored numbers were indexed with one AWI table vintage.  Replaying
+    them under a different vintage would still produce a plausible number,
+    but no longer the exact top-35 calculation the UI promises.  The repair
+    is to re-import the local statement, not to guess how to migrate a
+    sufficient statistic that deliberately carries no calendar years.
+    """
+    basis = (cfg.get("social_security") or {}).get("ssa_basis_v1")
+    if basis is None:
+        return
+    try:
+        SSA_IMPORT.estimate_pia_from_basis(basis, [])
+    except (TypeError, ValueError) as exc:
+        raise ConfigIncomplete(
+            "social_security.ssa_basis_v1 is invalid; re-import the SSA "
+            "statement on this device",
+            field="social_security.ssa_basis_v1",
+            code="config_invalid") from exc
+    if basis.get("awi_vintage") != SSA_IMPORT.AWI_MAX_YEAR:
+        raise ConfigIncomplete(
+            "social_security.ssa_basis_v1 uses an older AWI table; re-import "
+            "the SSA statement on this device",
+            field="social_security.ssa_basis_v1",
+            code="config_invalid")
+    first_simulated_year = int(basis["birth_year"]) + int(
+        (cfg.get("state") or {}).get("start_age", State().start_age))
+    if first_simulated_year < int(basis["projection_start_year"]):
+        raise ConfigIncomplete(
+            "state.start_age begins before the imported SSA record ends; "
+            "re-import the statement for this plan age",
+            field="state.start_age", code="config_invalid")
+
+
+def _ssa_pia_resolver(ss_block: dict):
+    """Compile a stored SSA basis into the lifecycle engine's local seam."""
+    basis = (ss_block or {}).get("ssa_basis_v1")
+    if basis is None:
+        return None
+    birth_year = int(basis["birth_year"])
+
+    def resolve(age_amounts):
+        rows = [
+            {
+                "age": int(age),
+                "year": birth_year + int(age),
+                "covered_earnings_nominal": float(amount),
+            }
+            for age, amount in age_amounts
+        ]
+        calc = SSA_IMPORT.estimate_pia_from_basis(
+            basis,
+            [(row["year"], row["covered_earnings_nominal"])
+             for row in rows],
+        )
+        return {
+            "basis_schema": 1,
+            "aime_monthly": calc["aime_monthly"],
+            "pia_monthly_y0": calc["pia_monthly"],
+            "future_years_used": calc["future_years_used"],
+            "future_earnings": rows,
+        }
+
+    return resolve
+
+
+def _validate_gov_457b(cfg: dict) -> None:
+    """Refuse a 457(b) contribution the law does not allow.
+
+    OPEN_ITEMS E37. Unlike its neighbours this leaf IS held to statute, and
+    the reason is that the statute is the only thing making it a separate
+    account: a governmental 457(b) has its own section 457(e)(15) limit, not
+    a share of the 401(k)'s, and a stated figure above it describes a year
+    that cannot happen. Refusing beats capping -- a silently capped number is
+    a control the adapter dropped, which from outside looks exactly like one
+    it honoured.
+
+    The catch-up is NOT added to the ceiling, matching the engine: a
+    governmental 457(b) may allow the age-50 catch-up, but whether a person in
+    both plans gets one in EACH is not stated on any first-party IRS page this
+    was checked against, so the model under-credits rather than invents room.
+    `limitations` says so, and this refusal names the same figure the
+    disclosure does.
+    """
+    block = cfg.get("contributions") or {}
+    stated = block.get("gov_457b_y1", 0.0)
+    if stated is None:
+        return
+    if not isinstance(stated, numbers.Real) or isinstance(stated, bool) \
+            or not math.isfinite(float(stated)):
+        raise ConfigIncomplete(
+            "contributions.gov_457b_y1 must be a number",
+            field="contributions.gov_457b_y1", code="config_invalid")
+    stated = float(stated)
+    ceiling = float(PLAN_SHAPE_RULES["deferral_limit_457b_governmental"])
+    if stated < 0.0 or stated > ceiling:
+        raise ConfigIncomplete(
+            "contributions.gov_457b_y1 is what you actually defer into a "
+            "governmental 457(b) in year one, and section 457(e)(15) caps it "
+            "at $%s for %d. It is a SEPARATE limit from your 401(k)/403(b) "
+            "one -- you may fill both -- but neither may be exceeded."
+            % (format(int(ceiling), ","), 2026),
+            field="contributions.gov_457b_y1", code="config_invalid")
+
+
+def _validate_employment_type(cfg: dict) -> None:
+    """Refuse an employment type the engine does not have, and refuse the one
+    combination it cannot honour.
+
+    A self-employed person with an employer match rate is not a typo -- it is
+    a Solo 401(k) or SEP owner, and they are RIGHT that employer money should
+    reach them. This engine cannot give it to them yet: the employer term is
+    `min(employee_deferral, ceiling)`, so employer money can never exceed the
+    deferral, and a SEP is employer-only. Modelling that as a match would put
+    the contribution in the wrong place AND miss the 415(c) cap that employer
+    contributions are what makes bind.
+
+    So the refusal says which plan shapes are missing rather than pretending
+    the input is malformed. Silently zeroing the rate would be worse: a
+    control the adapter drops looks identical, from outside, to one it honours.
+    """
+    block = cfg.get("contributions") or {}
+    kind = block.get("employment_type", "w2")
+    if kind not in ("w2", "self_employed"):
+        raise ConfigIncomplete(
+            "contributions.employment_type must be 'w2' (an employer withholds "
+            "your payroll tax) or 'self_employed' (you pay both halves)",
+            field="contributions.employment_type", code="config_invalid")
+    if kind != "self_employed":
+        return
+    rate = block.get("match_rate", 0.0)
+    if isinstance(rate, numbers.Real) and not isinstance(rate, bool) \
+            and math.isfinite(float(rate)) and float(rate) > 0.0:
+        raise ConfigIncomplete(
+            "contributions.match_rate must be 0 when employment_type is "
+            "'self_employed'. Employer contributions for the self-employed -- "
+            "a Solo 401(k) employer piece, or a SEP -- are not modelled yet, "
+            "and they are not a match: they do not depend on what you defer. "
+            "Modelling them as a match would put the money in the wrong place "
+            "and skip the annual additions cap",
+            field="contributions.match_rate", code="config_invalid")
+
+
+def _validate_workplace_plan(cfg: dict) -> None:
+    """Bind SIMPLE's user-stated contribution to its own statutory ceiling.
+
+    The contribution fields mean what the person plans to put in, while the
+    dated pack supplies the legal room. Refusing an impossible plan is better
+    than silently clipping the user's stated amount and reporting a different
+    plan. The engine still caps as a defence for direct callers.
+    """
+    rows = [
+        ("contributions", cfg.get("contributions") or {},
+         "workplace_plan_type", "simple_higher_limit",
+         "pretax_401k_limit_y1"),
+    ]
+    household = cfg.get("household") or {}
+    if household.get("enabled"):
+        rows.append((
+            "household", household, "spouse_workplace_plan_type",
+            "spouse_simple_higher_limit", "spouse_pretax_401k_limit_y1"))
+    for prefix, block, kind_name, higher_name, amount_name in rows:
+        kind = block.get(kind_name, "standard")
+        field = "%s.%s" % (prefix, kind_name)
+        if kind not in ("standard", "403b", "simple"):
+            raise ConfigIncomplete(
+                "%s must be 'standard', '403b', or 'simple'" % field,
+                field=field, code="config_invalid")
+        if kind != "simple":
+            continue
+        amount = block.get(amount_name, 0.0)
+        amount_field = "%s.%s" % (prefix, amount_name)
+        if (not isinstance(amount, numbers.Real) or isinstance(amount, bool)
+                or not math.isfinite(float(amount)) or float(amount) < 0.0):
+            raise ConfigIncomplete(
+                "%s must be a finite non-negative number" % amount_field,
+                field=amount_field, code="config_invalid")
+        ceiling = float(PLAN_SHAPE_RULES[
+            "simple_deferral_limit_small_employer"
+            if block.get(higher_name, False) else "simple_deferral_limit"])
+        if float(amount) > ceiling:
+            raise ConfigIncomplete(
+                "%s is the planned year-one SIMPLE deferral and cannot exceed "
+                "the 2026 SIMPLE base limit of $%s. Age-based SIMPLE catch-up "
+                "room is added separately by the engine."
+                % (amount_field, format(int(ceiling), ",")),
+                field=amount_field, code="config_invalid")
+
+    catchup_rows = [
+        ("contributions", cfg.get("contributions") or {},
+         "workplace_plan_type", "catchup_403b_15yr_enabled",
+         "catchup_403b_15yr_schedule_nominal",
+         "catchup_403b_15yr_prior_used_nominal"),
+    ]
+    if household.get("enabled"):
+        catchup_rows.append((
+            "household", household, "spouse_workplace_plan_type",
+            "spouse_catchup_403b_15yr_enabled",
+            "spouse_catchup_403b_15yr_schedule_nominal",
+            "spouse_catchup_403b_15yr_prior_used_nominal"))
+    _annual = float(PLAN_SHAPE_RULES["catchup_403b_15yr_annual"])
+    _lifetime = float(PLAN_SHAPE_RULES["catchup_403b_15yr_lifetime"])
+    for (prefix, block, kind_name, enabled_name, schedule_name,
+         prior_used_name) in catchup_rows:
+        if not block.get(enabled_name, False):
+            continue
+        enabled_field = "%s.%s" % (prefix, enabled_name)
+        if block.get(kind_name, "standard") != "403b":
+            raise ConfigIncomplete(
+                "%s requires %s.%s = '403b'" % (
+                    enabled_field, prefix, kind_name),
+                field=enabled_field, code="config_invalid")
+        schedule = block.get(schedule_name)
+        schedule_field = "%s.%s" % (prefix, schedule_name)
+        if not isinstance(schedule, (list, tuple)) or not schedule:
+            raise ConfigIncomplete(
+                "%s must be a non-empty list of NOMINAL annual special "
+                "catch-up room from your plan administrator or IRS worksheet"
+                % schedule_field,
+                field=schedule_field, code="config_invalid")
+        total = 0.0
+        for index, raw in enumerate(schedule):
+            if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                    or not math.isfinite(float(raw)) or float(raw) < 0.0
+                    or float(raw) > _annual):
+                raise ConfigIncomplete(
+                    "%s[%d] must be between $0 and the statutory annual "
+                    "special catch-up ceiling of $%s" % (
+                        schedule_field, index, format(int(_annual), ",")),
+                    field=schedule_field, code="config_invalid")
+            total += float(raw)
+        prior_used = block.get(prior_used_name)
+        prior_field = "%s.%s" % (prefix, prior_used_name)
+        if (not isinstance(prior_used, numbers.Real)
+                or isinstance(prior_used, bool)
+                or not math.isfinite(float(prior_used))
+                or not 0.0 <= float(prior_used) <= _lifetime):
+            raise ConfigIncomplete(
+                "%s must state the finite amount of the $%s lifetime "
+                "special catch-up already used before this plan starts; "
+                "blank is unmeasured, not zero" % (
+                    prior_field, format(int(_lifetime), ",")),
+                field=prior_field, code="config_incomplete")
+        if total + float(prior_used) > _lifetime:
+            raise ConfigIncomplete(
+                "%s plus %s totals more than the statutory $%s lifetime "
+                "special catch-up ceiling" % (
+                    schedule_field, prior_field,
+                    format(int(_lifetime), ",")),
+                field=schedule_field, code="config_invalid")
+
+
+def _validate_hsa_eligibility(cfg: dict) -> None:
+    """Require enough user facts to support every non-zero HSA contribution."""
+    household = cfg.get("household") or {}
+    state = cfg.get("state") or {}
+    start_age = int(state.get("start_age", State().start_age))
+    rows = [
+        ("contributions", cfg.get("contributions") or {}, "hsa_limit_y1",
+         "hsa_coverage_tier", "hsa_deductible_y1",
+         "hsa_out_of_pocket_max_y1", "hsa_disqualifying_other_coverage",
+         "hsa_medicare_enrolled", "hsa_claimed_as_dependent",
+         "hsa_eligible_through_age", start_age),
+    ]
+    if household.get("enabled"):
+        rows.append((
+            "household", household, "spouse_hsa_limit_y1",
+            "spouse_hsa_coverage_tier", "spouse_hsa_deductible_y1",
+            "spouse_hsa_out_of_pocket_max_y1",
+            "spouse_hsa_disqualifying_other_coverage",
+            "spouse_hsa_medicare_enrolled",
+            "spouse_hsa_claimed_as_dependent",
+            "spouse_hsa_eligible_through_age",
+            start_age + int(household.get("spouse_age_offset", 0) or 0)))
+    active = []
+    for (prefix, block, amount_name, tier_name, deductible_name, oop_name,
+         other_name, medicare_name, dependent_name, through_name, age) in rows:
+        amount = block.get(amount_name, 0.0)
+        amount_field = "%s.%s" % (prefix, amount_name)
+        if (not isinstance(amount, numbers.Real) or isinstance(amount, bool)
+                or not math.isfinite(float(amount)) or float(amount) < 0.0):
+            raise ConfigIncomplete(
+                "%s must be a finite non-negative number" % amount_field,
+                field=amount_field, code="config_invalid")
+        if float(amount) == 0.0:
+            continue
+        tier = block.get(tier_name, "none")
+        tier_field = "%s.%s" % (prefix, tier_name)
+        if tier not in ("self_only", "family"):
+            raise ConfigIncomplete(
+                "%s must be 'self_only' or 'family' for a non-zero HSA "
+                "contribution" % tier_field,
+                field=tier_field, code="config_incomplete")
+        suffix = "family" if tier == "family" else "self_only"
+        deductible = block.get(deductible_name)
+        deductible_field = "%s.%s" % (prefix, deductible_name)
+        minimum = float(PLAN_SHAPE_RULES[
+            "hdhp_min_deductible_" + suffix])
+        if (not isinstance(deductible, numbers.Real)
+                or isinstance(deductible, bool)
+                or not math.isfinite(float(deductible))
+                or float(deductible) < minimum):
+            raise ConfigIncomplete(
+                "%s must be at least the 2026 HDHP minimum deductible of "
+                "$%s for %s coverage" % (
+                    deductible_field, format(int(minimum), ","), tier),
+                field=deductible_field, code="config_incomplete")
+        oop = block.get(oop_name)
+        oop_field = "%s.%s" % (prefix, oop_name)
+        maximum = float(PLAN_SHAPE_RULES[
+            "hdhp_max_out_of_pocket_" + suffix])
+        if (not isinstance(oop, numbers.Real) or isinstance(oop, bool)
+                or not math.isfinite(float(oop))
+                or not float(deductible) <= float(oop) <= maximum):
+            raise ConfigIncomplete(
+                "%s must be between the deductible and the 2026 HDHP "
+                "out-of-pocket ceiling of $%s" % (
+                    oop_field, format(int(maximum), ",")),
+                field=oop_field, code="config_incomplete")
+        for name, label in ((other_name, "disqualifying other coverage"),
+                            (medicare_name, "Medicare enrollment"),
+                            (dependent_name, "dependent status")):
+            field = "%s.%s" % (prefix, name)
+            value = block.get(name)
+            if value is not False:
+                raise ConfigIncomplete(
+                    "%s must be explicitly false: %s prevents HSA "
+                    "eligibility, and blank is unmeasured" % (field, label),
+                    field=field, code="config_incomplete")
+        through = block.get(through_name)
+        through_field = "%s.%s" % (prefix, through_name)
+        if (isinstance(through, bool) or not isinstance(through, numbers.Real)
+                or not math.isfinite(float(through))
+                or int(through) != float(through) or int(through) < age):
+            raise ConfigIncomplete(
+                "%s must be a whole age at or after the plan's starting age; "
+                "contributions stop after that age rather than assuming "
+                "HDHP eligibility forever" % through_field,
+                field=through_field, code="config_incomplete")
+        base = float(PLAN_SHAPE_RULES["hsa_limit_" + suffix])
+        catchup = (float(PLAN_SHAPE_RULES["hsa_catch_up_amount"])
+                   if age >= PLAN_SHAPE_RULES["hsa_catch_up_age"] else 0.0)
+        if float(amount) > base + catchup:
+            raise ConfigIncomplete(
+                "%s exceeds the 2026 %s HSA limit plus any age-55 catch-up"
+                % (amount_field, tier),
+                field=amount_field, code="config_invalid")
+        active.append((tier, float(amount), age))
+    if len(active) == 2 and any(row[0] == "family" for row in active):
+        family_cap = float(PLAN_SHAPE_RULES["hsa_limit_family"])
+        family_cap += sum(float(PLAN_SHAPE_RULES["hsa_catch_up_amount"])
+                          for _, _, age in active
+                          if age >= PLAN_SHAPE_RULES["hsa_catch_up_age"])
+        if sum(row[1] for row in active) > family_cap:
+            raise ConfigIncomplete(
+                "the spouses' combined year-one HSA contributions exceed "
+                "the shared family limit plus their individual age-55 "
+                "catch-ups", field="household.spouse_hsa_limit_y1",
+                code="config_invalid")
+
+
+def _validate_temporary_expenses(cfg: dict) -> None:
+    block = cfg.get("contributions") or {}
+    horizon = int((cfg.get("state") or {}).get(
+        "accum_years", State().accum_years))
+    for name in ("childcare_schedule_real", "commuting_schedule_real"):
+        schedule = block.get(name, ())
+        field = "contributions.%s" % name
+        if not isinstance(schedule, (list, tuple)):
+            raise ConfigIncomplete(
+                "%s must be a list of annual real-dollar costs" % field,
+                field=field, code="config_invalid")
+        if len(schedule) > horizon:
+            raise ConfigIncomplete(
+                "%s has more rows than the accumulation horizon" % field,
+                field=field, code="config_invalid")
+        for index, value in enumerate(schedule):
+            if not isinstance(value, numbers.Real) or isinstance(value, bool):
+                raise ConfigIncomplete(
+                    "%s[%d] must be a finite non-negative real-dollar cost"
+                    % (field, index), field=field, code="config_invalid")
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric < 0.0:
+                raise ConfigIncomplete(
+                    "%s[%d] must be a finite non-negative real-dollar cost"
+                    % (field, index), field=field, code="config_invalid")
+
+
+def _validate_variable_income(cfg: dict) -> None:
+    """Validate only the active employment contract before any RNG draw."""
+    block = cfg.get("contributions") or {}
+    kind = block.get("employment_type", "w2")
+    bonus_mode = block.get("bonus_mode_pre", "fixed_amount")
+    profit_mode = block.get("self_employed_profit_mode", "fixed")
+    if bonus_mode not in ("fixed_amount", "uniform_pct"):
+        raise ConfigIncomplete(
+            "contributions.bonus_mode_pre must be 'fixed_amount' or "
+            "'uniform_pct'",
+            field="contributions.bonus_mode_pre", code="config_invalid")
+    if profit_mode not in ("fixed", "uniform"):
+        raise ConfigIncomplete(
+            "contributions.self_employed_profit_mode must be 'fixed' or "
+            "'uniform'",
+            field="contributions.self_employed_profit_mode",
+            code="config_invalid")
+    if kind == "w2" and profit_mode != "fixed":
+        raise ConfigIncomplete(
+            "self-employed profit variability cannot be enabled for a W-2 "
+            "plan; use bonus_mode_pre for W-2 variable compensation",
+            field="contributions.self_employed_profit_mode",
+            code="config_invalid")
+    if kind == "self_employed" and bonus_mode != "fixed_amount":
+        raise ConfigIncomplete(
+            "W-2 bonus variability cannot be enabled for a self-employed "
+            "plan; use self_employed_profit_mode for the whole net profit",
+            field="contributions.bonus_mode_pre", code="config_invalid")
+
+    def _bounds(lo_name: str, hi_name: str) -> None:
+        raw_lo = block.get(lo_name)
+        raw_hi = block.get(hi_name)
+        for name, raw in ((lo_name, raw_lo), (hi_name, raw_hi)):
+            if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                    or not math.isfinite(float(raw)) or float(raw) < 0.0):
+                raise ConfigIncomplete(
+                    "contributions.%s must be a finite non-negative number; "
+                    "negative business profit/loss is not modelled in this "
+                    "slice" % name,
+                    field="contributions.%s" % name, code="config_invalid")
+        if float(raw_lo) > float(raw_hi):
+            raise ConfigIncomplete(
+                "contributions.%s must be at or below contributions.%s"
+                % (lo_name, hi_name),
+                field="contributions.%s" % hi_name, code="config_invalid")
+
+    if kind == "w2" and bonus_mode == "uniform_pct":
+        _bounds("bonus_pct_min_pre", "bonus_pct_max_pre")
+    if kind == "self_employed" and profit_mode == "uniform":
+        _bounds("self_employed_profit_factor_min",
+                "self_employed_profit_factor_max")
+
+
+def _validate_rsu_vest(cfg: dict) -> None:
+    """Validate the vest schedule before it can reach one earned-income year.
+
+    Four refusals rather than silent coercion (lesson 3). The fourth exists
+    because this repository has already paid for the other shape once
+    (lesson 23b): `income_streams.equity_*` books equity compensation as
+    AFTER-TAX cash, this books it as PRE-TAX wages, and a plan with both on
+    holds two contradictory statements about the same grants.
+    """
+    block = cfg.get("contributions") or {}
+    if not block.get("rsu_vest_enabled"):
+        return
+    if block.get("employment_type", "w2") != "w2":
+        raise ConfigIncomplete(
+            "contributions.rsu_vest_enabled requires employment_type 'w2'. "
+            "RSU vesting is ordinary W-2 wages; applying it to a "
+            "self-employed plan would run it through SECA, which is the "
+            "wrong tax base rather than an approximation",
+            field="contributions.rsu_vest_enabled", code="config_invalid")
+    if (cfg.get("income_streams") or {}).get("equity_enabled"):
+        raise ConfigIncomplete(
+            "contributions.rsu_vest_enabled and income_streams.equity_enabled "
+            "cannot both be on: they are two different statements about the "
+            "same equity compensation -- one after-tax cash credited to "
+            "taxable, one pre-tax wages that pay income tax, FICA and build "
+            "Social Security covered earnings. Keep the one you mean",
+            field="contributions.rsu_vest_enabled", code="config_invalid")
+    schedule = block.get("rsu_vest_schedule_real")
+    if not isinstance(schedule, (list, tuple)) or not schedule:
+        raise ConfigIncomplete(
+            "contributions.rsu_vest_schedule_real must be a non-empty list of "
+            "annual vest values in today's dollars, index 0 = the first "
+            "accumulation year. An enabled schedule with nothing in it is not "
+            "a zero vest, it is an unanswered question",
+            field="contributions.rsu_vest_schedule_real",
+            code="config_invalid")
+    for index, raw in enumerate(schedule):
+        if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                or not math.isfinite(float(raw)) or float(raw) < 0.0):
+            raise ConfigIncomplete(
+                "contributions.rsu_vest_schedule_real[%d] must be a finite "
+                "non-negative number; a negative vest is not modelled "
+                "(forfeiture and clawback are out of scope for this slice)"
+                % index,
+                field="contributions.rsu_vest_schedule_real",
+                code="config_invalid")
+
+
+def _validate_rsu_retained(cfg: dict) -> None:
+    """Refuse a concentration the vest schedule cannot support."""
+    block = cfg.get("contributions") or {}
+    if not block.get("rsu_retained_enabled"):
+        return
+    if not block.get("rsu_vest_enabled"):
+        raise ConfigIncomplete(
+            "contributions.rsu_retained_enabled requires "
+            "contributions.rsu_vest_enabled: you can only keep shares that "
+            "vested, and without the vest schedule there is nothing to "
+            "measure the retained amount against",
+            field="contributions.rsu_retained_enabled", code="config_invalid")
+    kept = block.get("rsu_retained_schedule_real")
+    if not isinstance(kept, (list, tuple)) or not kept:
+        raise ConfigIncomplete(
+            "contributions.rsu_retained_schedule_real must be a non-empty "
+            "list, in today's dollars, of how much of each year's vest you "
+            "kept in shares instead of selling",
+            field="contributions.rsu_retained_schedule_real",
+            code="config_invalid")
+    vest = list(block.get("rsu_vest_schedule_real") or ())
+    for index, raw in enumerate(kept):
+        if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                or not math.isfinite(float(raw)) or float(raw) < 0.0):
+            raise ConfigIncomplete(
+                "contributions.rsu_retained_schedule_real[%d] must be a "
+                "finite non-negative number" % index,
+                field="contributions.rsu_retained_schedule_real",
+                code="config_invalid")
+        vested = float(vest[index]) if index < len(vest) else 0.0
+        if float(raw) > vested:
+            raise ConfigIncomplete(
+                "contributions.rsu_retained_schedule_real[%d] keeps %.2f but "
+                "only %.2f vested that year. Keeping more than vested is not "
+                "a concentration, it is a different grant -- add it to the "
+                "vest schedule if it is real" % (index, float(raw), vested),
+                field="contributions.rsu_retained_schedule_real",
+                code="config_invalid")
+    if block.get("rsu_retained_sigma_enabled"):
+        sigma = block.get("rsu_retained_sigma_real")
+        drift = block.get("rsu_retained_drift_real")
+        if (not isinstance(sigma, numbers.Real) or isinstance(sigma, bool)
+                or not math.isfinite(float(sigma)) or float(sigma) <= 0.0):
+            raise ConfigIncomplete(
+                "contributions.rsu_retained_sigma_real must be a finite "
+                "positive annual real volatility, in your own figures. There "
+                "is no default: no index ships a single stock's vol. A zero "
+                "would not be a low-risk position, it would be the flat case "
+                "with extra machinery",
+                field="contributions.rsu_retained_sigma_real",
+                code="config_invalid")
+        if (not isinstance(drift, numbers.Real) or isinstance(drift, bool)
+                or not math.isfinite(float(drift))):
+            raise ConfigIncomplete(
+                "contributions.rsu_retained_drift_real must be a finite "
+                "annual real drift; 0 leaves the median where the flat case "
+                "put it and only adds spread",
+                field="contributions.rsu_retained_drift_real",
+                code="config_invalid")
+    multiple = block.get("rsu_retained_value_multiple")
+    if (not isinstance(multiple, numbers.Real) or isinstance(multiple, bool)
+            or not math.isfinite(float(multiple)) or float(multiple) < 0.0):
+        raise ConfigIncomplete(
+            "contributions.rsu_retained_value_multiple must be a finite "
+            "non-negative number: what the kept shares are worth when you "
+            "sell, as a multiple of what you put in, in today's dollars. "
+            "1.0 means flat; 0 means the position went to nothing",
+            field="contributions.rsu_retained_value_multiple",
+            code="config_invalid")
+    start_age = int((cfg.get("state") or {}).get("start_age", 30) or 30)
+    last_kept_age = start_age + len(kept) - 1
+    try:
+        sale_age = int(block.get("rsu_retained_sale_age"))
+    except (TypeError, ValueError):
+        sale_age = None
+    if sale_age is None or sale_age <= last_kept_age:
+        raise ConfigIncomplete(
+            "contributions.rsu_retained_sale_age must be an age after the "
+            "last year you kept shares (%d); selling at or before it would "
+            "book the sale before the position exists" % last_kept_age,
+            field="contributions.rsu_retained_sale_age",
+            code="config_invalid")
+
+
+def _validate_espp(cfg: dict) -> None:
+    """Validate the annual §423 offering before any payroll year is built."""
+    block = cfg.get("contributions") or {}
+    if not block.get("espp_enabled"):
+        return
+    if block.get("employment_type", "w2") != "w2":
+        raise ConfigIncomplete(
+            "contributions.espp_enabled requires employment_type 'w2'; a "
+            "section 423 employee plan is not self-employment profit",
+            field="contributions.espp_enabled", code="config_invalid")
+    mode = block.get("espp_disposition_mode", "immediate")
+    if mode not in ("immediate", "qualifying_hold"):
+        raise ConfigIncomplete(
+            "contributions.espp_disposition_mode must be 'immediate' or "
+            "'qualifying_hold'",
+            field="contributions.espp_disposition_mode",
+            code="config_invalid")
+    discount = block.get("espp_discount_rate")
+    if (not isinstance(discount, numbers.Real) or isinstance(discount, bool)
+            or not math.isfinite(float(discount))
+            or not 0.0 <= float(discount) <=
+            float(ESPP_RULES["max_discount_rate"])):
+        raise ConfigIncomplete(
+            "contributions.espp_discount_rate must be a finite share from 0 "
+            "through the section 423 maximum %.2f"
+            % float(ESPP_RULES["max_discount_rate"]),
+            field="contributions.espp_discount_rate", code="config_invalid")
+    if not isinstance(block.get("espp_lookback_enabled"), bool):
+        raise ConfigIncomplete(
+            "contributions.espp_lookback_enabled must be true or false",
+            field="contributions.espp_lookback_enabled",
+            code="config_invalid")
+
+    grants = block.get("espp_grant_fmv_schedule_nominal")
+    exercises = block.get("espp_exercise_fmv_schedule_nominal")
+    for field, schedule in (
+            ("espp_grant_fmv_schedule_nominal", grants),
+            ("espp_exercise_fmv_schedule_nominal", exercises)):
+        if not isinstance(schedule, (list, tuple)) or not schedule:
+            raise ConfigIncomplete(
+                "contributions.%s must be a non-empty annual list of "
+                "nominal-dollar Form 3922 / offering facts" % field,
+                field="contributions." + field, code="config_invalid")
+    if len(grants) != len(exercises):
+        raise ConfigIncomplete(
+            "contributions.espp_grant_fmv_schedule_nominal and "
+            "contributions.espp_exercise_fmv_schedule_nominal must have the "
+            "same number of annual lots",
+            field="contributions.espp_exercise_fmv_schedule_nominal",
+            code="config_invalid")
+    accum_years = int((cfg.get("state") or {}).get("accum_years", 0) or 0)
+    if len(grants) > accum_years:
+        raise ConfigIncomplete(
+            "contributions.espp_grant_fmv_schedule_nominal has %d rows but "
+            "the plan has only %d accumulation years"
+            % (len(grants), accum_years),
+            field="contributions.espp_grant_fmv_schedule_nominal",
+            code="config_invalid")
+    any_lot = False
+    for index, (raw_grant, raw_exercise) in enumerate(zip(grants, exercises)):
+        for field, raw in (("espp_grant_fmv_schedule_nominal", raw_grant),
+                           ("espp_exercise_fmv_schedule_nominal", raw_exercise)):
+            if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                    or not math.isfinite(float(raw)) or float(raw) < 0.0):
+                raise ConfigIncomplete(
+                    "contributions.%s[%d] must be a finite non-negative "
+                    "nominal-dollar amount" % (field, index),
+                    field="contributions." + field, code="config_invalid")
+        grant = float(raw_grant)
+        exercise = float(raw_exercise)
+        if grant > float(ESPP_RULES["annual_grant_fmv_limit"]):
+            raise ConfigIncomplete(
+                "contributions.espp_grant_fmv_schedule_nominal[%d] is %.2f, "
+                "above the section 423 annual grant-date FMV limit %.2f"
+                % (index, grant,
+                   float(ESPP_RULES["annual_grant_fmv_limit"])),
+                field="contributions.espp_grant_fmv_schedule_nominal",
+                code="config_invalid")
+        if (grant == 0.0) != (exercise == 0.0):
+            raise ConfigIncomplete(
+                "ESPP lot %d must state both grant-date and exercise-date FMV "
+                "or zero for both" % index,
+                field="contributions.espp_exercise_fmv_schedule_nominal",
+                code="config_invalid")
+        any_lot = any_lot or grant > 0.0
+    if not any_lot:
+        raise ConfigIncomplete(
+            "contributions.espp_grant_fmv_schedule_nominal has no purchase; "
+            "turn ESPP off instead of enabling an all-zero unanswered plan",
+            field="contributions.espp_grant_fmv_schedule_nominal",
+            code="config_invalid")
+
+    if mode != "qualifying_hold":
+        return
+    sales = block.get("espp_qualifying_sale_value_schedule_nominal")
+    if not isinstance(sales, (list, tuple)) or len(sales) != len(grants):
+        raise ConfigIncomplete(
+            "contributions.espp_qualifying_sale_value_schedule_nominal must "
+            "give one nominal-dollar sale value for every annual lot",
+            field="contributions.espp_qualifying_sale_value_schedule_nominal",
+            code="config_invalid")
+    for index, raw in enumerate(sales):
+        if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                or not math.isfinite(float(raw)) or float(raw) < 0.0):
+            raise ConfigIncomplete(
+                "contributions.espp_qualifying_sale_value_schedule_nominal"
+                "[%d] must be a finite non-negative nominal-dollar amount"
+                % index,
+                field="contributions.espp_qualifying_sale_value_schedule_nominal",
+                code="config_invalid")
+    start_age = int((cfg.get("state") or {}).get("start_age", 30) or 30)
+    last_lot_index = max(index for index, raw in enumerate(grants)
+                         if float(raw) > 0.0)
+    minimum_age = start_age + last_lot_index + 2
+    end_age = start_age + accum_years - 1
+    raw_sale_age = block.get("espp_qualifying_sale_age")
+    if (not isinstance(raw_sale_age, numbers.Integral)
+            or isinstance(raw_sale_age, bool)
+            or not minimum_age <= int(raw_sale_age) <= end_age):
+        raise ConfigIncomplete(
+            "contributions.espp_qualifying_sale_age must be from %d through "
+            "%d: two annual model steps after the last grant/purchase and "
+            "still inside accumulation" % (minimum_age, end_age),
+            field="contributions.espp_qualifying_sale_age",
+            code="config_invalid")
+
+
+def _validate_spouse_variable_income(cfg: dict) -> None:
+    """Validate the spouse's bonus contract before any draw is taken."""
+    hh = cfg.get("household") or {}
+    mode = hh.get("spouse_bonus_mode_pre", "fixed_amount")
+    if mode not in ("fixed_amount", "uniform_pct"):
+        raise ConfigIncomplete(
+            "household.spouse_bonus_mode_pre must be 'fixed_amount' or "
+            "'uniform_pct'. The spouse is modelled as a W-2 earner, so there "
+            "is no self-employed profit factor on their side",
+            field="household.spouse_bonus_mode_pre", code="config_invalid")
+    if mode != "uniform_pct" or not hh.get("enabled"):
+        return
+    lo = hh.get("spouse_bonus_pct_min_pre")
+    hi = hh.get("spouse_bonus_pct_max_pre")
+    for name, raw in (("spouse_bonus_pct_min_pre", lo),
+                      ("spouse_bonus_pct_max_pre", hi)):
+        if (not isinstance(raw, numbers.Real) or isinstance(raw, bool)
+                or not math.isfinite(float(raw)) or float(raw) < 0.0):
+            raise ConfigIncomplete(
+                "household.%s must be a finite non-negative share of the "
+                "spouse's base pay; it comes from their compensation plan, "
+                "not from an industry band this model does not ship" % name,
+                field="household.%s" % name, code="config_invalid")
+    if float(lo) > float(hi):
+        raise ConfigIncomplete(
+            "household.spouse_bonus_pct_min_pre must be at or below "
+            "household.spouse_bonus_pct_max_pre",
+            field="household.spouse_bonus_pct_max_pre", code="config_invalid")
+
+
+def _validate_spouse_promotion(cfg: dict) -> None:
+    """Refuse an enabled spouse promotion before it can take a draw."""
+    block = cfg.get("spouse_promotion") or {}
+    if not block.get("enabled") or not (cfg.get("household") or {}).get("enabled"):
+        return
+
+    def _finite(name: str, *, positive: bool = False,
+                minimum: float | None = None, maximum: float | None = None):
+        raw = block.get(name)
+        ok = (isinstance(raw, numbers.Real) and not isinstance(raw, bool)
+              and math.isfinite(float(raw)))
+        if ok and positive:
+            ok = float(raw) > 0.0
+        if ok and minimum is not None:
+            ok = float(raw) >= minimum
+        if ok and maximum is not None:
+            ok = float(raw) <= maximum
+        if not ok:
+            raise ConfigIncomplete(
+                "spouse_promotion.%s must be a finite %snumber supplied from "
+                "the spouse's own compensation plan; this model ships no "
+                "industry promotion defaults" %
+                (name, "positive " if positive else ""),
+                field="spouse_promotion.%s" % name, code="config_invalid")
+        return float(raw)
+
+    timing_mode = block.get("timing_mode")
+    if timing_mode not in ("fixed", "uniform_int", "never"):
+        raise ConfigIncomplete(
+            "spouse_promotion.timing_mode must be 'fixed', 'uniform_int' or "
+            "'never'", field="spouse_promotion.timing_mode",
+            code="config_invalid")
+    if timing_mode == "never":
+        return
+    if timing_mode == "fixed":
+        _finite("timing_fixed", minimum=1.0)
+    else:
+        lo = _finite("timing_min", minimum=1.0)
+        hi = _finite("timing_max", minimum=1.0)
+        if int(lo) != lo or int(hi) != hi:
+            raise ConfigIncomplete(
+                "spouse_promotion timing bounds must be whole accumulation "
+                "years", field="spouse_promotion.timing_min",
+                code="config_invalid")
+        if lo > hi:
+            raise ConfigIncomplete(
+                "spouse_promotion.timing_min must be at or below "
+                "spouse_promotion.timing_max",
+                field="spouse_promotion.timing_max", code="config_invalid")
+    _finite("base_salary_post", positive=True)
+    _finite("base_growth_post", minimum=-0.99)
+    bonus_mode = block.get("bonus_mode")
+    if bonus_mode not in ("fixed", "uniform"):
+        raise ConfigIncomplete(
+            "spouse_promotion.bonus_mode must be 'fixed' or 'uniform'",
+            field="spouse_promotion.bonus_mode", code="config_invalid")
+    if bonus_mode == "fixed":
+        _finite("bonus_pct_fixed", minimum=0.0)
+    else:
+        lo = _finite("bonus_pct_min", minimum=0.0)
+        hi = _finite("bonus_pct_max", minimum=0.0)
+        if lo > hi:
+            raise ConfigIncomplete(
+                "spouse_promotion.bonus_pct_min must be at or below "
+                "spouse_promotion.bonus_pct_max",
+                field="spouse_promotion.bonus_pct_max", code="config_invalid")
+    if (cfg.get("contributions") or {}).get("tax_model") == "flat":
+        _finite("marginal_tax_post", minimum=0.0, maximum=0.99)
+
+
+def _validate_second_promotions(cfg: dict) -> None:
+    """Validate U36's two absolute-year second-promotion contracts."""
+    pairs = (
+        ("second_promotion", "promotion", False),
+        ("spouse_second_promotion", "spouse_promotion", True),
+    )
+    for block_name, first_name, spouse_side in pairs:
+        block = cfg.get(block_name) or {}
+        if (not block.get("enabled") or
+                (spouse_side and not (cfg.get("household") or {}).get("enabled"))):
+            continue
+
+        first = cfg.get(first_name) or (
+            {} if spouse_side else dataclasses.asdict(PromotionParams()))
+        if not first.get("enabled") or first.get("timing_mode") == "never":
+            raise ConfigIncomplete(
+                "%s requires an enabled first promotion whose timing is not "
+                "'never'" % block_name,
+                field="%s.enabled" % block_name, code="config_invalid")
+
+        def _finite(name: str, *, positive: bool = False,
+                    minimum: float | None = None,
+                    maximum: float | None = None):
+            raw = block.get(name)
+            ok = (isinstance(raw, numbers.Real) and not isinstance(raw, bool)
+                  and math.isfinite(float(raw)))
+            if ok and positive:
+                ok = float(raw) > 0.0
+            if ok and minimum is not None:
+                ok = float(raw) >= minimum
+            if ok and maximum is not None:
+                ok = float(raw) <= maximum
+            if not ok:
+                raise ConfigIncomplete(
+                    "%s.%s must be a finite %snumber supplied from the "
+                    "earner's own compensation plan; this model ships no "
+                    "industry promotion defaults" %
+                    (block_name, name, "positive " if positive else ""),
+                    field="%s.%s" % (block_name, name),
+                    code="config_invalid")
+            return float(raw)
+
+        mode = block.get("timing_mode")
+        if mode not in ("fixed", "uniform_int", "never"):
+            raise ConfigIncomplete(
+                "%s.timing_mode must be 'fixed', 'uniform_int' or 'never'" %
+                block_name, field="%s.timing_mode" % block_name,
+                code="config_invalid")
+        if mode == "never":
+            continue
+        if mode == "fixed":
+            second_earliest = _finite("timing_fixed", minimum=1.0)
+            if int(second_earliest) != second_earliest:
+                raise ConfigIncomplete(
+                    "%s.timing_fixed must be a whole accumulation year" %
+                    block_name, field="%s.timing_fixed" % block_name,
+                    code="config_invalid")
+        else:
+            second_earliest = _finite("timing_min", minimum=1.0)
+            second_latest = _finite("timing_max", minimum=1.0)
+            if (int(second_earliest) != second_earliest or
+                    int(second_latest) != second_latest):
+                raise ConfigIncomplete(
+                    "%s timing bounds must be whole accumulation years" %
+                    block_name, field="%s.timing_min" % block_name,
+                    code="config_invalid")
+            if second_earliest > second_latest:
+                raise ConfigIncomplete(
+                    "%s.timing_min must be at or below %s.timing_max" %
+                    (block_name, block_name),
+                    field="%s.timing_max" % block_name,
+                    code="config_invalid")
+
+        first_mode = first.get("timing_mode")
+        if first_mode == "fixed":
+            first_latest = first.get("timing_fixed")
+        elif first_mode == "uniform_int":
+            first_latest = first.get("timing_max")
+        else:
+            raise ConfigIncomplete(
+                "%s requires the first promotion timing to be fixed or an "
+                "integer-year window" % block_name,
+                field="%s.enabled" % block_name, code="config_invalid")
+        if (not isinstance(first_latest, numbers.Real)
+                or isinstance(first_latest, bool)
+                or not math.isfinite(float(first_latest))
+                or second_earliest <= float(first_latest)):
+            raise ConfigIncomplete(
+                "%s earliest possible year must be strictly later than the "
+                "first promotion's latest possible year" % block_name,
+                field=("%s.timing_fixed" % block_name if mode == "fixed"
+                       else "%s.timing_min" % block_name),
+                code="config_invalid")
+
+        _finite("base_salary_post", positive=True)
+        _finite("base_growth_post", minimum=-0.99)
+        bonus_mode = block.get("bonus_mode")
+        if bonus_mode not in ("fixed", "uniform"):
+            raise ConfigIncomplete(
+                "%s.bonus_mode must be 'fixed' or 'uniform'" % block_name,
+                field="%s.bonus_mode" % block_name, code="config_invalid")
+        if bonus_mode == "fixed":
+            _finite("bonus_pct_fixed", minimum=0.0)
+        else:
+            lo = _finite("bonus_pct_min", minimum=0.0)
+            hi = _finite("bonus_pct_max", minimum=0.0)
+            if lo > hi:
+                raise ConfigIncomplete(
+                    "%s.bonus_pct_min must be at or below %s.bonus_pct_max" %
+                    (block_name, block_name),
+                    field="%s.bonus_pct_max" % block_name,
+                    code="config_invalid")
+        if (cfg.get("contributions") or {}).get("tax_model") == "flat":
+            _finite("marginal_tax_post", minimum=0.0, maximum=0.99)
+
+
+def _validate_accumulation_state_rate(cfg: dict) -> None:
+    """Refuse a state rate that would make deferring a dollar PROFITABLE.
+
+    Now that the working years pay state tax, the affordability solve prices a
+    deferred dollar at `1 - federal_rate - state_rate`. Above
+    `1 - top_federal_rate` that term reaches zero and then goes negative, and
+    the solve stops meaning anything -- a plan would be told it can shelter
+    unbounded amounts. The bound is derived from the shipped bracket table
+    rather than picked, and it can genuinely fire: the control is a percent
+    field with no maximum, so a user can type 95.
+    """
+    block = cfg.get("tax_true") or {}
+    if not block.get("enabled"):
+        return
+    rate = block.get("state_rate", 0.0)
+    if isinstance(rate, bool) or not isinstance(rate, numbers.Real) \
+            or not math.isfinite(float(rate)):
+        raise ConfigIncomplete("tax_true.state_rate must be a number",
+                               field="tax_true.state_rate",
+                               code="config_invalid")
+    ceiling = 1.0 - max(r for _, r in TRUE_ORD_SINGLE)
+    if not (0.0 <= float(rate) < ceiling):
+        raise ConfigIncomplete(
+            "tax_true.state_rate must be at least 0 and below %.0f%% -- above "
+            "that, a dollar put into a 401(k) would come back as more cash "
+            "than it cost, which no tax system does"
+            % (ceiling * 100.0),
+            field="tax_true.state_rate", code="config_invalid")
+
+
+def _validate_tax_model(cfg: dict) -> None:
+    """Refuse a tax posture the engine does not have.
+
+    Named refusal for the same reason as the savings mode: a typo silently
+    falling back to the schedule would look identical, from outside, to a
+    plan that asked for the schedule.
+    """
+    model = (cfg.get("contributions") or {}).get("tax_model", "schedule")
+    if model not in ("schedule", "flat"):
+        raise ConfigIncomplete(
+            "contributions.tax_model must be 'schedule' (2026 federal "
+            "brackets plus FICA, rate follows income) or 'flat' (one rate "
+            "you state yourself)",
+            field="contributions.tax_model", code="config_invalid")
+
+
+def _validate_savings_mode(cfg: dict) -> None:
+    """Refuse a savings description the waterfall cannot honour.
+
+    Both refusals name the field, because a plan that quietly ignored a
+    savings rate the user typed would be indistinguishable from one that
+    honoured it -- the shape this repo files under "a control the adapter
+    drops looks identical from outside".
+    """
+    block = cfg.get("contributions") or {}
+    mode = block.get("savings_mode", "residual")
+    if mode not in ("residual", "savings_rate"):
+        raise ConfigIncomplete(
+            "contributions.savings_mode must be 'residual' (you state your "
+            "spending) or 'savings_rate' (you state what you save)",
+            field="contributions.savings_mode", code="config_invalid")
+    if mode != "savings_rate":
+        return
+    rate = block.get("savings_rate")
+    if isinstance(rate, bool) or not isinstance(rate, numbers.Real) \
+            or not math.isfinite(float(rate)):
+        raise ConfigIncomplete(
+            "contributions.savings_rate must be a number",
+            field="contributions.savings_rate", code="config_invalid")
+    if not 0.0 <= float(rate) <= 1.0:
+        raise ConfigIncomplete(
+            "contributions.savings_rate is the share of gross pay you save, "
+            "so it must be between 0 and 1",
+            field="contributions.savings_rate", code="config_invalid")
+
+
+def _student_debt_schedule(cfg: dict):
+    raw = cfg.get("student_debt") or {}
+    if not isinstance(raw, dict):
+        raise ConfigIncomplete(
+            "student_debt must be a settings object",
+            field="student_debt", code="config_invalid")
+    state = cfg.get("state") or {}
+    try:
+        horizon = int(state.get("accum_years", State().accum_years)) + int(
+            state.get("retire_horizon", State().retire_horizon))
+        schedule = STUDENT_DEBT.compile_schedule(raw, horizon)
+    except STUDENT_DEBT.StudentDebtError as exc:
+        raise ConfigIncomplete(
+            str(exc), field=exc.field, code="config_invalid") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ConfigIncomplete(
+            "student debt needs a valid whole-year model horizon",
+            field="state", code="config_invalid") from exc
+    if schedule is None:
+        return None
+    contrib = cfg.get("contributions") or {}
+    if str(contrib.get("savings_mode", "residual")) == "savings_rate":
+        return schedule
+    spending = contrib.get("annual_spending_now")
+    if spending is None:
+        spending = state.get("expenses_y0", State().expenses_y0)
+    if (isinstance(spending, bool)
+            or not isinstance(spending, numbers.Real)
+            or not math.isfinite(float(spending))):
+        # The savings-mode validator owns the general field shape.  Naming it
+        # here still matters for direct callers that reach this check first.
+        raise ConfigIncomplete(
+            "contributions.annual_spending_now must be a finite number",
+            field="contributions.annual_spending_now", code="config_invalid")
+    embedded = schedule.monthly_payment_nominal * 12.0
+    if float(spending) < embedded:
+        raise ConfigIncomplete(
+            "current annual spending must include at least twelve student "
+            "loan payments, because this plan says that payment is already "
+            "inside the spending figure",
+            field="contributions.annual_spending_now", code="config_invalid")
+    return schedule
+
+
+def _validate_student_debt(cfg: dict) -> None:
+    """Refuse a loan that would turn the confirmed expense contract negative."""
+    _student_debt_schedule(cfg)
+
+
+def _validate_lifestyle_creep(cfg: dict) -> None:
+    """Refuse ambiguous event windows and invalid distributions pre-draw."""
+    raw = cfg.get("lifestyle_creep") or {}
+    if not isinstance(raw, dict):
+        raise ConfigIncomplete(
+            "lifestyle_creep must be a settings object",
+            field="lifestyle_creep", code="config_invalid")
+    mode = raw.get("mode", "off")
+    if mode not in ("off", "fixed", "clipnorm"):
+        raise ConfigIncomplete(
+            "lifestyle_creep.mode must be 'off', 'fixed', or 'clipnorm'",
+            field="lifestyle_creep.mode", code="config_invalid")
+    if mode == "off":
+        return
+
+    def number(name: str) -> float:
+        value = raw.get(name, getattr(LifestyleCreepParams(), name))
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value))):
+            raise ConfigIncomplete(
+                "lifestyle_creep.%s must be a finite number" % name,
+                field="lifestyle_creep.%s" % name, code="config_invalid")
+        return float(value)
+
+    magnitude, sd, cap = (number("magnitude"), number("sd"), number("cap"))
+    if magnitude < 0.0 or sd < 0.0 or cap < 0.0:
+        raise ConfigIncomplete(
+            "lifestyle creep magnitude, sd, and cap cannot be negative",
+            field="lifestyle_creep", code="config_invalid")
+    if mode == "fixed" and magnitude > cap:
+        raise ConfigIncomplete(
+            "fixed lifestyle creep magnitude cannot exceed its cap",
+            field="lifestyle_creep.magnitude", code="config_invalid")
+    lo, hi = raw.get("year_lo", 2), raw.get("year_hi", 5)
+    if (isinstance(lo, bool) or not isinstance(lo, int)
+            or isinstance(hi, bool) or not isinstance(hi, int)):
+        raise ConfigIncomplete(
+            "lifestyle creep event years must be whole years",
+            field="lifestyle_creep.year_lo", code="config_invalid")
+    horizon = int((cfg.get("state") or {}).get(
+        "accum_years", State().accum_years))
+    if lo < 2 or hi < lo or hi > horizon:
+        raise ConfigIncomplete(
+            "lifestyle creep event window must run from year 2 through the "
+            "end of accumulation",
+            field="lifestyle_creep.year_lo", code="config_invalid")
+
+
+def _validate_disability(cfg: dict) -> None:
+    """Refuse an ambiguous SSDI stress before its first incidence draw."""
+    raw = cfg.get("disability") or {}
+    if not isinstance(raw, dict):
+        raise ConfigIncomplete(
+            "disability must be a settings object",
+            field="disability", code="config_invalid")
+    if not raw.get("enabled"):
+        return
+    sex = (cfg.get("mortality") or {}).get("sex")
+    if sex not in ("male", "female"):
+        raise ConfigIncomplete(
+            "disability incidence needs mortality.sex to be 'male' or "
+            "'female'; SSA publishes separate award rates for those rows",
+            field="mortality.sex", code="config_invalid")
+    for name in ("ssdi_monthly_real", "ltd_monthly_real",
+                 "medical_premium_annual_real"):
+        value = raw.get(name, getattr(DisabilityParams(), name))
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value)) or float(value) < 0.0):
+            raise ConfigIncomplete(
+                "disability.%s must be a finite non-negative number" % name,
+                field="disability.%s" % name, code="config_invalid")
+
+
+def _validate_career_break(cfg: dict) -> None:
+    """Refuse a career break the accumulation loop cannot honour.
+
+    Every one of these is refused rather than clamped, because each of them
+    is a plan the user could actually mean and the engine would answer a
+    DIFFERENT question than the one asked. A break that runs past the last
+    working year is the sharp case: the loop would simply stop, the tail of
+    the break would evaporate, and the run would succeed while modelling a
+    shorter break than the one that was typed -- the silent-discard shape this
+    repo has already paid for with `life_events`.
+
+    Off => nothing here fires, so an untouched plan cannot be refused by a
+    module it never asked for.
+    """
+    brk = cfg.get("career_break") or {}
+    if not isinstance(brk, dict) or not brk.get("enabled"):
+        return
+
+    def _num(key):
+        v = brk.get(key)
+        if isinstance(v, bool) or not isinstance(v, numbers.Real):
+            raise ConfigIncomplete(
+                f"career_break.{key} must be a number",
+                field=f"career_break.{key}", code="config_invalid")
+        v = float(v)
+        if not math.isfinite(v):
+            raise ConfigIncomplete(
+                f"career_break.{key} must be finite",
+                field=f"career_break.{key}", code="config_invalid")
+        return v
+
+    years = _num("years")
+    if years != int(years) or int(years) < 1:
+        raise ConfigIncomplete(
+            "career_break.years must be a whole number of years, at least 1",
+            field="career_break.years", code="config_invalid")
+    years = int(years)
+
+    fraction = _num("income_fraction")
+    if not 0.0 <= fraction <= 1.0:
+        raise ConfigIncomplete(
+            "career_break.income_fraction is the share of your usual pay you "
+            "still earn while away, so it must be between 0 and 1",
+            field="career_break.income_fraction", code="config_invalid")
+
+    factor = _num("return_wage_factor")
+    if not 0.0 < factor <= 1.0:
+        # Above 1.0 is refused because the control is a DISCOUNT. Accepting a
+        # raise here would quietly turn a field the page labels "return-to-work
+        # pay cut" into a general wage multiplier, and the two need different
+        # words next to them before either is offered.
+        raise ConfigIncomplete(
+            "career_break.return_wage_factor is the share of your would-be pay "
+            "you return on, so it must be above 0 and at most 1",
+            field="career_break.return_wage_factor", code="config_invalid")
+
+    premium_raw = brk.get(
+        "medical_premium_annual_real",
+        CareerBreakParams().medical_premium_annual_real)
+    if (isinstance(premium_raw, bool)
+            or not isinstance(premium_raw, numbers.Real)
+            or not math.isfinite(float(premium_raw))):
+        raise ConfigIncomplete(
+            "career_break.medical_premium_annual_real must be a finite number",
+            field="career_break.medical_premium_annual_real",
+            code="config_invalid")
+    premium = float(premium_raw)
+    if premium < 0.0:
+        raise ConfigIncomplete(
+            "career_break.medical_premium_annual_real must be a finite "
+            "non-negative annual household amount",
+            field="career_break.medical_premium_annual_real",
+            code="config_invalid")
+
+    st = cfg.get("state") or {}
+    start_age = _num("start_age")
+    if start_age != int(start_age):
+        raise ConfigIncomplete(
+            "career_break.start_age must be a whole age",
+            field="career_break.start_age", code="config_invalid")
+    start_age = int(start_age)
+    plan_start = int(st.get("start_age", 27) or 27)
+    accum_years = int(st.get("accum_years", 25) or 25)
+
+    first_year = start_age - plan_start + 1
+    if first_year < 1:
+        raise ConfigIncomplete(
+            f"career_break.start_age {start_age} is before this plan begins "
+            f"at age {plan_start}",
+            field="career_break.start_age", code="config_invalid")
+    last_year = first_year + years - 1
+    if last_year > accum_years:
+        raise ConfigIncomplete(
+            f"a {years}-year break from age {start_age} runs to age "
+            f"{start_age + years - 1}, past the last working year "
+            f"(age {plan_start + accum_years - 1}); shorten it or start it "
+            f"earlier",
+            field="career_break.years", code="config_invalid")
+
+
+def _validate_layoff(cfg: dict) -> None:
+    """Refuse a gap or health-cost input the annual model would truncate."""
+    block = cfg.get("layoff") or {}
+    if not isinstance(block, dict) or not block.get("enabled"):
+        return
+
+    def number(name: str) -> float:
+        value = block.get(name, getattr(LayoffParams(), name))
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value))):
+            raise ConfigIncomplete(
+                "layoff.%s must be a finite number" % name,
+                field="layoff.%s" % name, code="config_invalid")
+        return float(value)
+
+    premium = number("medical_premium_monthly_real")
+    gap = number("gap_months")
+    decay = number("gap_months_per_year_of_age")
+    cap = number("max_gap_months")
+    if premium < 0.0:
+        raise ConfigIncomplete(
+            "layoff.medical_premium_monthly_real must be a finite "
+            "non-negative monthly household amount",
+            field="layoff.medical_premium_monthly_real",
+            code="config_invalid")
+    if not 0.0 <= gap <= 12.0:
+        raise ConfigIncomplete(
+            "layoff.gap_months must be between 0 and 12",
+            field="layoff.gap_months", code="config_invalid")
+    if decay < 0.0:
+        raise ConfigIncomplete(
+            "layoff.gap_months_per_year_of_age cannot be negative",
+            field="layoff.gap_months_per_year_of_age", code="config_invalid")
+    if not 0.0 <= cap <= 12.0:
+        raise ConfigIncomplete(
+            "layoff.max_gap_months must be between 0 and 12",
+            field="layoff.max_gap_months", code="config_invalid")
+    if gap > cap:
+        raise ConfigIncomplete(
+            "layoff.gap_months cannot exceed layoff.max_gap_months",
+            field="layoff.gap_months", code="config_invalid")
 
 
 def _validate_medical_premium_anchor(cfg: dict) -> None:
@@ -467,6 +1756,12 @@ _BASELINE_STACK = dict(
     roth_ira=45_000,
     hsa=15_000,
     taxable=50_000,
+    # OPEN_ITEMS E37. Zero, and PRESENT: an absent key and a stated zero are
+    # different things, and this is the leaf that makes a governmental 457(b)
+    # something a user can type. Measured: adding it at zero moves no shipped
+    # digest, because a zero balance adds nothing to `total` and the
+    # withdrawal skips an empty account.
+    gov_457b=0,
 )
 
 
@@ -503,8 +1798,128 @@ def default_config() -> dict:
         "state": {**_gd(State), "start_age": 30, "expenses_y0": 42_000},
         "initial": dict(_BASELINE_STACK),
         "contributions": {**_gd(V8ContributionParams),
-                          "base_salary_pre": 125_000, "ot_income_pre": 20_000},
+                          "base_salary_pre": 125_000, "ot_income_pre": 20_000,
+                          # U35 / A1. The engine's one fact is the schedule
+                          # itself (an empty one means no vest), so this switch
+                          # lives only here: it is what the page toggles and
+                          # what validation keys on, and it is deliberately not
+                          # a second copy of "is there a vest" inside the
+                          # engine. JSON carries a list, not the tuple default.
+                          "rsu_vest_enabled": False,
+                          "rsu_vest_schedule_real": [],
+                          # U38=C. Annual same-year §423 offering; all dollar
+                          # facts are nominal because the statutory $25,000
+                          # ceiling and tax basis are nominal too.
+                          "espp_enabled": False,
+                          "espp_grant_fmv_schedule_nominal": [],
+                          "espp_exercise_fmv_schedule_nominal": [],
+                          "espp_qualifying_sale_age": None,
+                          "espp_qualifying_sale_value_schedule_nominal": [],
+                          "catchup_403b_15yr_schedule_nominal": [],
+                          "childcare_schedule_real": [],
+                          "commuting_schedule_real": [],
+                          # U35 / A2a. Concentration with no shipped parameter
+                          # of any kind: the user says what they kept, when
+                          # they sold, and what it was worth. No share price
+                          # process lives here -- that is A2b, and it is the
+                          # only place a volatility is ever asked for.
+                          "rsu_retained_enabled": False,
+                          "rsu_retained_schedule_real": [],
+                          "rsu_retained_sale_age": 60,
+                          "rsu_retained_value_multiple": 1.0,
+                          # U35 / A2b: the optional half. Undefaulted on
+                          # purpose -- no index ships a single stock's vol.
+                          "rsu_retained_sigma_enabled": False,
+                          "rsu_retained_sigma_real": 0.0,
+                          "rsu_retained_drift_real": 0.0},
         "promotion": _gd(PromotionParams),
+        # U35 / B5. Dormant and intentionally blank: every active number is a
+        # fact from the spouse's own compensation plan. Copying the primary's
+        # one-person $170k/2-5 year defaults would invent a second career.
+        "spouse_promotion": {
+            "enabled": False,
+            "timing_mode": "fixed",
+            "timing_min": None,
+            "timing_max": None,
+            "timing_fixed": None,
+            "base_salary_post": None,
+            "base_growth_post": None,
+            "bonus_mode": "fixed",
+            "bonus_pct_min": None,
+            "bonus_pct_max": None,
+            "bonus_pct_fixed": None,
+            "bonus_resampled_each_year": True,
+            "marginal_tax_post": None,
+        },
+        # U36=C+A. A second promotion is always opt-in and blank. The primary
+        # intentionally does NOT inherit the first promotion's shipped career
+        # assumptions, and the spouse does not inherit anybody else's facts.
+        "second_promotion": {
+            "enabled": False,
+            "timing_mode": "fixed",
+            "timing_min": None,
+            "timing_max": None,
+            "timing_fixed": None,
+            "base_salary_post": None,
+            "base_growth_post": None,
+            "bonus_mode": "fixed",
+            "bonus_pct_min": None,
+            "bonus_pct_max": None,
+            "bonus_pct_fixed": None,
+            "bonus_resampled_each_year": True,
+            "marginal_tax_post": None,
+        },
+        "spouse_second_promotion": {
+            "enabled": False,
+            "timing_mode": "fixed",
+            "timing_min": None,
+            "timing_max": None,
+            "timing_fixed": None,
+            "base_salary_post": None,
+            "base_growth_post": None,
+            "bonus_mode": "fixed",
+            "bonus_pct_min": None,
+            "bonus_pct_max": None,
+            "bonus_pct_fixed": None,
+            "bonus_resampled_each_year": True,
+            "marginal_tax_post": None,
+        },
+        # U35 / B. The spouse's own planned break. Same five wage fields as
+        # `career_break` and deliberately NOT its medical premium: the
+        # accumulation-phase health cost is already a household figure the
+        # user prices once (Phase 6, U33), and a second spouse-side premium
+        # would be two controls for one household cost.
+        "spouse_career_break": {"enabled": False, "start_age": 35, "years": 1,
+                                "income_fraction": 0.0,
+                                "return_wage_factor": 1.0},
+        # U35 / B. The spouse's own human capital: same three fields as the
+        # primary's, drawn on a stream of its own.
+        "spouse_human_capital": _gd(HumanCapitalParams,
+                                    drop=("seed_offset",)),
+        # U35 / B. The spouse's own layoff risk: the primary's nine wage
+        # fields, and deliberately NOT its medical premium -- accumulation
+        # health is one household figure, priced once (Phase 6 / U33).
+        "spouse_layoff": {k: v for k, v in _gd(
+            LayoffParams, drop=("rng", "seed_offset")).items()
+            if k != "medical_premium_monthly_real"},
+        # Roadmap 9.0 (B10). A PLANNED career break -- the user's own decision
+        # to step back for a fixed stretch -- as opposed to `layoff`, which is
+        # a random event drawn inside a path. The two are deliberately not one
+        # block: "what if I take two years off" and "what if I am let go" are
+        # different questions and one control could not answer either.
+        # Off by default => not one line of the accumulation loop changes.
+        "career_break": _gd(CareerBreakParams),
+        # Roadmap 10.0 Phase 4.  All three numbers are user facts and the
+        # neutral zeros do nothing while disabled.  No market average, legal
+        # forgiveness rule, or "typical" payment ships in this block.
+        "student_debt": _gd(STUDENT_DEBT.StudentDebtConfig),
+        # Roadmap 10.0 Phase 5. Defaults preserve the superseded v2 contract,
+        # but the module remains off until the user chooses a mode.
+        "lifestyle_creep": _gd(LifestyleCreepParams, drop=("rng",)),
+        # Roadmap 10.0 Phase 6, user choice A. SSA award incidence with all
+        # cash amounts supplied by the user; disabled means no draw and no
+        # change to saved plans or shipped defaults.
+        "disability": _gd(DisabilityParams, drop=("rng",)),
         # returns 2.0 (E4): model "iid" (default, the v7 sampler untouched) |
         # "markov" (annual regime transitions) | "blocks" (1928-2024
         # historical block bootstrap). Extra knobs are no-ops while "iid".
@@ -529,7 +1944,8 @@ def default_config() -> dict:
         "medical": _gd(MedicalParams),
         "aca": _gd(ACAParams),
         "mortality": {**_gd(MortalityParams), "sex": "male"},
-        "household": _gd(HouseholdParams),
+        "household": {**_gd(HouseholdParams),
+                      "spouse_catchup_403b_15yr_schedule_nominal": []},
         "roth_ladder": _gd(RothLadderParams),
         "social_security": _gd(SocialSecurityParams),
         "ftc": _gd(FTCParams),
@@ -596,6 +2012,10 @@ def default_config() -> dict:
         # behavior without inventing confirmed joint ownership.
         "income_streams": {
             "pension_enabled": False, "pension_annual_real": 0,
+            "pension_amount_mode": "manual",
+            "pension_db_service_years": 0,
+            "pension_db_accrual_rate": 0,
+            "pension_db_final_average_salary_real": 0,
             "pension_start_age": 65, "pension_cola": True,
             "pension_owner": "unspecified",
             "rental_enabled": False, "rental_annual_net_real": 0,
@@ -624,7 +2044,8 @@ def default_config() -> dict:
                    # Roadmap 6.0 (A13): zero keeps the flat gap every
                    # existing plan computed.
                    "gap_months_per_year_of_age": 0.0,
-                   "decay_from_age": 45, "max_gap_months": 12.0},
+                   "decay_from_age": 45, "max_gap_months": 12.0,
+                   "medical_premium_monthly_real": 0.0},
         "milestones": [1_000_000, 3_000_000],
         # I4 forecast-vs-actual check-ins: [{date, age, actual_total_nominal}].
         # Pure plan-file data — the engine NEVER reads this (guarded by a
@@ -637,14 +2058,20 @@ def default_config() -> dict:
 # equal the real calibration baseline. Compares against the dataclass defaults
 # dynamically so no real value is embedded here. Fails loudly at import.
 _dc = default_config()
-assert all(_dc["initial"][k] != getattr(INITIAL_STACK_ACTUAL, k)
-           for k in _dc["initial"]), \
+# Only the buckets the real baseline actually HOLDS. Since Roadmap 7.0 an
+# `AccountStack` refuses an account it was never given, so `getattr` here
+# would raise on the 457(b) leaf rather than compare -- and comparing it
+# would be meaningless anyway: an account the real baseline never had cannot
+# be leaked by a default that matches it at zero.
+_actual_stack = INITIAL_STACK_ACTUAL.balances()
+assert all(_dc["initial"][k] != _actual_stack[k]
+           for k in _dc["initial"] if k in _actual_stack), \
     "de-identification regressed: served portfolio equals the real baseline"
 assert _dc["state"]["expenses_y0"] != _gd(State)["expenses_y0"], \
     "de-identification regressed: real expenses_y0 in served defaults"
 assert _dc["contributions"]["base_salary_pre"] != _gd(V8ContributionParams)["base_salary_pre"], \
     "de-identification regressed: real base salary in served defaults"
-del _dc
+del _dc, _actual_stack
 
 
 def _mk(cls, d: dict, enums: Optional[dict] = None):
@@ -669,6 +2096,21 @@ def _mk(cls, d: dict, enums: Optional[dict] = None):
         valid = {name for name, param in signature.parameters.items()
                  if param.kind in (param.POSITIONAL_OR_KEYWORD,
                                    param.KEYWORD_ONLY)}
+        # OPEN_ITEMS E37. `AccountStack` takes its extra accounts through
+        # `**extra`, which is VAR_KEYWORD -- the kinds above exclude it, so
+        # `initial.gov_457b = 100000` was dropped WITHOUT A WORD. Measured
+        # before the fix: `total` came back 10 on a stack that had been handed
+        # 100,010. That is the E34 failure a third time, at the door rather
+        # than inside the engine.
+        #
+        # Only fields the SCHEMA declares are let through. An undeclared key
+        # is still dropped, because this helper's job is to ignore config a
+        # class does not want (`relocation.enabled` and friends) -- what it
+        # must not do is ignore an account somebody actually has.
+        if cls is AccountStack:
+            import account_schema as _schema
+            valid |= {account.field for account in _schema.US_ACCOUNT_TYPES
+                      if account.field}
     return cls(**{k: v for k, v in d.items() if k in valid})
 
 
@@ -832,6 +2274,20 @@ def _after_liquidity_discount(amount: float, other_assets: dict) -> float:
             field="other_assets.sale_liquidity_discount",
             code="config_invalid")
     return amount * (1.0 - discount)
+
+
+def _mk_retained_stock(block, state_block):
+    """The optional drawn path for kept shares; dormant unless asked for."""
+    if not (block.get("rsu_retained_enabled")
+            and block.get("rsu_retained_sigma_enabled")):
+        return RetainedStockProcess()
+    kept = [float(v) for v in (block.get("rsu_retained_schedule_real") or ())]
+    return RetainedStockProcess(
+        enabled=True,
+        sigma_real=float(block.get("rsu_retained_sigma_real", 0.0) or 0.0),
+        drift_real=float(block.get("rsu_retained_drift_real", 0.0) or 0.0),
+        sale_age=int(block["rsu_retained_sale_age"]),
+        kept_total_real=sum(kept))
 
 
 def _mk_house_price(block, cfg: dict):
@@ -1021,7 +2477,12 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     init = _mk(AccountStack, g("initial"))
     _hh = g("household")
     if _hh.get("enabled"):
-        init = AccountStack(
+        # `replace` rather than a fresh construction: a spouse merge that
+        # names four fields drops any other account the stack holds, and the
+        # household path is exactly where a couple's balances get bigger, not
+        # smaller. The four spouse inputs stay four because that is what the
+        # config offers; the difference is that everything ELSE survives.
+        init = init.replace(
             pretax_401k=init.pretax_401k + float(_hh.get("spouse_initial_pretax", 0) or 0),
             roth_ira=init.roth_ira + float(_hh.get("spouse_initial_roth", 0) or 0),
             hsa=init.hsa + float(_hh.get("spouse_initial_hsa", 0) or 0),
@@ -1100,6 +2561,32 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     if oa.get("downsize_enabled") and _down > 0:
         events.append((int(oa.get("sell_home_age", 65)), _down))
 
+    # U35 / A2a. Keeping vested shares instead of selling them is compiled
+    # here rather than modelled as a fifth account, because the cost of the
+    # decision is already expressible in this channel: the money LEAVES the
+    # diversified stack in the year it is kept (so it stops compounding at the
+    # portfolio's return, and stops being available), and comes back at the
+    # sale age worth whatever the user says it was worth. That difference IS
+    # the concentration. No share price process and no volatility is involved
+    # -- this half deliberately asks for no parameter nobody can source.
+    _contrib_block = g("contributions")
+    if _contrib_block.get("rsu_retained_enabled"):
+        _kept = [float(v) for v in
+                 (_contrib_block.get("rsu_retained_schedule_real") or ())]
+        _start_age = int((g("state")).get("start_age", 30) or 30)
+        for _index, _amount in enumerate(_kept):
+            if _amount:
+                events.append((_start_age + _index, _amount))
+        # The sale is compiled here as a fixed multiple UNLESS the drawn path
+        # is on, in which case the engine emits it per path and this one would
+        # be a second sale of the same shares. The house paid 24% of median
+        # terminal wealth to learn this; it is not re-learned here.
+        _pot = sum(_kept) * float(
+            _contrib_block.get("rsu_retained_value_multiple", 1.0))
+        if _pot and not _contrib_block.get("rsu_retained_sigma_enabled"):
+            events.append(
+                (int(_contrib_block["rsu_retained_sale_age"]), -_pot))
+
     # Structured annual income: today's-dollar, after-tax spendable cash.
     # Ages stay on the primary user's timeline. Disabled streams do not validate
     # dormant owner data and compile to no runtime object (OFF-path identity).
@@ -1128,7 +2615,28 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     pension_enabled = bool(ist.get("pension_enabled"))
     if pension_enabled:
         pension_owner = _owner("pension", True)
-        pension_amount = _enabled_amount("pension_annual_real")
+        pension_mode = str(ist.get("pension_amount_mode", "manual") or "manual")
+        if pension_mode not in ("manual", "traditional_db"):
+            raise ValueError(
+                "income_streams.pension_amount_mode must be manual or traditional_db")
+        if pension_mode == "traditional_db":
+            _db_values = {}
+            for _field in ("pension_db_service_years",
+                           "pension_db_accrual_rate",
+                           "pension_db_final_average_salary_real"):
+                _value = _enabled_amount(_field)
+                if _value < 0:
+                    raise ValueError(f"income_streams.{_field} must be non-negative")
+                _db_values[_field] = _value
+            if _db_values["pension_db_accrual_rate"] > 1.0:
+                raise ValueError(
+                    "income_streams.pension_db_accrual_rate must be at most 100%")
+            pension_amount = (
+                _db_values["pension_db_service_years"]
+                * _db_values["pension_db_accrual_rate"]
+                * _db_values["pension_db_final_average_salary_real"])
+        else:
+            pension_amount = _enabled_amount("pension_annual_real")
         if pension_amount > 0:
             structured_income.append(IncomeStreamSpec(
                 kind="pension",
@@ -1232,8 +2740,30 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     # realized-CPI mortgage before generic funding/shortfall handling. Rent and
     # 100%-down buy mode have no mortgage spec and retain static carrying rows.
     mortgage_payload = HOUSING.compile_housing_mortgage(cfg)
-    events.extend(HOUSING.compile_housing_events(
-        cfg, include_mortgage=False, include_carry=mortgage_payload is None))
+    _state_for_housing = g("state")
+    _accum_end_age = (int(_state_for_housing.get(
+        "start_age", State().start_age)) + int(_state_for_housing.get(
+            "accum_years", State().accum_years)))
+    _static_housing_events = HOUSING.compile_housing_events(
+        cfg, include_mortgage=False, include_carry=mortgage_payload is None)
+    events.extend((age, amount) for age, amount in _static_housing_events
+                  if int(age) > _accum_end_age)
+    if mortgage_payload is not None:
+        # The engine resolves mortgage/carry against each realized CPI path.
+        # Cancel the deterministic amount already reserved in the working
+        # waterfall, so the event channel carries actual minus reserved only.
+        _full = {}
+        _base = {}
+        for age, amount in HOUSING.compile_housing_events(
+                cfg, include_mortgage=True, include_carry=True):
+            _full[int(age)] = _full.get(int(age), 0.0) + float(amount)
+        for age, amount in _static_housing_events:
+            _base[int(age)] = _base.get(int(age), 0.0) + float(amount)
+        events.extend(
+            (age, -(_full.get(age, 0.0) - _base.get(age, 0.0)))
+            for age in sorted(_full)
+            if age <= _accum_end_age
+            and abs(_full.get(age, 0.0) - _base.get(age, 0.0)) > 1e-12)
     housing_mortgage = (
         HousingMortgageSpec(
             purchase_age=mortgage_payload["purchase_age"],
@@ -1241,6 +2771,7 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
             carrying_by_age=mortgage_payload["carrying_by_age"],
         ) if mortgage_payload is not None else None
     )
+    student_debt = _student_debt_schedule(cfg)
 
     # Resolve the working-years living cost driving the taxable-savings
     # residual: explicit value, else the user's retirement spending — never
@@ -1248,13 +2779,47 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     contrib_d = dict(g("contributions"))
     if not contrib_d.get("annual_spending_now"):
         contrib_d["annual_spending_now"] = float(st_d.get("expenses_y0", 40_440) or 40_440)
+    # U35 / A1. The switch is resolved HERE, so the engine receives exactly one
+    # fact: a schedule, or nothing. A disabled plan hands over an empty tuple
+    # even when the user's numbers are still stored, which is what keeps a
+    # saved-but-off schedule bit-identical to a plan that never had one.
+    contrib_d["rsu_vest_schedule_real"] = (
+        tuple(float(v) for v in (contrib_d.get("rsu_vest_schedule_real") or ()))
+        if contrib_d.get("rsu_vest_enabled") else ())
+    _espp_on = bool(contrib_d.get("espp_enabled"))
+    for _field in ("espp_grant_fmv_schedule_nominal",
+                   "espp_exercise_fmv_schedule_nominal",
+                   "espp_qualifying_sale_value_schedule_nominal"):
+        contrib_d[_field] = (
+            tuple(float(v) for v in (contrib_d.get(_field) or ()))
+            if _espp_on else ())
+    contrib_d["catchup_403b_15yr_schedule_nominal"] = tuple(
+        float(v) for v in (
+            contrib_d.get("catchup_403b_15yr_schedule_nominal") or ()))
+    contrib_d.pop("rsu_vest_enabled", None)
+    contrib_d.pop("espp_enabled", None)
 
-    return {
+    out = {
         "config": cfg_obj,
         "state": _mk(State, g("state")),
         "initial": init,
         "contrib_params": _mk(V8ContributionParams, contrib_d),
         "promo_params": _mk(PromotionParams, g("promotion")),
+        "spouse_promotion": _mk(PromotionParams, {
+            "enabled": False, **g("spouse_promotion"),
+            # There is no spouse overtime input, so this engine-only field is
+            # fixed and never exposed as a control that cannot do anything.
+            "ot_eliminated": True,
+        }),
+        "second_promotion": _mk(PromotionParams, {
+            "enabled": False, **g("second_promotion"),
+            # OT already transitioned (or did not) at the first promotion.
+            "ot_eliminated": True,
+        }),
+        "spouse_second_promotion": _mk(PromotionParams, {
+            "enabled": False, **g("spouse_second_promotion"),
+            "ot_eliminated": True,
+        }),
         "bond_params": _mk(BondParams, g("bonds")),
         "glide_path": _mk(GlidePath, g("glide")),
         "medical": _mk(MedicalParams, medical_d),
@@ -1279,6 +2844,15 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
         # read from where the user already entered them (`other_assets`), so
         # this module cannot disagree with the numbers on screen.
         "house_price": _mk_house_price(g("house_price"), cfg),
+        # U35 / A2b. Built from the SAME kept schedule the fixed-multiple
+        # events came from, so the two halves cannot disagree about how much
+        # was kept -- only about how it is valued.
+        "retained_stock": _mk_retained_stock(g("contributions"), g("state")),
+        # Seed offset 90_020: the primary's human capital owns 90_002, and two
+        # earners sharing one offset would draw one career twice.
+        "spouse_human_capital": dataclasses.replace(
+            _mk(HumanCapitalParams, g("spouse_human_capital")),
+            seed_offset=90_020),
         "human_capital": _mk(HumanCapitalParams, g("human_capital")),
         "ss_trust_fund": _mk(SSTrustFundParams, g("ss_trust_fund")),
         "tax_us": _mk_tax_us(g("tax_us")),
@@ -1290,11 +2864,16 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
         "fire_swr": float(g("state").get("swr_pref", 0.0333)),
         "life_events": (sorted(events) or None),
         "housing_mortgage": housing_mortgage,
+        "student_debt": student_debt,
         "income_streams": (tuple(structured_income) or None),
         "tax_true": _mk(TrueTaxParams, {**g("tax_true"),
                                         "filing_jointly": bool(_hh.get("enabled"))}),
         "returns_x": returns_x,
     }
+    ssa_pia_resolver = _ssa_pia_resolver(g("social_security"))
+    if ssa_pia_resolver is not None:
+        out["ssa_pia_resolver"] = ssa_pia_resolver
+    return out
 
 
 def _milestones(cfg: dict) -> list:
@@ -1355,13 +2934,17 @@ def _event_meta_ctx():
 
 
 @contextlib.contextmanager
-def _layoff_ctx(cfg: dict, seed: int):
+def _layoff_ctx(cfg: dict, seed: int, path_index: Optional[int] = None):
     """Set fire_v8_model._LAYOFF for the run (career stream seed+7_000_000,
-    the v2 engine's convention). Off => None => zero draws, bit-identical."""
+    the v2 engine's convention).  B4's opt-in path isolation instead uses
+    ``[seed, path_index, 7_000_000]``.  Off => None => zero draws,
+    bit-identical."""
     lo = (cfg.get("layoff") or {})
     if lo.get("enabled"):
         params = _mk(LayoffParams, {k: v for k, v in lo.items() if k != "rng"})
-        params.rng = np.random.default_rng(int(seed) + 7_000_000)
+        params.rng = np.random.default_rng(
+            int(seed) + 7_000_000 if path_index is None
+            else [int(seed), int(path_index), 7_000_000])
         prev = fire_v8_model._LAYOFF
         fire_v8_model._LAYOFF = params
         try:
@@ -1370,6 +2953,136 @@ def _layoff_ctx(cfg: dict, seed: int):
             fire_v8_model._LAYOFF = prev
     else:
         yield
+
+
+@contextlib.contextmanager
+def _spouse_layoff_ctx(cfg: dict, seed: int, path_index: Optional[int] = None):
+    """Set `fire_v8_model._SPOUSE_LAYOFF` for the run, then restore it.
+
+    Seeded `seed + 23_000_000`: the existing career-stream convention is a
+    prime times a million (1, 3, 7, 11, 13, 17, 19 are taken), and two earners
+    sharing 7_000_000 would be one job lost twice. Only compiled when the
+    household is on -- a spouse layoff with no spouse is not an event.
+    """
+    lo = (cfg.get("spouse_layoff") or {})
+    if lo.get("enabled") and (cfg.get("household") or {}).get("enabled"):
+        params = _mk(LayoffParams, {k: v for k, v in lo.items() if k != "rng"})
+        params.rng = np.random.default_rng(
+            int(seed) + 23_000_000 if path_index is None
+            else [int(seed), int(path_index), 23_000_000])
+        prev = fire_v8_model._SPOUSE_LAYOFF
+        fire_v8_model._SPOUSE_LAYOFF = params
+        try:
+            yield
+        finally:
+            fire_v8_model._SPOUSE_LAYOFF = prev
+    else:
+        yield
+
+
+@contextlib.contextmanager
+def _lifestyle_creep_ctx(
+    cfg: dict, seed: int, path_index: Optional[int] = None,
+):
+    """Install one sampled event on an independent stable RNG substream.
+
+    The old v2 engine shared this draw with layoffs. The live engine does not:
+    enabling an unrelated spending module must not move a same-seed layoff.
+    Off creates neither a generator nor a draw.
+    """
+    raw = cfg.get("lifestyle_creep") or {}
+    if raw.get("mode", "off") == "off":
+        yield
+        return
+    params = _mk(LifestyleCreepParams, {
+        k: v for k, v in raw.items() if k != "rng"})
+    params.rng = np.random.default_rng(
+        int(seed) + LIFESTYLE_CREEP_SEED_OFFSET if path_index is None
+        else [int(seed), int(path_index), LIFESTYLE_CREEP_SEED_OFFSET])
+    event = sample_lifestyle_creep(params)
+    prev = fire_v8_model._LIFESTYLE_CREEP
+    fire_v8_model._LIFESTYLE_CREEP = event
+    try:
+        yield
+    finally:
+        fire_v8_model._LIFESTYLE_CREEP = prev
+
+
+@contextlib.contextmanager
+def _disability_ctx(
+    cfg: dict, seed: int, path_index: Optional[int] = None,
+):
+    """Install one path's SSA-award stress on an independent stable stream."""
+    raw = cfg.get("disability") or {}
+    if not raw.get("enabled"):
+        yield
+        return
+    _validate_disability(cfg)
+    params = _mk(DisabilityParams, {
+        k: v for k, v in raw.items() if k != "rng"})
+    params.rng = np.random.default_rng(
+        int(seed) + DISABILITY_SEED_OFFSET if path_index is None
+        else [int(seed), int(path_index), DISABILITY_SEED_OFFSET])
+    state = cfg.get("state") or {}
+    event = sample_ssdi_entitlement(
+        params,
+        int(state.get("start_age", State().start_age)),
+        int(state.get("accum_years", State().accum_years)),
+        str((cfg.get("mortality") or {}).get("sex")),
+    )
+    prev = fire_v8_model._DISABILITY
+    fire_v8_model._DISABILITY = event
+    try:
+        yield
+    finally:
+        fire_v8_model._DISABILITY = prev
+
+
+@contextlib.contextmanager
+def _career_break_ctx(cfg: dict):
+    """Set `fire_v8_model._CAREER_BREAK` for the run, then restore it.
+
+    Deterministic, so unlike `_layoff_ctx` there is no generator to attach and
+    no per-path variant: the same compiled break applies to every path, which
+    is exactly what makes it a plan rather than a risk.
+
+    Compiled once here against the plan's own `state.start_age`, so the
+    age->year arithmetic happens at the boundary instead of inside the year
+    loop. Off => None => the engine runs the code it ran before B10 existed.
+    """
+    params = _mk(CareerBreakParams, (cfg.get("career_break") or {}))
+    start_age = int((cfg.get("state") or {}).get("start_age", 27) or 27)
+    prev = fire_v8_model._CAREER_BREAK
+    fire_v8_model._CAREER_BREAK = compile_career_break(params, start_age)
+    try:
+        yield
+    finally:
+        fire_v8_model._CAREER_BREAK = prev
+
+
+@contextlib.contextmanager
+def _spouse_career_break_ctx(cfg: dict):
+    """Set `fire_v8_model._SPOUSE_CAREER_BREAK`, then restore it.
+
+    Compiled against the SPOUSE's own start age -- the primary's start age
+    plus `household.spouse_age_offset` -- because the control asks when the
+    spouse steps back, in the spouse's years. Compiling it against the
+    primary's clock would silently move the break by the age gap.
+    """
+    block = cfg.get("spouse_career_break") or {}
+    prev = fire_v8_model._SPOUSE_CAREER_BREAK
+    compiled = None
+    if block.get("enabled") and (cfg.get("household") or {}).get("enabled"):
+        params = _mk(CareerBreakParams, block)
+        start_age = (int((cfg.get("state") or {}).get("start_age", 27) or 27)
+                     + int((cfg.get("household") or {}).get(
+                         "spouse_age_offset", 0) or 0))
+        compiled = compile_career_break(params, start_age)
+    fire_v8_model._SPOUSE_CAREER_BREAK = compiled
+    try:
+        yield
+    finally:
+        fire_v8_model._SPOUSE_CAREER_BREAK = prev
 
 
 @contextlib.contextmanager
@@ -1386,14 +3099,184 @@ def _household_ctx(cfg: dict):
         fire_v8_model._HOUSEHOLD = prev
 
 
+def _housing_accumulation_adjustments(cfg: dict) -> tuple:
+    """Net deterministic housing cost for each working-year waterfall."""
+    state = cfg.get("state") or {}
+    start_age = int(state.get("start_age", State().start_age))
+    years = int(state.get("accum_years", State().accum_years))
+    by_age = {}
+    for age, amount in HOUSING.compile_housing_events(
+            cfg, include_mortgage=True, include_carry=True):
+        if start_age < int(age) <= start_age + years:
+            by_age[int(age)] = by_age.get(int(age), 0.0) + float(amount)
+    return tuple(by_age.get(start_age + year, 0.0)
+                 for year in range(1, years + 1))
+
+
+@contextlib.contextmanager
+def _housing_accumulation_ctx(cfg: dict):
+    prev = fire_v8_model._ACCUMULATION_HOUSING_ADJUSTMENTS_REAL
+    compiled = _housing_accumulation_adjustments(cfg)
+    fire_v8_model._ACCUMULATION_HOUSING_ADJUSTMENTS_REAL = (
+        compiled if any(abs(value) > 1e-12 for value in compiled) else ())
+    try:
+        yield
+    finally:
+        fire_v8_model._ACCUMULATION_HOUSING_ADJUSTMENTS_REAL = prev
+
+
+@contextlib.contextmanager
+def _tax_posture_ctx(cfg: dict):
+    """Let the WORKING years see the state tax the retirement years already see.
+
+    Roadmap 10.0, OPEN_ITEMS E30. `TrueTaxParams` is built exactly once and
+    handed only to the retirement leg, so a plan with a state archetype paid
+    that state for half a life and nothing for the other half. This carries
+    the SAME two existing leaves -- no new configuration, no new attribution
+    leaf, no registry entry.
+
+    Gated on `tax_true.enabled`, because that is the only gate the retirement
+    state tax has. Ungated, a plan with the true-tax engine off but a state
+    rate set would pay state tax while working and none while retired, which
+    is the same asymmetry pointing the other way.
+    """
+    block = cfg.get("tax_true") or {}
+    prev = fire_v8_model._TAX_POSTURE
+    fire_v8_model._TAX_POSTURE = (
+        _mk(TrueTaxParams, block) if block.get("enabled") else None)
+    try:
+        yield
+    finally:
+        fire_v8_model._TAX_POSTURE = prev
+
+
+def estimate_first_year_savings(cfg: dict) -> dict:
+    """What this plan actually saves in its first working year.
+
+    OPEN_ITEMS E33. The wizard sidebar used to answer this in the page, with
+    its own arithmetic that filled three accounts to their limits and applied
+    one flat rate. Measured before this existed: at $45,000 the page said the
+    household saved 87% of gross -- and added a note congratulating them for
+    beating almost everybody -- while the engine had them $3,662 A YEAR SHORT
+    of covering their spending. Worse, in `savings_mode="savings_rate"` the
+    page returned the same number whether the user typed 10%, 30% or 50%,
+    because that function never read `savings_mode` at all.
+
+    So this does not compute a savings figure. It asks the ENGINE for the one
+    it is already going to use, down the same path a real run takes: refusal
+    at the mapping stage, `build_kwargs`, and the same process-wide hooks
+    under the same lock. Skipping the lock would be worse than the bug being
+    fixed -- `compute_contributions_for_year` reads module globals, so an
+    estimate racing a running simulation would read that run's household.
+
+    **The assumptions are deterministic and travel with the answer**, because
+    a single number with hidden draws behind it is how the page got into this
+    in the first place:
+
+      * year 1, and no promotion in it -- promotion timing is sampled, and
+        its earliest configurable year is checked rather than assumed;
+      * the bonus at the EXPECTED value of its own distribution: the fixed
+        percentage in `fixed` mode, the midpoint in `uniform` mode, which is
+        exactly the mean of the draw the engine makes;
+      * both people alive, no career break, no layoff.
+
+    `savings` can be NEGATIVE, and that is the finding rather than a bug: it
+    means the plan does not cover its own spending. It is never rounded up to
+    zero, and the caller must not either.
+    """
+    check_config(cfg)                 # refusal at the mapping stage, lesson 1
+    kw = build_kwargs(cfg, False)
+    promo = kw["promo_params"]
+    state_params = kw["state"]
+    # The bonus the engine would draw, at its own expected value.
+    if getattr(promo, "bonus_mode", "uniform") == "fixed":
+        bonus_pct = float(promo.bonus_pct_fixed)
+    else:
+        bonus_pct = (float(promo.bonus_pct_min)
+                     + float(promo.bonus_pct_max)) / 2.0
+    # A promotion in year 1 is possible only if the plan is configured for
+    # one. Checked rather than assumed away: `timing_min` defaults to 2, but
+    # a plan may set `timing_mode="fixed", timing_fixed=1`.
+    promotion_year = None
+    if getattr(promo, "enabled", False):
+        if getattr(promo, "timing_mode", "") == "fixed":
+            promotion_year = int(promo.timing_fixed)
+        elif int(getattr(promo, "timing_min", 2)) <= 1:
+            promotion_year = 1
+    household = cfg.get("household") or {}
+    # `pool_household_expenses=False`, and that is measured rather than
+    # careless. The real loop passes `alive_by_year is not None`, which for a
+    # both-alive year selects a branch that computes the SAME
+    # `household_taxable` -- 175 household grids over income, spouse income
+    # and spending, zero differences in the figure this returns. The branches
+    # differ only in the meta they write, which this no longer reads. The
+    # assertion that keeps that true is in
+    # `tests/test_savings_estimate.py`, so the day the branches diverge this
+    # stops being safe out loud rather than silently.
+    with (_ENGINE_LOCK, match_excludes_bonus(), _household_ctx(cfg),
+          _housing_accumulation_ctx(cfg), _career_break_ctx(cfg),
+          _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg)):
+        stack = fire_v8_model.compute_contributions_for_year(
+            1, promotion_year, bonus_pct, promo.base_salary_post,
+            kw["contrib_params"], promo,
+            pool_household_expenses=False,
+            break_multiplier=1.0, meta_out={},
+            age=int(state_params.start_age),
+            student_debt_payment_nominal=(
+                kw["student_debt"].payment_for_year(0)
+                if kw.get("student_debt") is not None else None),
+            student_debt_embedded_payment_nominal=(
+                kw["student_debt"].monthly_payment_nominal * 12.0
+                if kw.get("student_debt") is not None else 0.0))
+
+    contributions = kw["contrib_params"]
+    gross = (float(contributions.base_salary_pre)
+             + float(contributions.ot_income_pre)
+             + float(contributions.bonus_pre))
+    if household.get("enabled"):
+        gross += (float(household.get("spouse_base_salary_pre", 0) or 0)
+                  + float(household.get("spouse_bonus_pre", 0) or 0))
+    # DERIVED from the answer, not read from the engine's meta. Measured: on
+    # 57 of 560 grids the meta `expense_shortfall` is the PRIMARY earner's
+    # gap reported as if it were the household's -- one case has the meta
+    # saying $20,000 short while the household is saving $14,320. That number
+    # next to a savings figure would be a new false alarm, in a slice whose
+    # whole point is removing one. See OPEN_ITEMS E38 for the meta itself,
+    # which the career-break comparison also reads.
+    shortfall = max(0.0, -float(stack.total))
+    return {
+        "savings": float(stack.total),
+        "gross": gross,
+        # `None`, not zero, when there is no income to divide by: a rate of
+        # 0% would read as "saves nothing" rather than "no answer".
+        "savings_rate": (float(stack.total) / gross) if gross > 0 else None,
+        "expense_shortfall": shortfall,
+        "by_account": stack.balances(),
+        "assumptions": {
+            "year": 1,
+            "bonus_pct": bonus_pct,
+            "promotion_in_year_one": promotion_year == 1,
+        },
+    }
+
+
 def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
-         mu_shift: Optional[float] = None, cb=None) -> list:
+         mu_shift: Optional[float] = None, cb=None,
+         execution_policy=None, per_path_substreams: bool = False) -> list:
     """Sequential shared-stream Monte Carlo — byte-identical to
     run_lifecycle_mc_v98(per_path_substreams=False), but with an optional
     progress callback cb(frac in [0,1)) invoked periodically for the progress
-    bar. Same rng draw order => same results with or without cb."""
+    bar. Same rng draw order => same results with or without cb.
+
+    ``per_path_substreams`` is an opt-in B4 comparison protocol.  Each path
+    then owns main, LTC, parent and layoff streams derived from its index, so a
+    shorter retirement in path i cannot change the sampled life at i+1.  The
+    official/default runner stays on its historical shared stream.
+    """
     kw = build_kwargs(cfg, relocation_on)
     config = kw.pop("config")
+    if execution_policy is not None:
+        kw["execution_policy"] = execution_policy
     # Return posture: the user's `returns.equity_mu_shift` moves the whole regime
     # mixture's mean; the sensitivity μ-band's own shift composes on top of it, so
     # the band explores μ *around the user's chosen central assumption*.
@@ -1408,7 +3291,8 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
     # distinct care stream for the same reason its market stream is distinct.
     # Off attaches nothing at all: there is no generator to advance.
     _ltc = kw.get("ltc")
-    if _ltc is not None and _ltc.mode != LTC.OFF:
+    if (not per_path_substreams
+            and _ltc is not None and _ltc.mode != LTC.OFF):
         _ltc.rng = np.random.default_rng(int(seed) + 11_000_000)
     # Parents get their own stream too, and a different offset, so turning the
     # parent module on cannot shift a single draw of the care module's stream
@@ -1416,20 +3300,60 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
     # seed+i, so each chunk's parent stream is distinct for the same reason its
     # market stream is. Off attaches nothing at all.
     _parents = kw.get("parents")
-    if _parents is not None and _parents.mode != PARENTS.OFF:
+    if (not per_path_substreams
+            and _parents is not None and _parents.mode != PARENTS.OFF):
         _parents.rng = np.random.default_rng(int(seed) + 13_000_000)
     n = int(n)
-    rng = np.random.default_rng(int(seed))
     out = []
     step = max(1, n // 40)
     # _ENGINE_LOCK: match_excludes_bonus/_household_ctx set process-wide globals
     # in the engine chain; the HTTP server is threaded (background job + on-demand
     # sweep/sensitivity/backtest requests), so engine runs must be serialized or
     # concurrent runs with different settings silently corrupt each other (audit P1-1).
+    if not per_path_substreams:
+        # Keep this branch structurally identical to the official runner.  B4
+        # opting in must not silently migrate headline/replay RNG semantics.
+        rng = np.random.default_rng(int(seed))
+        with (_ENGINE_LOCK, match_excludes_bonus(), _household_ctx(cfg),
+              _housing_accumulation_ctx(cfg), _career_break_ctx(cfg),
+              _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg),
+              _layoff_ctx(cfg, seed), _spouse_layoff_ctx(cfg, seed),
+              _lifestyle_creep_ctx(cfg, seed),
+              _event_meta_ctx()):
+            for i in range(n):
+                # Disability incidence is path-specific even in the legacy
+                # shared-market runner. Its own indexed child stream keeps it
+                # independent without consuming or shifting market/layoff.
+                with _disability_ctx(cfg, seed, path_index=i):
+                    result = simulate_lifecycle_v98(
+                        config=config, rng=rng, **kw)
+                out.append(_annotate_result(
+                    result, cfg, kw.get("life_events")))
+                if cb is not None and i % step == 0:
+                    cb(i / n)
+        return out
+
     with (_ENGINE_LOCK, match_excludes_bonus(), _household_ctx(cfg),
-          _layoff_ctx(cfg, seed), _event_meta_ctx()):
+          _housing_accumulation_ctx(cfg), _career_break_ctx(cfg),
+          _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg),
+          _event_meta_ctx()):
         for i in range(n):
-            result = simulate_lifecycle_v98(config=config, rng=rng, **kw)
+            # Auxiliary stochastic modules carry their generator on the
+            # parameter object, so resetting only the main rng is not path
+            # isolation.  All four domains include the same path index and a
+            # stable domain tag; both B4 arms reconstruct these exact streams.
+            if _ltc is not None and _ltc.mode != LTC.OFF:
+                _ltc.rng = np.random.default_rng(
+                    [int(seed), int(i), 11_000_000])
+            if _parents is not None and _parents.mode != PARENTS.OFF:
+                _parents.rng = np.random.default_rng(
+                    [int(seed), int(i), 13_000_000])
+            rng = np.random.default_rng([int(seed), int(i)])
+            with (_layoff_ctx(cfg, seed, path_index=i),
+                  _spouse_layoff_ctx(cfg, seed, path_index=i),
+                  _lifestyle_creep_ctx(cfg, seed, path_index=i),
+                  _disability_ctx(cfg, seed, path_index=i)):
+                result = simulate_lifecycle_v98(config=config, rng=rng, **kw)
             out.append(_annotate_result(result, cfg, kw.get("life_events")))
             if cb is not None and i % step == 0:
                 cb(i / n)
@@ -2294,8 +4218,244 @@ def bequest_dependency(cfg: dict, n: int, seed: int, *,
             "material_drop": float(material_drop), "reason": reason}
 
 
+def _execution_plan_is_already_simple(cfg: dict) -> bool:
+    """Whether B4's three simplifications are already this plan's posture."""
+    rule = cfg.get("rule") or {}
+    roth = cfg.get("roth_ladder") or {}
+    glide = cfg.get("glide") or {}
+    return bool(
+        str(rule.get("type", "gk") or "gk") == "fixed_real"
+        and (not bool(roth.get("enabled", False))
+             or float(roth.get("annual_conversion_y0", 0.0) or 0.0) == 0.0)
+        and float(glide.get("equity_start", 1.0))
+        == float(glide.get("equity_end", 1.0))
+    )
+
+
+def _execution_metrics(rows: list) -> dict:
+    """Unconditional paired-path metrics; failed terminal wealth stays zero."""
+    success = []
+    consumption = []
+    minimum = []
+    terminal = []
+    for row in rows:
+        wd = row.get("withdrawal") or {}
+        success.append(1.0 if row.get("lifetime_success") else 0.0)
+        consumption.append(float(wd.get("mean_real_consumption") or 0.0))
+        minimum.append(float(wd.get("min_real_consumption") or 0.0))
+        cpi_end = _cpi_end(wd)
+        terminal.append(
+            float(wd.get("terminal_balance") or 0.0) / cpi_end
+            if cpi_end else 0.0)
+    return {
+        "lifetime_success": float(np.mean(success)),
+        "mean_real_consumption_p50": float(np.median(consumption)),
+        "min_real_consumption_p50": float(np.median(minimum)),
+        "terminal_real_p50": float(np.median(terminal)),
+    }
+
+
+def execution_simplification_stress(cfg: dict, n: int, seed: int, *,
+                                    transition_age: int = 80) -> dict:
+    """Price a simpler age-80 execution posture on paired sampled lives.
+
+    This is an execution-complexity stress, not a cognitive prediction.  Both
+    arms start from the same seed and path order; the policy consumes no random
+    draws.  Only paths that reach a retirement payment at/after the transition
+    enter the comparison.  If none do, every delta is ``None`` with a reason --
+    "not observed" must never be printed as a measured zero.
+
+    The allocation change is intentionally named a TARGET freeze.  This engine
+    applies one blended return to every account, which is equivalent to
+    implicit annual rebalancing; it cannot represent literal no-rebalancing.
+    """
+    transition_age = int(transition_age)
+    if transition_age != 80:
+        raise ValueError("this study's reviewed transition age is fixed at 80")
+    n = int(n)
+    if n <= 0:
+        raise ValueError("paths must be positive")
+
+    baseline_rows = _run(
+        cfg, n, seed, False, per_path_substreams=True)
+    simplified_rows = _run(
+        cfg, n, seed, False,
+        execution_policy=V98.ExecutionSimplificationPolicy(transition_age),
+        per_path_substreams=True,
+    )
+    exposed_indexes = []
+    for index, row in enumerate(simplified_rows):
+        meta = ((row.get("withdrawal") or {})
+                .get("execution_simplification") or {})
+        if meta.get("exposed"):
+            exposed_indexes.append(index)
+
+    shared = {
+        "transition_age": transition_age,
+        "paths": n,
+        "seed": int(seed),
+        "exposed_paths": len(exposed_indexes),
+        "paired_per_path": True,
+        "pairing_protocol": "path_indexed_substreams",
+        "policy": {
+            "withdrawal": "fixed_real_base",
+            "new_roth_conversions": False,
+            "existing_roth_seasoning_continues": True,
+            "allocation": "freeze_target_at_transition",
+            "implicit_rebalancing_remains": True,
+            "relocation": "base_location_only",
+        },
+        "categorical_verdict": None,
+    }
+    if not exposed_indexes:
+        return {
+            **shared,
+            "applicable": False,
+            "already_simple": None,
+            "baseline": None,
+            "simplified": None,
+            "deltas": {
+                "lifetime_success": None,
+                "mean_real_consumption_p50": None,
+                "min_real_consumption_p50": None,
+                "terminal_real_p50": None,
+            },
+            "reason": "no sampled path reached a retirement payment at or "
+                      "after age 80; the simplification was not exposed",
+        }
+
+    base = _execution_metrics([baseline_rows[i] for i in exposed_indexes])
+    simple = _execution_metrics([simplified_rows[i] for i in exposed_indexes])
+    deltas = {key: simple[key] - base[key] for key in base}
+    already_simple = _execution_plan_is_already_simple(cfg)
+    return {
+        **shared,
+        "applicable": True,
+        "already_simple": already_simple,
+        "baseline": base,
+        "simplified": simple,
+        "deltas": deltas,
+        "reason": (
+            "already_simple" if already_simple
+            else "measured on paths exposed to the age-80 execution policy"
+        ),
+    }
+
+
 def _money(value: float) -> str:
     return "$%s" % format(int(round(value)), ",d")
+
+
+def career_break_comparison(cfg: dict, n: int, seed: int) -> dict:
+    """Keep working, or take the break: the same plan run both ways.
+
+    Roadmap 9.0 Phase 3. Built on the shape `bequest_dependency` established --
+    this module composes BOTH configs from the one the user is looking at, so
+    a caller cannot hand it two plans that differ in more than the one thing.
+
+    Two Monte Carlo arms at one seed give the headline metrics. The wage-side
+    figures do NOT come from differencing those arms: each break run already
+    carries, for every year, what that SAME path would have earned and
+    contributed with no break (identical promotion draw, identical bonus,
+    identical wage factor). Two arms at one seed are not the same path, and
+    attributing a difference between them to the break alone would be the
+    common-random-numbers mistake this repo has already recorded.
+
+    Every field is `None` when it was not measured. Nothing here reports a
+    zero it did not compute.
+    """
+    brk = (cfg.get("career_break") or {})
+    if not brk.get("enabled"):
+        return {"applicable": False,
+                "reason": "no career break is planned, so there is nothing to "
+                          "compare this plan against",
+                "keep_working": None, "with_break": None,
+                "forgone_employee_contributions": None,
+                "forgone_employer_match": None,
+                "break_expenses_drawn_from_portfolio": None,
+                "unfunded_break_expenses": None,
+                "return_wage_gap_final_year": None,
+                "fire_age_delay": None, "not_modelled": None}
+
+    baseline_cfg = copy.deepcopy(cfg)
+    baseline_cfg["career_break"] = {**dict(brk), "enabled": False}
+
+    keep = summary(baseline_cfg, n, seed)
+    break_paths = _run(cfg, n, seed, False, None)
+    took = _summary_of(break_paths, cfg, _milestones(cfg))
+
+    # The paired per-year figures, read off the break arm's own accumulation
+    # paths. Median across paths rather than mean: promotion timing is drawn,
+    # so the distribution of "what the break cost" is skewed by which paths
+    # were promoted before it started, and a mean would report a career
+    # nobody has.
+    forgone_employee, forgone_match, unfunded, wage_gap = [], [], [], []
+    drawn = []
+    for result in break_paths:
+        rows = [step.get("career_break") for step in result.get("accum_path", [])
+                if step.get("career_break")]
+        if not rows:
+            continue
+        forgone_employee.append(sum(
+            row["employee_deferrals_without_break"] - row["employee_deferrals"]
+            for row in rows))
+        forgone_match.append(sum(
+            row["employer_match_without_break"] - row["employer_match"]
+            for row in rows))
+        # Since U27 the shortfall is SPLIT. Reporting only one half would be a
+        # different lie in each direction: the drawn part alone hides what the
+        # plan could not cover, and the unfunded part alone hides that the
+        # portfolio was sold down to get there.
+        drawn.append(sum(row["drawn_from_taxable"] for row in rows))
+        unfunded.append(sum(row["unfunded_expenses"] for row in rows))
+        last = rows[-1]
+        wage_gap.append(last["earned_gross_without_break"] - last["earned_gross"])
+
+    def _median(values):
+        # `None`, not 0.0, when there is nothing to take a median of: an
+        # unmeasured figure and a measured zero must not print the same.
+        if not values:
+            return None
+        ordered = sorted(values)
+        mid = len(ordered) // 2
+        return (ordered[mid] if len(ordered) % 2
+                else (ordered[mid - 1] + ordered[mid]) / 2.0)
+
+    keep_fire, took_fire = keep["fire_age_p50"], took["fire_age_p50"]
+    delay = (None if keep_fire is None or took_fire is None
+             else took_fire - keep_fire)
+
+    return {
+        "applicable": True,
+        "paths": int(n), "seed": int(seed),
+        "keep_working": keep,
+        "with_break": took,
+        "fire_age_delay": delay,
+        "forgone_employee_contributions": _median(forgone_employee),
+        "forgone_employer_match": _median(forgone_match),
+        "break_expenses_drawn_from_portfolio": _median(drawn),
+        "unfunded_break_expenses": _median(unfunded),
+        "return_wage_gap_final_year": _median(wage_gap),
+        # Carried WITH the numbers rather than left to a panel elsewhere: the
+        # three omissions all point the same way, and a comparison that shows
+        # only the measured part overstates how affordable the break is.
+        "not_modelled": [
+            "the effect of a break on WHEN you are promoted (the promotion "
+            "clock keeps running; the return-to-work pay discount is the only "
+            "place wage scarring is modelled)",
+            "break-year living costs ARE now drawn from the taxable account "
+            "(U27), but only from there: a 401(k)/IRA/HSA withdrawal before "
+            "59.5 carries penalties and tax this app does not compute, so "
+            "those accounts are never raided and anything the taxable account "
+            "could not fund is reported as still unfunded",
+            "health insurance during the break: the user supplies the net-new "
+            "annual household premium. Residual mode pays it before saving; "
+            "savings-rate mode keeps the stated rate authoritative and absorbs "
+            "the premium inside residual spending. The app does not choose a "
+            "spouse plan, COBRA or Marketplace policy or compute an "
+            "accumulation-phase ACA subsidy",
+        ],
+    }
 
 
 def summary(cfg: dict, n: int, seed: int, relocation_on: bool = False,
@@ -2303,8 +4463,21 @@ def summary(cfg: dict, n: int, seed: int, relocation_on: bool = False,
     """Compact metrics for sweeps / sensitivity. `mu_shift` moves the whole
     regime mixture's mean return (for the μ-uncertainty section)."""
     ms = _milestones(cfg)
-    s = _summarize(_path_stats(_run(cfg, n, seed, relocation_on, mu_shift), ms),
-                   ms, _estate_exemption(cfg))
+    return _summary_of(_run(cfg, n, seed, relocation_on, mu_shift), cfg, ms)
+
+
+def _summary_of(results: list, cfg: dict, ms: list) -> dict:
+    """`summary`'s payload, from paths already run.
+
+    Split out so `career_break_comparison` can read the break arm's headline
+    metrics and its per-year accumulation detail from ONE set of paths. It
+    previously ran that arm twice -- once through `summary` and once for the
+    detail -- which is not just slow: two runs of the same seed are the same
+    paths only for as long as nothing in between touches a generator, and
+    relying on that is the assumption this repo files under "same seed is not
+    the same path".
+    """
+    s = _summarize(_path_stats(results, ms), ms, _estate_exemption(cfg))
     return {
         "lifetime_success": s["lifetime_success"],
         "reached_fi_rate": s["reached_fi_rate"],
@@ -2715,18 +4888,38 @@ def backtest(cfg: dict, retire_age, seed: int) -> dict:
     state = kw["state"]
     exp0 = _expenses_y0(cfg)
     swr = float((cfg.get("state") or {}).get("swr_pref", 0.0333)) or 0.0333
-    target = exp0 / swr
+    debt = kw.get("student_debt")
     horizon = int(state.retire_horizon)
     ra = int(retire_age) if retire_age else int(state.start_age + 15)
+    # The stress runner starts at a synthetic FIRE boundary and therefore has
+    # no accumulation path from which to read the permanent lifestyle step.
+    # Resolve the same independent substream directly and apply it when its
+    # event year precedes this chosen retirement age.
+    _creep_raw = cfg.get("lifestyle_creep") or {}
+    if _creep_raw.get("mode", "off") != "off":
+        _validate_lifestyle_creep(cfg)
+        _creep_params = _mk(LifestyleCreepParams, {
+            k: v for k, v in _creep_raw.items() if k != "rng"})
+        _creep_params.rng = np.random.default_rng(
+            int(seed) + LIFESTYLE_CREEP_SEED_OFFSET)
+        _creep_event = sample_lifestyle_creep(_creep_params)
+        if (_creep_event is not None
+                and _creep_event.event_year <= max(0, ra - int(state.start_age))):
+            exp0 *= 1.0 + float(_creep_event.factor)
+    debt_at_retirement = (
+        float(debt.balance_after_years(
+            max(0, ra - int(state.start_age)))) if debt is not None else 0.0)
+    # User choice A: the synthetic backtest starts at the same readiness line
+    # as the forward simulator -- SWR assets plus the balance still reserved.
+    # It does not deduct/pay that balance; the schedule below keeps paying it.
+    target = exp0 / swr + debt_at_retirement
 
     stack = kw["initial"]
     tot = stack.total or 1.0
-    start = AccountStack(
-        pretax_401k=stack.pretax_401k / tot * target,
-        roth_ira=stack.roth_ira / tot * target,
-        hsa=stack.hsa / tot * target,
-        taxable=stack.taxable / tot * target,
-    )
+    # The expression moves across verbatim -- `v / tot * target`, not
+    # `v * (target / tot)`, which is a different float and would move every
+    # stress-scenario number in the last digits.
+    start = stack.map_balances(lambda v: v / tot * target)
     mort = _mk(MortalityParams, {**(cfg.get("mortality") or {}), "enabled": False})
 
     scen = {}
@@ -2845,6 +5038,7 @@ def backtest(cfg: dict, retire_age, seed: int) -> dict:
                 ltc_events=(_ltc_events or None),
                 parent_care_events=(_care_events if _care_events is not None else None),
                 parent_bequests=(_bequests if _bequests is not None else None),
+                student_debt=debt,
             )
         synthetic = {"reached_fire": True, "fire_age": ra,
                      "lifetime_success": bool(wd.get("lifetime_success")),

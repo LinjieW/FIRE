@@ -45,7 +45,14 @@ def _base_cfg(cfg: dict) -> dict:
 
 
 def _scale_portfolio(c: dict, f: float) -> dict:
-    for k in ("pretax_401k", "roth_ira", "hsa", "taxable"):
+    """Scale every declared account, not four names.
+
+    OPEN_ITEMS E37. This scaled four CONFIG KEYS by hand, so a plan holding a
+    fifth account had that one left at full size while the others shrank --
+    a sensitivity sweep run on a portfolio nobody has.
+    """
+    import account_schema as _schema
+    for k in [a.field for a in _schema.US_ACCOUNT_TYPES if a.field]:
         v = _get_path(c, "initial." + k)
         if v:
             _set_path(c, "initial." + k, v * f)

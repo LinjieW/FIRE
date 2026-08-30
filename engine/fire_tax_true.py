@@ -105,8 +105,11 @@ RMD_TABLE = dict(US_FEDERAL_RULES["rmd_divisors"])
 IRMAA_SINGLE = list(IRMAA_RULES["single"])
 IRMAA_MFJ = list(IRMAA_RULES["mfj"])
 
-EARLY_WD_AGE = US_FEDERAL_RULES["early_withdrawal_age"]
-EARLY_WD_RATE = US_FEDERAL_RULES["early_withdrawal_rate"]
+# The early-withdrawal penalty used to live here as two module constants,
+# which is why it could only ever be charged to the pre-tax 401(k). It is now
+# a property of the account type (OPEN_ITEMS E36); the same two pack keys back
+# `fire_v9_4_model.EARLY_WD_PENALTY_*`, and `tests/test_account_schema.py`
+# holds the declaration to them.
 
 
 # ------------------------------------------------------------- pure functions
@@ -205,14 +208,48 @@ def dividend_drag_rate_real(dividend_real: float, qualified_fraction: float,
 
 
 # --------------------------------------------------------------- year solver
+def _schema_types(withdrawal_order=None):
+    """The declared account types, in the order this plan draws them.
+
+    Imported lazily, and the path fixup is repeated here rather than shared
+    with `fire_v9_4_model` on purpose: the ENGINE must keep no import-time
+    dependency on the server package, and this module in particular is the
+    light one -- it imports the rule pack and nothing else, not even numpy.
+    What must not be duplicated is the ordering RULE, and that lives once, in
+    `account_schema.ordered_types`.
+    """
+    import os
+    import sys
+    server = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "server")
+    if server not in sys.path:
+        sys.path.insert(0, server)
+    import account_schema as SCHEMA
+    return SCHEMA.ordered_types(withdrawal_order), SCHEMA
+
+
 def solve_retirement_year(accounts, need_after_tax_nominal: float,
                           ss_gross_nominal: float, conversions_nominal: float,
                           roth_locked: float, age: float, cpi: float,
                           p: TrueTaxParams,
-                          rmd_balance_prior_year_end: float = None,
-                          gain_fraction: float = None) -> dict:
-    """Withdraw (taxable → pretax → HSA → unlocked Roth) so that after REAL
-    taxes the year's need is met. Fixed-point on the tax bill (≤8 iters).
+                          rmd_bases_prior_year_end: dict = None,
+                          gain_fraction: float = None,
+                          withdrawal_order=None) -> dict:
+    """Withdraw in the DECLARED order so that after REAL taxes the year's need
+    is met. Fixed-point on the tax bill (≤8 iters).
+
+    Roadmap 10.0 Phase 2, OPEN_ITEMS E36. This used to name four buckets by
+    hand -- ten direct references and thirty-nine counting the local aliases,
+    plus four pieces of hardcoded SEMANTICS that mattered more than the names:
+    the draw order, which draw is ordinary income and which is a capital gain,
+    that only the pre-tax 401(k) can carry an early-withdrawal penalty, and a
+    scalar RMD base that could only ever describe one account. A fifth account
+    could be declared, held, funded and counted toward net worth, and this
+    solver would still not touch a cent of it -- OPEN_ITEMS E34 again, down
+    the other path.
+
+    All six declared dimensions now come from `server/account_schema.py`, plus
+    the seventh (`tax_character`) that this solver is the reason for.
 
     Cash-flow identity enforced (returned as flow_err, should be ≈0):
         Σgross_wd + ss_gross == need_met + tax_total + deposit_back
@@ -223,9 +260,17 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
 
     `taxable_wd` and `gain_fraction_used` exist so a basis-tracking caller can
     close the loop without re-deriving the taxable draw from balance
-    differences -- `out.taxable` already nets `deposit_back` back in, so the
-    difference is not the withdrawal and reconstructing it outside would be a
-    second implementation of this function's ordering rule.
+    differences -- the reinvestment account already nets `deposit_back` back
+    in, so the difference is not the withdrawal and reconstructing it outside
+    would be a second implementation of this function's ordering rule.
+
+    `rmd_bases_prior_year_end` maps ACCOUNT FIELD to the balance at the close
+    of the prior December 31. It is a mapping rather than the single number it
+    used to be because more than one declared type carries
+    `forced_distribution` -- a governmental 457(b) is subject to RMDs exactly
+    as a 401(k) is -- and a scalar cannot say which account it describes. A
+    field the caller leaves out falls back to that account's current balance,
+    which is what an absent scalar always meant.
     """
     mfj = p.filing_jointly
     # `gain_fraction` is the caller's MEASURED (value - basis) / value for this
@@ -235,31 +280,56 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     gain_frac = (p.taxable_gain_fraction if gain_fraction is None
                  else max(0.0, min(1.0, float(gain_fraction))))
     std_ded_nom = (STD_DED_MFJ if mfj else STD_DED_SINGLE) * cpi
-    bal_tax, bal_pre = accounts.taxable, accounts.pretax_401k
-    bal_hsa, bal_roth = accounts.hsa, max(0.0, accounts.roth_ira - roth_locked)
+    order, SCHEMA = _schema_types(withdrawal_order)
+    reinvest = SCHEMA.reinvestment_type(withdrawal_order)
+    held = accounts.balances()
+    # The raw balance and the REACHABLE one are different numbers for a
+    # seasoned type, and both are needed: the draw is limited by what may be
+    # touched, while the write-back has to start from what is actually there.
+    # Conflating them is how a Roth ladder's locked tranche would quietly stop
+    # existing.
+    raw = {a.field: accounts.balance(a.field) for a in order}
+    avail = {}
+    for a in order:
+        balance = raw[a.field]
+        if a.seasoned:
+            balance = max(0.0, balance - roth_locked)
+        avail[a.field] = balance
     # RMD law uses the account value at the close of the prior December 31,
     # not the post-return balance available when this year's withdrawal runs.
-    rmd_base = (bal_pre if rmd_balance_prior_year_end is None
-                else max(0.0, rmd_balance_prior_year_end))
-    forced_rmd = min(rmd_required(rmd_base, int(age), p), bal_pre)
+    bases = rmd_bases_prior_year_end or {}
+    forced = {}
+    for a in order:
+        if not a.forced_distribution:
+            continue
+        base = (max(0.0, bases[a.field]) if a.field in bases
+                else raw[a.field])
+        forced[a.field] = min(rmd_required(base, int(age), p),
+                              avail[a.field])
 
     tax_guess = 0.0
-    w_tax = w_pre = w_hsa = w_roth = 0.0
+    took = {a.field: 0.0 for a in order}
     ss_taxable = ordinary_nom = ltcg_nom = penalty = 0.0
     for _ in range(8):
         cash_target = max(0.0, need_after_tax_nominal + tax_guess - ss_gross_nominal)
-        w_tax = min(cash_target, bal_tax)
-        rem = cash_target - w_tax
-        w_pre = min(rem, bal_pre)
-        w_pre = max(w_pre, forced_rmd)               # RMD floor
-        rem = max(0.0, rem - w_pre)
-        w_hsa = min(rem, bal_hsa)
-        rem -= w_hsa
-        w_roth = min(rem, bal_roth)
-        rem -= w_roth
+        rem = cash_target
+        for a in order:
+            take = min(rem, avail[a.field])
+            if a.field in forced:
+                take = max(take, forced[a.field])    # RMD floor
+            took[a.field] = take
+            # `max(0.0, ...)` because a forced draw can exceed what was still
+            # needed; for every other account `take <= rem` already.
+            rem = max(0.0, rem - take)
 
-        ordinary_nom = w_pre + conversions_nominal
-        ltcg_nom = w_tax * gain_frac
+        ordinary_nom = conversions_nominal
+        ltcg_nom = 0.0
+        for a in order:
+            if a.tax_character == SCHEMA.CHARACTER_ORDINARY:
+                ordinary_nom += took[a.field]
+            elif a.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
+                ltcg_nom += took[a.field]
+        ltcg_nom *= gain_frac
         ss_taxable = ss_taxable_amount(ss_gross_nominal,
                                        ordinary_nom + ltcg_nom, mfj)
         ordinary_before_ded_nom = ordinary_nom + ss_taxable
@@ -289,7 +359,16 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
             over_threshold_nom = max(0.0, magi_niit_nom - threshold_nom)
             niit_nom = NIIT_RATE * min(ltcg_nom, over_threshold_nom)
         fed += niit_nom
-        penalty = (EARLY_WD_RATE * w_pre) if age < EARLY_WD_AGE else 0.0
+        # The penalty follows the DECLARATION, not a module constant. That
+        # constant could only ever charge the pre-tax 401(k), which is exactly
+        # why a governmental 457(b) -- the one tax-deferred account a
+        # separated employee may draw at any age without it -- had no way to
+        # be modelled here.
+        penalty = 0.0
+        for a in order:
+            if (a.early_penalty_age is not None
+                    and age < a.early_penalty_age):
+                penalty += a.early_penalty_rate * took[a.field]
         # State tax. The flat rate is the default and stays exactly as it
         # was; an archetype replaces it with a shape rather than adding to it.
         if p.state_archetype:
@@ -311,23 +390,37 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
             break
         tax_guess = tax_total
 
-    gross = w_tax + w_pre + w_hsa + w_roth
+    gross = 0.0
+    for a in order:
+        gross += took[a.field]
     available = gross + ss_gross_nominal - tax_guess
     delivered = min(need_after_tax_nominal, max(0.0, available))
     deposit_back = max(0.0, available - need_after_tax_nominal)
     shortfall = max(0.0, need_after_tax_nominal - available)
 
     out = accounts.copy()
-    out.taxable = bal_tax - w_tax + deposit_back     # RMD/SS excess reinvested
-    out.pretax_401k = bal_pre - w_pre
-    out.hsa = bal_hsa - w_hsa
-    out.roth_ira = accounts.roth_ira - w_roth
+    for a in order:
+        # An account the stack does not hold cannot have been drawn (its
+        # balance was zero and so was any forced floor), so there is nothing
+        # to write. The reinvestment account is written unconditionally: if a
+        # jurisdiction somehow does not hold it, `setattr` refuses and says
+        # so, which is the right outcome when the alternative is a forced
+        # withdrawal landing nowhere.
+        if a is reinvest:
+            setattr(out, a.field,
+                    raw[a.field] - took[a.field] + deposit_back)
+        elif a.field in held:
+            setattr(out, a.field, raw[a.field] - took[a.field])
 
     magi_agi = ordinary_nom + ltcg_nom + ss_taxable
     flow_err = abs((gross + ss_gross_nominal)
                    - (delivered + tax_guess + deposit_back)) if shortfall <= 1.0 else 0.0
+    capital_gain_wd = 0.0
+    for a in order:
+        if a.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
+            capital_gain_wd += took[a.field]
     return dict(accounts=out, tax_total=tax_guess, penalty=penalty,
-                taxable_wd=w_tax, gain_fraction_used=gain_frac,
+                taxable_wd=capital_gain_wd, gain_fraction_used=gain_frac,
                 ordinary_taxable_real=taxable_ord_nom / cpi,
                 niit_nominal=niit_nom,
                 ss_taxable=ss_taxable, magi_agi_nominal=magi_agi,
