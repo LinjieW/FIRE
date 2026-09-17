@@ -57,6 +57,7 @@ except ImportError:
     sys.exit(2)
 
 import webview  # noqa: E402
+import gauge_box as GAUGE  # noqa: E402
 
 
 def check_storage_seam_source():
@@ -303,12 +304,402 @@ def wait_js(window, code, timeout, poll=0.5):
     return False
 
 
+#: 14.0 Phase 2 (E55, user-ruled 2026-09-11): a NEW plan holds each section's
+#: content behind its "section answered" button until that button is pressed.
+#: The flows below were written for fields, not for that button, so they open
+#: every section right after arriving and go on testing what they were written
+#: for. The answer-first behaviour itself is checked on its own, in
+#: check_answer_first.
+OPEN_SECTIONS = ("(() => { let b, n = 0;"
+                 " while ((b = document.querySelector('#wizStep [data-expand-section]')) && n < 60)"
+                 " { b.click(); n++; } return n; })()")
+
+
+def open_sections(window):
+    return js(window, OPEN_SECTIONS)
+
+
+def start_fresh(window):
+    js(window, 'document.getElementById("startFresh").click()')
+    open_sections(window)
+
+
+def next_step(window):
+    js(window, 'document.getElementById("wizNext").click()')
+    open_sections(window)
+
+
+def check_wizard_self_sufficiency(window):
+    """Phase 15 ruling (2026-09-10): the wizard must be self-sufficient.
+
+    Two defects had one shape -- something on the common path did nothing, or
+    never appeared, unless a switch was first found in Advanced: the parents
+    table on the family step, and two layoff fields on the assumptions step
+    gated on `layoff.enabled`. Driven in a real WebView, because a declaration
+    in STEPS is not the same as a user being able to reach it (LESSONS 27).
+
+    Leaves the page on the assumptions step with `layoff.enabled` restored, so
+    the flow that calls this carries on exactly where it was.
+    """
+    def rail(pattern):
+        open_sections(window)
+        js(window, """(() => {
+          const b = [...document.querySelectorAll('#wizardRail .rail-step')]
+            .find(x => %s.test(x.textContent));
+          if (!b) throw new Error('rail step missing');
+          b.click();
+        })()""" % pattern)
+        time.sleep(0.6)
+        open_sections(window)
+
+    rail("/假设|Assumptions/")
+    box = '#wizStep .field[data-path="layoff.enabled"] input[type="checkbox"]'
+    before = js(window, 'document.querySelector(%r)?.checked ?? null' % box)
+    check("the layoff switch is reachable on the assumptions step, not only in Advanced",
+          before is not None, str(before))
+    if before is not None:
+        if not before:
+            js(window, 'document.querySelector(%r).click()' % box)
+            time.sleep(0.6)
+        shown = json.loads(js(window, """JSON.stringify(["layoff.decay_from_age",
+            "layoff.gap_months_per_year_of_age"].map(p => {
+              const f = document.querySelector(`#wizStep .field[data-path="${p}"]`);
+              return !!f && getComputedStyle(f).display !== "none";
+            }))""") or "[]")
+        check("switching layoff on in the wizard reveals the two fields it gates",
+              shown == [True, True], str(shown))
+        if not before:
+            js(window, 'document.querySelector(%r).click()' % box)
+            time.sleep(0.6)
+    rail("/家庭|Family/")
+    mode_sel = '#wizStep .field[data-path="parents.mode"] select'
+    mode = js(window, 'document.querySelector(%r)?.value ?? null' % mode_sel)
+    check("the parent module switch sits on the family step with its table",
+          mode is not None, str(mode))
+    note = js(window, 'document.getElementById("parentsModeNote")?.textContent || ""') or ""
+    check("with the module off, the family step says the parents table does not count",
+          mode not in (None, "off") or ("关闭" in note or "currently off" in note.lower()),
+          "%s / %s" % (mode, note[:80]))
+    rail("/假设|Assumptions/")
+
+
+def check_answer_first(window):
+    """14.0 Phase 2 (E55, user-ruled 2026-09-11), driven rather than asserted.
+
+    A new plan asks each section's switches first and holds the rest behind a
+    "section answered" button; an amount switch is asked as "do you have one";
+    a required blank inside a held section opens it instead of blocking with
+    nothing highlighted; and -- the acceptance this was built for -- once the
+    switches are answered, changing any other field on a step changes nothing
+    that is visible. Ends on a reloaded, fresh page.
+    """
+    def fresh():
+        js(window, "localStorage.clear(); location.reload()")
+        time.sleep(2.5)
+        # Raw click, NOT start_fresh(): these checks are about the held state.
+        js(window, 'document.getElementById("startFresh").click()')
+        time.sleep(0.8)
+
+    def rail(pattern):
+        open_sections(window)
+        js(window, """(() => {
+          const b = [...document.querySelectorAll('#wizardRail .rail-step')]
+            .find(x => %s.test(x.textContent));
+          if (!b) throw new Error('rail step missing');
+          b.click();
+        })()""" % pattern)
+        time.sleep(0.6)
+
+    def seen():
+        return json.loads(js(window, """JSON.stringify((() => {
+          const h = document.getElementById('wizStep');
+          const v = [...h.querySelectorAll('.field[data-path]')]
+            .filter(f => getComputedStyle(f).display !== 'none');
+          return { title: (h.querySelector('.sec-title') || {}).textContent || '',
+                   paths: v.map(f => f.dataset.path),
+                   gates: v.filter(f => 'gate' in f.dataset).length,
+                   held: [...h.querySelectorAll('[data-expand-section]')].map(b => b.dataset.expandSection) };
+        })())""") or "{}")
+
+    # -- leaving a step with sections still held opens them and stays, once --
+    fresh()
+    first = seen()
+    js(window, 'document.getElementById("wizNext").click()')
+    time.sleep(0.6)
+    stayed = seen()
+    check("Next on a step with held sections opens them and stays on the step",
+          first.get("held") == ["basics:_"] and stayed.get("held") == []
+          and bool(re.search("基本|Basics", stayed.get("title", "")))
+          and len(stayed.get("paths", [])) > len(first.get("paths", [])),
+          json.dumps({"held": first.get("held"), "after": stayed.get("held"),
+                      "title": stayed.get("title")}, ensure_ascii=False))
+    js(window, 'document.getElementById("wizNext").click()')
+    time.sleep(0.8)
+    moved = seen()
+    check("the second Next moves on", bool(re.search("持仓|Portfolio", moved.get("title", ""))),
+          moved.get("title", ""))
+
+    # -- a required blank is flagged once Next has opened its section --
+    fresh()
+    js(window, """(() => {
+      const c = document.querySelector('#wizStep .field[data-path="already_fired.enabled"] input[type="checkbox"]');
+      if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change', {bubbles: true})); }
+    })()""")
+    time.sleep(0.5)
+    held_before = seen()["held"]
+    js(window, 'document.getElementById("wizNext").click()')   # opens what was held
+    time.sleep(0.6)
+    js(window, 'document.getElementById("wizNext").click()')   # validates
+    time.sleep(0.8)
+    after = seen()
+    flagged = js(window, """!!document.querySelector(
+      '#wizStep .field[data-path="already_fired.actual_fire_date"] input.invalid')""")
+    check("a required blank in a held section is flagged on Next, on the same step",
+          held_before == ["basics:_"] and after.get("held") == [] and bool(flagged)
+          and bool(re.search("基本|Basics", after.get("title", ""))),
+          json.dumps({"held_before": held_before, "held_after": after.get("held"),
+                      "flagged": flagged, "title": after.get("title")}, ensure_ascii=False))
+
+    # -- a new plan: switches first, the rest behind one button per section --
+    fresh()
+    basics = seen()
+    check("a new plan shows only the step's switches, held behind its button",
+          bool(basics.get("paths")) and basics.get("gates") == len(basics["paths"])
+          and basics.get("held") == ["basics:_"], json.dumps(basics, ensure_ascii=False))
+    js(window, "document.querySelector('#wizStep [data-expand-section]').click()")
+    time.sleep(0.4)
+    opened = seen()
+    check("pressing the button shows the rest of the section",
+          opened.get("held") == [] and len(opened.get("paths", [])) > len(basics.get("paths", [])),
+          "%d -> %d" % (len(basics.get("paths", [])), len(opened.get("paths", []))))
+    rail("/收入与储蓄|Income/")
+    income = seen()
+    check("on income every section with switches is held and only switches show",
+          len(income.get("held", [])) >= 2 and income.get("gates") == len(income.get("paths", [])),
+          json.dumps({"held": income.get("held"), "visible": len(income.get("paths", [])),
+                      "gates": income.get("gates")}))
+    hsa = '#wizStep .field[data-path="contributions.hsa_limit_y1"]'
+    check("an HSA is asked as a question before any amount box",
+          bool(js(window, "!!document.querySelector(%r) && !document.querySelector(%r)"
+                          % (hsa + " select[data-has-amount]", hsa + " input"))))
+    js(window, """(() => { const s = document.querySelector(%r);
+      s.value = 'yes'; s.dispatchEvent(new Event('change', {bubbles: true})); })()"""
+       % (hsa + " select[data-has-amount]"))
+    time.sleep(0.4)
+    check("answering yes puts the amount box in the question area",
+          bool(js(window, "!!document.querySelector(%r)" % (hsa + " input"))))
+    js(window, """(() => { const i = document.querySelector(%r);
+      i.value = '4400'; i.dispatchEvent(new Event('input', {bubbles: true}));
+      i.dispatchEvent(new Event('change', {bubbles: true})); })()""" % (hsa + " input"))
+    time.sleep(0.4)
+    tier = '#wizStep .field[data-path="contributions.hsa_coverage_tier"]'
+    check("the facts an HSA amount reveals stay held until the section is opened",
+          not js(window, "!!document.querySelector(%r)" % tier))
+    js(window, "document.querySelector('#wizStep [data-expand-section=\"income:limits\"]').click()")
+    time.sleep(0.4)
+    check("opening the section shows the facts the amount revealed",
+          bool(js(window, "!!document.querySelector(%r)" % tier)))
+    js(window, """(() => { const s = document.querySelector(%r);
+      s.value = 'no'; s.dispatchEvent(new Event('change', {bubbles: true})); })()"""
+       % (hsa + " select[data-has-amount]"))
+    time.sleep(0.4)
+
+    # -- the acceptance: answered switches, then every other field --
+    fill_rest = """JSON.stringify((() => {
+      const host = document.getElementById('wizStep');
+      const key = () => [...host.querySelectorAll('.field[data-path]')]
+        .filter(f => getComputedStyle(f).display !== 'none').map(f => f.dataset.path).join('|');
+      const before = key();
+      const q = p => host.querySelector('.field[data-path="' + p + '"]');
+      const paths = [...host.querySelectorAll('.field[data-path]')]
+        .filter(f => !('gate' in f.dataset) && getComputedStyle(f).display !== 'none'
+                     && !f.querySelector('.dest-search') && !f.querySelector('[data-account-add]'))
+        .map(f => f.dataset.path);
+      const fire = (el, kinds) => kinds.forEach(k => el.dispatchEvent(new Event(k, {bubbles: true})));
+      let tried = 0; const changed = [];
+      for (const p of paths) {
+        const f = q(p); if (!f) { changed.push(p + ' (gone)'); continue; }
+        const cb = f.querySelector('input[type="checkbox"]'), sel = f.querySelector('select'),
+              inp = f.querySelector('input:not([type="checkbox"])');
+        let restore = null;
+        if (cb) {
+          const old = cb.checked; cb.checked = !old; fire(cb, ['change']);
+          restore = () => { const c = q(p).querySelector('input[type="checkbox"]'); c.checked = old; fire(c, ['change']); };
+        } else if (sel && sel.options.length > 1) {
+          const old = sel.value; sel.value = [...sel.options].find(o => o.value !== old).value; fire(sel, ['change']);
+          restore = () => { const s = q(p).querySelector('select'); s.value = old; fire(s, ['change']); };
+        } else if (inp) {
+          const old = inp.value;
+          inp.value = inp.type === 'number' ? String((+old || 0) + 1) : (inp.type === 'date' ? old : old + '1');
+          fire(inp, ['input', 'change']);
+          restore = () => { const i = q(p).querySelector('input:not([type="checkbox"])'); i.value = old; fire(i, ['input', 'change']); };
+        } else continue;
+        tried++;
+        if (key() !== before) changed.push(p);
+        restore();
+      }
+      return { tried, changed, unchanged_after: key() === before };
+    })())"""
+    for name, pattern in (("basics", "/基本|Basics/"), ("portfolio", "/持仓|Portfolio/"),
+                          ("income", "/收入与储蓄|Income/"), ("assumptions", "/假设|Assumptions/"),
+                          ("relocation", "/搬迁|Relocation/")):
+        rail(pattern)
+        open_sections(window)
+        result = json.loads(js(window, fill_rest) or "{}")
+        check("once its switches are answered, changing any other field on %s changes nothing visible" % name,
+              result.get("tried", 0) > 0 and result.get("changed") == [] and result.get("unchanged_after") is True,
+              json.dumps(result)[:300])
+
+    js(window, "localStorage.clear(); location.reload()")
+    time.sleep(2.5)
+
+
+def confirm_relocation_identity(window):
+    """Supply this scenario's NRA assumption through the actual control.
+
+    Fresh plans now deliberately require confirmation. Existing smoke flows
+    must answer that question before expecting calculated figures or walking
+    past the relocation step; missing confirmation is not a product defect.
+    """
+    open_sections(window)
+    js(window, '''(() => {
+      const rail = [...document.querySelectorAll('#wizardRail .rail-step')];
+      const move = rail.find(b => /搬迁|Relocation/.test(b.textContent));
+      if (!move) throw new Error('relocation rail is missing');
+      move.click();
+    })()''')
+    open_sections(window)
+    selector = '.field[data-path="ss_nra.residency_status"] select'
+    offered = js(window, 'document.querySelector(%r)?.value' % selector)
+    # E52: absence used to skip the two checks below and still read as a pass.
+    # That is LESSONS 50's shape -- "look it up, and if it is not there, quietly
+    # test something else". It did not actually skip (the first shipped preset
+    # enables relocation, so the control renders), but nothing said so, and a
+    # reordering of `PRESETS` would have deleted ten checks with nothing going
+    # red. Absence is now a failure that names itself.
+    check("the relocation identity control is on the page to be answered",
+          offered is not None,
+          "absent -- the two checks below did not run, which is exactly the "
+          "silent-skip OPEN_ITEMS E52 was opened for")
+    if offered is not None:
+        check("a fresh relocation plan requires identity confirmation",
+              offered == "unconfirmed", repr(offered))
+        js(window, '''const s=document.querySelector(%r);
+          s.value="nra"; s.dispatchEvent(new Event("change", {bubbles:true}));
+        ''' % selector)
+        check("the relocation identity control accepts the smoke scenario's NRA choice",
+              js(window, 'document.querySelector(%r).value' % selector) == "nra")
+    open_sections(window)
+    js(window, 'document.querySelector("#wizardRail .rail-step").click()')
+    open_sections(window)
+
+
+def check_welcome_intro(window):
+    ready = wait_js(window, '!!document.querySelector("#fire-intro[open]")', 15)
+    check("welcome intro actually opens on startup", ready)
+    if not ready:
+        return
+    before = js(window, 'JSON.stringify(FIREPlanStore.list()) + JSON.stringify(localStorage)')
+    check("welcome intro is English in the default Chinese app",
+          js(window, r'!/[\u3400-\u9fff]/.test(document.getElementById("fire-intro").textContent)'))
+    check("intro Start is focusable immediately",
+          js(window, 'document.activeElement.id === "introStart" && !document.getElementById("introStart").disabled'))
+    js(window, 'document.getElementById("introReplay").click()')
+    check("welcome effects end by three seconds",
+          js(window, 'document.getElementById("fire-intro").getAnimations({subtree:true}).every(a => a.effect.getComputedTiming().endTime <= 3000)'))
+    js(window, 'document.getElementById("introStart").click()')
+    closed = wait_js(window, '!document.getElementById("fire-intro").open', 3)
+    check("native Start closes the welcome dialog", closed)
+    # Native close clears .open before dispatching its queued close event.
+    # Wait for the focus handoff itself, rather than racing the event queue.
+    check("Start reveals welcome without creating a plan",
+          wait_js(window, 'document.getElementById("v-welcome").classList.contains("show") && document.activeElement.id === "startFresh"', 3),
+          str(js(window, '({view:document.querySelector(".view.show").id, focus:document.activeElement.id})')))
+    check("intro leaves plans and draft storage untouched",
+          js(window, 'JSON.stringify(FIREPlanStore.list()) + JSON.stringify(localStorage)') == before)
+    js(window, 'window.WelcomeIntro.open()')
+    check("welcome does not reopen during the same page session",
+          js(window, '!document.getElementById("fire-intro").open'))
+
+
+def check_wizard_polish(window):
+    """Drive the shipped controls and CSS, including both responsive states."""
+    start_fresh(window)
+    original = js(window, "document.querySelector('.field[data-path=\"state.start_age\"] input').value")
+    check("wizard polish keeps the wide overview visible",
+          js(window, '!document.getElementById("wizOverview").hidden && document.getElementById("wizOverviewToggle").hidden'))
+    check("wizard polish wide heading stays next to its toolbar",
+          js(window, 'document.querySelector(".wizard-main").getBoundingClientRect().top-document.querySelector(".wizard-tools").getBoundingClientRect().bottom<40'))
+    check("wizard polish keeps real help copy readable on demand",
+          js(window, '(() => { const d=document.querySelector("details.wizard-field-help"); if(!d)return false; d.open=true; return d.querySelector("div").textContent.length>10 && getComputedStyle(d.querySelector("div")).display!=="none"; })()'))
+    help_path = js(window, 'document.querySelector("details.wizard-field-help[open]").dataset.helpPath')
+    js(window, "document.querySelector('[data-lang=\"en\"]').click()")
+    check("wizard polish restores open help when language rebuilds the step",
+          js(window, "(document.querySelector('details.wizard-field-help[data-help-path=\"%s\"]')||{}).open" % help_path))
+    check("wizard polish new chrome is translated",
+          js(window, 'document.getElementById("wizOverviewToggle").textContent==="Plan overview" && document.querySelector("#wizMore summary").textContent==="More"'))
+    window.resize(1000, 850)
+    time.sleep(0.4)
+    check("wizard polish starts the narrow overview collapsed",
+          js(window, 'document.getElementById("wizOverview").hidden && !document.getElementById("wizOverviewToggle").hidden'))
+    js(window, 'document.getElementById("wizOverviewToggle").click()')
+    check("wizard polish overview opens by its visible button",
+          js(window, '!document.getElementById("wizOverview").hidden && document.getElementById("wizOverviewToggle").getAttribute("aria-expanded")==="true"'))
+    js(window, 'document.getElementById("wizOverviewToggle").click(); document.querySelector("#wizMore summary").click(); document.getElementById("wizFeedback").click()')
+    check("wizard polish feedback opens from More",
+          wait_js(window, '!document.getElementById("feedbackModal").classList.contains("hidden")', 3))
+    js(window, 'document.getElementById("feedbackClose").click()')
+    time.sleep(0.3)
+    window.resize(390, 850)
+    time.sleep(0.4)
+    check("wizard polish single column does not overflow",
+          js(window, 'document.documentElement.scrollWidth<=innerWidth+1'))
+    check("wizard polish narrow rail keeps titles on one line",
+          js(window, 'document.getElementById("wizardRail").getBoundingClientRect().height<60 && [...document.querySelectorAll("#wizardRail .rail-t")].every(e=>getComputedStyle(e).whiteSpace==="nowrap")'))
+    js(window, 'document.getElementById("wizOverviewToggle").click()')
+    check("wizard polish narrow overview opens between tools and form",
+          js(window, '(() => {const a=document.getElementById("wizOverview").getBoundingClientRect(), b=document.querySelector(".wizard-tools").getBoundingClientRect(), c=document.querySelector(".wizard-main").getBoundingClientRect();return a.top>=b.bottom && a.bottom<=c.top;})()'))
+    js(window, 'document.getElementById("wizOverviewToggle").click()')
+    check("wizard polish layout and help did not change an input",
+          js(window, "document.querySelector('.field[data-path=\"state.start_age\"] input').value") == original)
+    window.resize(1200, 850)
+    js(window, "document.querySelector('[data-lang=\"zh\"]').click()")
+    time.sleep(0.3)
+
+
 def drive(window):
     try:
         time.sleep(2.5)                                     # first paint
         js(window, "localStorage.clear()")
         js(window, "location.reload()")
         time.sleep(2.5)
+
+        check_welcome_intro(window)
+
+        # ---- COLD: the first thing a new user can click ---------------------
+        # FIRST, before any flow below confirms anything, because that is the
+        # whole point. This ran green for a whole slice while the button was
+        # broken: the archive check further down drives the same button, but by
+        # then an earlier flow has answered the identity control and
+        # `restartBtn` does not reset `state.config`. The only check that ran it
+        # cold lived in `frozen_ui_smoke`, which runs solely inside the
+        # section 8 candidate gate -- unrun for 37 commits.
+        #
+        # What it caught: start-up reset `ss_nra.residency_status` to
+        # "unconfirmed" just after loading a preset that has relocation ON, so
+        # `check_config` refused the example run and a first launch saw a
+        # refusal instead of results.
+        js(window, '(document.getElementById("startExample")||{click(){}}).click()')
+        cold = wait_js(window,
+                       '[...document.querySelectorAll(".view")].find('
+                       'v=>v.classList.contains("show")).id === "v-results"',
+                       timeout=120)
+        check("the example run works on a cold start, before anything is confirmed",
+              cold,
+              js(window, '(document.getElementById("toast")||{}).textContent || '
+                         '(document.querySelector(".view.show")||{}).id || ""'))
+        js(window, 'document.getElementById("restartBtn").click()')
+        time.sleep(0.4)
 
         # ---- Phase 0D: raw localStorage envelope helper in real WKWebView --
         # The migration bridge is intentionally not part of init.  Exercise
@@ -461,8 +852,13 @@ def drive(window):
         js(window, "localStorage.clear(); location.reload()")
         time.sleep(2.5)
 
+        # ---- 14.0 Phase 2: answer-first sections (E55) ----
+        check_answer_first(window)
+        check_wizard_polish(window)
+
         # ---- flow 2: wizard walk -> precision ----
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
+        confirm_relocation_identity(window)
 
         # ---- E37: the governmental 457(b) is a field a user can fill ----
         # Driven rather than grepped: the whole arc from E34 to E37 was about
@@ -472,7 +868,7 @@ def drive(window):
         for _ in range(8):
             if js(window, '!!document.querySelector(%r)' % b457):
                 break
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.2)
         check("the wizard has a governmental 457(b) balance field",
               bool(js(window, '!!document.querySelector(%r)' % b457)))
@@ -495,7 +891,8 @@ def drive(window):
                    ' b.value="0";'
                    ' b.dispatchEvent(new Event("input", {bubbles:true}));' % b457)
         time.sleep(0.3)
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
+        confirm_relocation_identity(window)
 
         # ---- E33: the sidebar's savings figure is the ENGINE's ----
         # This is the seam that failed. The page used to compute the figure
@@ -513,7 +910,7 @@ def drive(window):
         for _ in range(8):
             if js(window, f'!!document.querySelector({mode_sel!r})'):
                 break
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.2)
         check("the savings-mode control is reachable in the wizard",
               bool(js(window, f'!!document.querySelector({mode_sel!r})')))
@@ -536,12 +933,79 @@ def drive(window):
         check("moving the savings-rate control moves the sidebar figure",
               low != high and bool(re.search(r"[0-9]", low)) and bool(re.search(r"[0-9]", high)),
               f"{low!r} vs {high!r}")
+
+        # ---- reported from the installed app: a refusal wearing money type ---
+        # Ticking ESPP without the number it then requires turned the 24px
+        # savings readout into `缺 contributions.espp_qualifying_sale_age`.
+        # A config path is diagnostic text, not product copy. 40 controls
+        # declare `requiredIf`, so this is a shared path, not an ESPP quirk.
+        # ---- reported from the installed app: the step was one flat list ---
+        # 125 controls with no structure. Sections must actually render, and
+        # -- the part that matters -- must not swallow anything: every visible
+        # control still has to be in the DOM.
+        before_fields = js(window,
+            'document.querySelectorAll("#wizStep .field").length') or 0
+        headings = js(window,
+            '[...document.querySelectorAll("#wizStep .field-section")]'
+            '.map(h=>h.textContent.trim()).filter(Boolean)') or []
+        check("the income step renders section headings",
+              len(headings) >= 3, headings)
+        check("headings are not empty and not duplicated",
+              len(headings) == len(set(headings)) and all(headings), headings)
+        # Grouping must be a re-arrangement, never a filter: count the controls
+        # inside sections and confirm none went missing.
+        in_sections = js(window,
+            'document.querySelectorAll("#wizStep .field-grid .field").length') or 0
+        check("every rendered control still lives inside a rendered grid",
+              in_sections == before_fields,
+              f"{in_sections} inside grids vs {before_fields} total")
+
+        espp_sel = '.field[data-path="contributions.espp_enabled"] input[type=checkbox]'
+        for _ in range(8):
+            if js(window, f'!!document.querySelector({espp_sel!r})'):
+                break
+            next_step(window)
+            time.sleep(0.2)
+        if js(window, f'!!document.querySelector({espp_sel!r})'):
+            js(window, f"""const c=document.querySelector({espp_sel!r});
+              if (!c.checked) {{ c.checked=true;
+                c.dispatchEvent(new Event("change", {{bubbles:true}})); }}""")
+            time.sleep(0.3)
+            mode = '.field[data-path="contributions.espp_disposition_mode"] select'
+            if js(window, f'!!document.querySelector({mode!r})'):
+                js(window, f"""const m=document.querySelector({mode!r});
+                  m.value="qualifying_hold";
+                  m.dispatchEvent(new Event("change", {{bubbles:true}}));""")
+            # The estimate is debounced at 350ms; poll for the refusal instead
+            # of guessing a sleep.
+            wait_js(window,
+                    '(document.getElementById("wizSavingsNote")||{}).hidden === false',
+                    timeout=12)
+            money_cell = js(window,
+                '(document.getElementById("wizSavingsCell")||{}).textContent||""') or ""
+            note = js(window,
+                '(document.getElementById("wizSavingsNote")||{}).textContent||""') or ""
+            check("an incomplete plan leaves no config path in the money cell",
+                  "." not in money_cell and "espp" not in money_cell.lower(),
+                  f"money cell showed {money_cell!r}")
+            check("the refusal appears as its own warning line, not as the figure",
+                  bool(note.strip()) and "contributions." not in note,
+                  f"note showed {note!r}")
+            check("the warning names a control label the user can find",
+                  any(ch for ch in note if "\u4e00" <= ch <= "\u9fff")
+                  or bool(re.search(r"[A-Za-z]{4,}", note)),
+                  f"note showed {note!r}")
+            js(window, f"""const c=document.querySelector({espp_sel!r});
+              if (c && c.checked) {{ c.checked=false;
+                c.dispatchEvent(new Event("change", {{bubbles:true}})); }}""")
+            time.sleep(0.4)
         js(window, f"""const m=document.querySelector({mode_sel!r});
           m.value="residual"; m.dispatchEvent(new Event("change", {{bubbles:true}}));""")
         time.sleep(0.3)
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
+        confirm_relocation_identity(window)
         for _ in range(3):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.15)
         premium_path = '.field[data-path="medical.premium_aca"]'
         check("medical premium uses the existing single numeric control",
@@ -564,7 +1028,7 @@ def drive(window):
         time.sleep(2.5)
         js(window, 'document.getElementById("resumeDraft").click()')
         for _ in range(3):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.15)
         check("unconfirmed premium survives save and reload without becoming zero",
               js(window, f'document.querySelector(\'{premium_path} input[type="number"]\').value') == "12345"
@@ -572,7 +1036,7 @@ def drive(window):
         js(window, f'''const p=document.querySelector('{premium_path} input[type="number"]');
           p.value="23456"; p.dispatchEvent(new Event("input", {{bubbles:true}}));''')
         for _ in range(3):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.15)
         annual_path = '.field[data-path="medical.annual_trajectory_enabled"]'
         delta_path = '.field[data-path="medical.cpi_delta_routine"]'
@@ -591,7 +1055,7 @@ def drive(window):
         js(window, f'''const d=document.querySelector('{delta_path} input[type="number"]');
           d.value="0"; d.dispatchEvent(new Event("input", {{bubbles:true}}));''')
         for _ in range(2):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.15)
         check("wizard walk reaches precision",
               js(window, '[...document.querySelectorAll(".view")].find(v=>v.classList.contains("show")).id') == "v-precision")
@@ -606,13 +1070,13 @@ def drive(window):
               (js(window, 'document.querySelectorAll("#plansList .plan-row").length') or 0) >= 1)
         js(window, 'document.querySelector("#plansList .plan-row [data-a=open]").click()')
         for _ in range(3):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.15)
         check("confirmed premium survives plan save and open",
               js(window, f'document.querySelector(\'{premium_path} input[type="number"]\').value') == "23456"
               and js(window, f'document.querySelector(\'{premium_path} [data-medical-premium-confirm]\').checked') is True)
         for _ in range(3):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.15)
         check("annual medical opt-in and explicit zero survive plan save and open",
               js(window, f'document.querySelector(\'{annual_path} input[type="checkbox"]\').checked') is True
@@ -621,18 +1085,19 @@ def drive(window):
         time.sleep(0.3)
 
         # ---- flow 6: couple mode is a first-class path ----
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
+        confirm_relocation_identity(window)
         js(window, 'const sel = document.querySelector(\'.field[data-path="household.enabled"] select\'); sel.value = "true"; sel.dispatchEvent(new Event("change"))')
         time.sleep(0.3)
         check("couple: spouse basics appear",
               js(window, '!!document.querySelector(\'.field[data-path="household.spouse_age_offset"]\') && getComputedStyle(document.querySelector(\'.field[data-path="household.spouse_age_offset"]\')).display !== "none"'))
-        js(window, 'document.getElementById("wizNext").click()')     # -> portfolio
+        next_step(window)     # -> portfolio
         time.sleep(0.2)
         check("couple: side-by-side balances",
               js(window, 'getComputedStyle(document.querySelector(\'.field[data-path="household.spouse_initial_pretax"]\')).display !== "none"'))
         check("couple: sidebar shows spouse rows",
               "配偶" in (js(window, 'document.getElementById("wizHoldings").textContent') or ""))
-        js(window, 'document.getElementById("wizNext").click()')     # -> income
+        next_step(window)     # -> income
         time.sleep(0.2)
         check("couple: spouse earner block in income step",
               js(window, 'getComputedStyle(document.querySelector(\'.field[data-path="household.spouse_base_salary_pre"]\')).display !== "none"'))
@@ -671,8 +1136,8 @@ def drive(window):
         js(window, "location.reload()")
         time.sleep(2.5)
         js(window, 'document.getElementById("resumeDraft").click()')
-        js(window, 'document.getElementById("wizNext").click()')
-        js(window, 'document.getElementById("wizNext").click()')
+        next_step(window)
+        next_step(window)
         restored_owners = json.loads(js(
             window,
             '''JSON.stringify(["pension","rental","parttime","equity"].map(kind =>
@@ -681,9 +1146,10 @@ def drive(window):
               restored_owners == [
                   "primary", "household", "spouse", "unspecified"],
               str(restored_owners))
-        js(window, 'document.getElementById("wizNext").click()')  # -> assumptions / SSA import
+        next_step(window)  # -> assumptions / SSA import
         check("SSA import control is present in the real WebView",
               bool(js(window, 'document.getElementById("ssaiFile")')))
+        check_wizard_self_sufficiency(window)
         ssa_rows = "".join(
             f'<osss:Earnings startYear="{year}" endYear="{year}">'
             f'<osss:FicaEarnings>{amount}</osss:FicaEarnings>'
@@ -776,8 +1242,8 @@ def drive(window):
         js(window, "location.reload()")
         time.sleep(2.5)
         js(window, 'document.getElementById("resumeDraft").click()')
-        js(window, 'document.getElementById("wizNext").click()')
-        js(window, 'document.getElementById("wizNext").click()')
+        next_step(window)
+        next_step(window)
         compatible_owners = json.loads(js(
             window,
             '''JSON.stringify(["pension","rental"].map(kind =>
@@ -796,10 +1262,40 @@ def drive(window):
         # both sides' tests were green.
         js(window, 'localStorage.clear(); location.reload()')
         time.sleep(2.5)
-        js(window, 'document.getElementById("startFresh").click()')
+
+        # ---- Roadmap 12 Phase 8: backup, on the welcome screen ----
+        # It is HERE and not behind a run on purpose: backing up the store
+        # needs no plan, and making somebody run a simulation first would put
+        # the button behind the exact failure a backup exists for. The ruling
+        # of 2026-09-04 is that RESTORE gets no button at all, so the page has
+        # to say why -- an absent feature with no explanation reads as an
+        # oversight.
+        check("the backup control is on the welcome screen, before any run",
+              js(window, '!!document.getElementById("bkRun")'))
+        check("restore has no control anywhere on the page",
+              js(window, '!document.querySelector("[id^=restore], #rsRun,'
+                         ' #restoreRun")'))
+        bk_note = js(window, '(document.getElementById("backupBox")||{})'
+                             '.textContent||""') or ""
+        check("and the page says why, naming the tool that replaces it",
+              "recover_without_app.py" in bk_note, bk_note[:220])
+        js(window, 'document.getElementById("bkRun").click()')
+        bk_ok = wait_js(window, '(document.getElementById("bkOut")||{}).innerHTML'
+                                ' && document.getElementById("bkOut").innerHTML.length > 30',
+                        timeout=60)
+        bk_text = js(window, '(document.getElementById("bkOut")||{})'
+                             '.textContent||""') or ""
+        check("a backup really runs and names the package it wrote",
+              bk_ok and ("backup" in bk_text or "备份" in bk_text)
+              and "warn" not in (js(window, '(document.getElementById("bkOut")'
+                                            '||{}).innerHTML||""') or ""),
+              bk_text[:220])
+
+        start_fresh(window)
+        confirm_relocation_identity(window)
         time.sleep(0.4)
         for _ in range(3):
-            js(window, 'document.getElementById("wizNext").click()')
+            next_step(window)
             time.sleep(0.2)
 
         check("the 5.0 dials render on the assumptions step",
@@ -859,6 +1355,200 @@ def drive(window):
                          ' o.length === 2 && o.includes("intermediate")'
                          ' && o.includes("range")'))
 
+        # ---- flow 7b: Roadmap 12 Phase 5's twelve new controls ----
+        # Three engine capabilities that had no way in. The unit suite proves
+        # the STEPS entries exist and that the adapter refuses bad values;
+        # neither of those can see whether the box renders or whether typing
+        # in it moves the config that gets POSTED -- the same gap flow 7 above
+        # exists for.
+        for path in ("funded_ratio.discount_rate_real",
+                     "funded_ratio.floor_annual_real"):
+            check("the funded-ratio input %s renders" % path.split(".")[-1],
+                  js(window, 'const f = document.querySelector('
+                             '`.field[data-path="%s"]`);'
+                             ' !!f && getComputedStyle(f).display !== "none"'
+                             % path))
+        # Both ship as null and BOTH must arrive blank. A 0 here would be the
+        # false zero in the one panel whose entire premise is refusing one:
+        # the ratio moves more with the discount rate than with anything else,
+        # so a guessed rate and a measured one look identical on screen.
+        for path in ("funded_ratio.discount_rate_real",
+                     "funded_ratio.floor_annual_real"):
+            check("the funded-ratio %s arrives blank, not a zero"
+                  % path.split(".")[-1],
+                  js(window, 'const i = document.querySelector('
+                             '`.field[data-path="%s"] input`);'
+                             ' !!i && i.value === ""' % path))
+        js(window, 'const set = (p, v) => { const el = document.querySelector('
+                   '`.field[data-path="${p}"] input`); el.value = v;'
+                   ' el.dispatchEvent(new Event("input", {bubbles: true}));'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true})); };'
+                   ' set("funded_ratio.discount_rate_real", "2");'
+                   ' set("funded_ratio.floor_annual_real", "45000");')
+        time.sleep(0.4)
+        js(window, 'document.getElementById("wizSave").click()')
+        time.sleep(0.6)
+        funded_written = js(
+            window,
+            'const c = JSON.parse(localStorage.getItem("fire_draft")||"{}").config;'
+            ' c && c.funded_ratio ? JSON.stringify(c.funded_ratio) : "NO_DRAFT"')
+        check("typing into the funded-ratio boxes reaches the posted config",
+              funded_written == '{"discount_rate_real":0.02,"floor_annual_real":45000}',
+              str(funded_written))
+
+        # ---- flow 7c: Roadmap 12 Phase 6's long-term-care section ----
+        # Fourteen leaves behind one select. With the module off the whole
+        # section is that select and nothing else -- which is the reason this
+        # block is in the wizard rather than under Advanced, where visibility
+        # predicates are not evaluated at all.
+        check("with care off, the section is the mode select and nothing else",
+              js(window, 'const shown = p => !!document.querySelector('
+                         '`.field[data-path="ltc.${p}"]`);'
+                         ' shown("mode") && !["lifetime_risk","onset_age",'
+                         '"onset_spread","scenario_years","scenario_onset_age",'
+                         '"scenario_level","cost_home_care","mix_home_care",'
+                         '"cost_excess_inflation"].some(shown)'))
+        js(window, 'const sel = document.querySelector('
+                   '\'.field[data-path="ltc.mode"] select\');'
+                   ' sel.value = "stochastic";'
+                   ' sel.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.5)
+        check("stochastic reveals the drawn-episode settings",
+              js(window, '["lifetime_risk","onset_age","onset_spread",'
+                         '"mix_home_care","mix_assisted_living",'
+                         '"mix_nursing_home","cost_home_care",'
+                         '"cost_assisted_living","cost_nursing_home",'
+                         '"cost_excess_inflation"].every(p =>'
+                         ' !!document.querySelector('
+                         '`.field[data-path="ltc.${p}"]`))'))
+        check("stochastic does NOT ask for the scenario's own three",
+              js(window, '!["scenario_years","scenario_onset_age",'
+                         '"scenario_level"].some(p =>'
+                         ' !!document.querySelector('
+                         '`.field[data-path="ltc.${p}"]`))'))
+        # The shares are percents on screen and fractions in the config. Getting
+        # that backwards would run every plan at a hundredth of the mix typed.
+        check("the level shares show as percents, not fractions",
+              js(window, 'const v = p => document.querySelector('
+                         '`.field[data-path="ltc.${p}"] input`).value;'
+                         ' v("mix_home_care") === "55"'
+                         ' && v("mix_nursing_home") === "20"'),
+              js(window, 'document.querySelector(\'.field[data-path='
+                         '"ltc.mix_home_care"] input\').value'))
+        js(window, 'const sel = document.querySelector('
+                   '\'.field[data-path="ltc.mode"] select\');'
+                   ' sel.value = "scenario";'
+                   ' sel.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.5)
+        check("scenario reveals its three and puts the drawn ones away",
+              js(window, 'const shown = p => !!document.querySelector('
+                         '`.field[data-path="ltc.${p}"]`);'
+                         ' ["scenario_years","scenario_onset_age",'
+                         '"scenario_level"].every(shown)'
+                         ' && !["lifetime_risk","onset_spread","mix_home_care"]'
+                         '.some(shown)'))
+        check("the level select offers exactly the three the engine prices",
+              js(window, 'const o = [...document.querySelector('
+                         '\'.field[data-path="ltc.scenario_level"] select\')'
+                         '.options].map(x => x.value).sort().join(",");'
+                         ' o === "assisted_living,home_care,nursing_home"'))
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="ltc.scenario_years"] input\');'
+                   ' el.value = "7";'
+                   ' el.dispatchEvent(new Event("input", {bubbles: true}));'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+        js(window, 'document.getElementById("wizSave").click()')
+        time.sleep(0.6)
+        check("choosing a care mode and a duration reaches the posted config",
+              js(window, 'const c = JSON.parse(localStorage.getItem("fire_draft")'
+                         '||"{}").config;'
+                         ' !!c && c.ltc.mode === "scenario"'
+                         ' && c.ltc.scenario_years === 7'),
+              js(window, 'JSON.stringify((JSON.parse(localStorage.getItem('
+                         '"fire_draft")||"{}").config||{}).ltc)'))
+        # Back off, so the rest of this flow runs on the shipped plan.
+        js(window, 'const sel = document.querySelector('
+                   '\'.field[data-path="ltc.mode"] select\');'
+                   ' sel.value = "off";'
+                   ' sel.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+
+        # The credit: hidden without a relocation, because without one it
+        # provably does nothing (its disclosure is gated the same way).
+        open_sections(window)
+        js(window, 'for (const b of document.querySelectorAll("#wizardRail button"))'
+                   ' { if (/搬迁|Relocation/.test(b.textContent)) { b.click(); break; } }')
+        open_sections(window)
+        time.sleep(0.5)
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="relocation.enabled"] input\');'
+                   ' if (el.checked) { el.checked = false;'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true})); }')
+        time.sleep(0.4)
+        check("without a relocation the credit switch is not rendered at all",
+              js(window, '!document.querySelector('
+                         '\'.field[data-path="ftc.enabled"]\')'))
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="relocation.enabled"] input\');'
+                   ' el.checked = true;'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+        check("a relocation reveals the credit switch",
+              js(window, 'const f = document.querySelector('
+                         '\'.field[data-path="ftc.enabled"]\');'
+                         ' !!f && getComputedStyle(f).display !== "none"'))
+        check("the four credit rates stay away until that switch is on",
+              js(window, '!document.querySelector('
+                         '\'.field[data-path="ftc.us_federal_rate_traditional"]\')'))
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="ftc.enabled"] input\');'
+                   ' el.checked = true;'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+        check("switching the credit on reveals all four rates",
+              js(window, '["traditional","taxable","roth","hsa"].every(k =>'
+                         ' !!document.querySelector('
+                         '`.field[data-path="ftc.us_federal_rate_${k}"]`))'))
+
+        # The ladder's five: Advanced, and CONTROLS ONLY -- the shipped window
+        # and rate must still read 35, 65 and 12 on screen. Moving any of them
+        # moves the factory four plans bit-for-bit.
+        open_sections(window)
+        js(window, 'for (const b of document.querySelectorAll("#wizardRail button"))'
+                   ' { if (/高级|Advanced/.test(b.textContent)) { b.click(); break; } }')
+        open_sections(window)
+        time.sleep(0.6)
+        js(window, '[...document.querySelectorAll("details")].forEach(d => d.open = true)')
+        time.sleep(0.4)
+        check("all five Roth-ladder controls render under Advanced",
+              js(window, '["start_age","end_age","federal_tax_rate",'
+                         '"seasoning_years","senior_age_threshold"].every(k =>'
+                         ' !!document.querySelector('
+                         '`.field[data-path="roth_ladder.${k}"]`))'))
+        ladder = js(window, 'const v = k => document.querySelector('
+                            '`.field[data-path="roth_ladder.${k}"] input`).value;'
+                            ' [v("start_age"), v("end_age"), v("federal_tax_rate")].join(",")')
+        check("the ladder still shows its shipped window and rate",
+              ladder in ("35,65,12", "35,65,12.00", "35,65,12.0"), str(ladder))
+        js(window, 'const el = document.querySelector('
+                   '\'.field[data-path="roth_ladder.end_age"] input\');'
+                   ' el.value = "70";'
+                   ' el.dispatchEvent(new Event("input", {bubbles: true}));'
+                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.4)
+        js(window, 'document.getElementById("wizSave").click()')
+        time.sleep(0.6)
+        check("editing the ladder window reaches the posted config",
+              js(window, 'const c = JSON.parse(localStorage.getItem("fire_draft")'
+                         '||"{}").config;'
+                         ' !!c && c.roth_ladder.end_age === 70'))
+        open_sections(window)
+        js(window, 'for (const b of document.querySelectorAll("#wizardRail button"))'
+                   ' { if (/假设|Assumptions/.test(b.textContent)) { b.click(); break; } }')
+        open_sections(window)
+        time.sleep(0.5)
+
         # A dial gated on a NUMBER, not on a checkbox. Only checkboxes and
         # selects rebuilt the step, so typing an HSA amount left the plan in a
         # state the server refuses -- "contributions.hsa_coverage_tier must be
@@ -867,13 +1557,22 @@ def drive(window):
         # controls sat behind three numeric gates; ten of them here. It
         # shipped in v10.0-installed-30 and was found by typing into the page,
         # so the check types too.
+        open_sections(window)
         js(window, 'for (const b of document.querySelectorAll("#wizardRail button"))'
                    ' { if (/收入与储蓄|Income/.test(b.textContent)) { b.click(); break; } }')
+        open_sections(window)
         time.sleep(0.4)
+        open_sections(window)
         check("an HSA amount is a numeric gate and its facts are hidden first",
               js(window, 'const f = document.querySelector('
                          '\'.field[data-path="contributions.hsa_coverage_tier"]\');'
                          ' !f || getComputedStyle(f).display === "none"'))
+        # 14.0 Phase 2: the amount is asked as "do you have one" first, and its
+        # number box exists once the answer is yes -- which is what a person does.
+        js(window, 'const s = document.querySelector('
+                   '\'.field[data-path="contributions.hsa_limit_y1"] select[data-has-amount]\');'
+                   ' s.value = "yes"; s.dispatchEvent(new Event("change", {bubbles: true}));')
+        time.sleep(0.3)
         js(window, 'const el = document.querySelector('
                    '\'.field[data-path="contributions.hsa_limit_y1"] input\');'
                    ' el.value = "4400";'
@@ -897,11 +1596,9 @@ def drive(window):
                   js(window, 'const i = document.querySelector('
                              '`.field[data-path="%s"] input`);'
                              ' !!i && i.value === ""' % path))
-        js(window, 'const el = document.querySelector('
-                   '\'.field[data-path="contributions.hsa_limit_y1"] input\');'
-                   ' el.value = "0";'
-                   ' el.dispatchEvent(new Event("input", {bubbles: true}));'
-                   ' el.dispatchEvent(new Event("change", {bubbles: true}));')
+        js(window, 'const s = document.querySelector('
+                   '\'.field[data-path="contributions.hsa_limit_y1"] select[data-has-amount]\');'
+                   ' s.value = "no"; s.dispatchEvent(new Event("change", {bubbles: true}));')
         time.sleep(0.4)
 
         js(window, 'document.getElementById("restartBtn").click()')
@@ -949,6 +1646,170 @@ def drive(window):
                   % label, recap.get(label) == expected,
                   "%s=%r" % (label, recap.get(label)))
 
+        # ---- Roadmap 12 Phase 9: the guardrail false-alarm study ----
+        # `server/guardrail_study.py` had zero importers. The rendering rule
+        # this checks is the whole reason the panel exists: a policy that could
+        # not be exercised must show its REASON where the number would be. Its
+        # `false_alarm_rate` really is 0.0 in the payload, and "0% false alarms"
+        # for a guardrail that was never given a chance to fire is the exact
+        # confusion this repository's first rule exists to prevent.
+        js(window, 'document.querySelector(".rtab[data-p=concl]").click()')
+        time.sleep(0.5)
+        check("the guardrail study panel renders on the conclusions page",
+              js(window, '!!document.getElementById("gstRun")'))
+        js(window, 'document.getElementById("gstRun").click()')
+        gst_ok = wait_js(window, '(document.getElementById("gstOut")||{}).innerHTML'
+                                 ' && document.getElementById("gstOut").innerHTML.length > 80',
+                         timeout=600)
+        gst = js(window, '(document.getElementById("gstOut")||{}).textContent||""') or ""
+        check("the study runs and reports a rate", gst_ok
+              and "warn" not in (js(window, '(document.getElementById("gstOut")'
+                                            '||{}).innerHTML||""') or ""),
+              gst[:220])
+        check("a policy that could not be exercised shows a reason, not a 0%",
+              ("未测量" in gst or "not measured" in gst)
+              and ("success rate" in gst or "成功率" in gst
+                   or "mid-life" in gst),
+              gst[:400])
+        check("and the panel says these thresholds are not advice",
+              "不是建议" in gst or "not advice" in gst, gst[:220])
+
+        # ---- Roadmap 12 Phase 8: the succession note ----
+        # `server/succession.py` shipped 266 lines, its own tests, and NO
+        # ROUTE -- the one document CONTINUITY_CHARTER.md names could only be
+        # produced from a Python prompt. The backup half is checked on the
+        # welcome screen further down; this is the half that describes THIS
+        # plan, which is why it lives on the conclusions page.
+        js(window, 'document.querySelector(".rtab[data-p=concl]").click()')
+        time.sleep(0.5)
+        check("the succession panel renders on the conclusions page",
+              js(window, '!!document.getElementById("sxRun")'))
+
+        # E50 -- the claimed-jurisdiction declaration. Driven rather than
+        # grepped, and driven HERE rather than asserted against the module:
+        # the module test proves the table has no holes, and this proves the
+        # table survived the trip through `/api/limitations` and onto the page.
+        # LESSONS 23 is the seam between those two, and it is the only place
+        # this could be broken while both sides stayed green.
+        scope_ok = wait_js(window,
+                           '(document.getElementById("limJurisdiction")||{})'
+                           '.innerHTML && document.getElementById('
+                           '"limJurisdiction").querySelectorAll('
+                           '".scope-table tbody tr").length > 0', timeout=25)
+        check("the jurisdiction scope table reaches the conclusions page", scope_ok)
+        scope_text = js(window, '(document.getElementById("limJurisdiction")||{})'
+                                '.textContent||""') or ""
+        # Not a substring of the page's own literals: the page holds no list of
+        # jurisdictions (LESSONS 11), so these names can only have arrived from
+        # the server's declaration.
+        check("the declaration names all three claimed jurisdictions",
+              all(name in scope_text for name in ("美国", "加拿大", "中国大陆")),
+              scope_text[:200])
+        # The half a reader is most likely to over-read, and the half that was
+        # only ever in a repository note before this slice.
+        check("it says mainland China has no rule pack",
+              "没有规则包" in scope_text, scope_text[:400])
+        check("it says naming a jurisdiction is not a legal review",
+              "律师" in scope_text and "注册" in scope_text, scope_text[:400])
+        # The Canada pack's OWN sentence, quoted rather than restated. It was
+        # accurate, unrequired and unread until 2026-09-10.
+        check("the Canada pack's own scope sentence is what the reader sees",
+              "Provincial tax, CPP/OAS" in scope_text, scope_text[:400])
+
+        js(window, 'document.getElementById("sxRun").click()')
+        sx_ok = wait_js(window, '(document.getElementById("sxOut")||{}).innerHTML'
+                                ' && document.getElementById("sxOut").innerHTML.length > 60',
+                        timeout=40)
+        check("building the succession note returns a document", sx_ok)
+        sx_text = js(window, '(document.getElementById("sxOut")||{})'
+                             '.textContent||""') or ""
+        # The claim map is rendered as claims, not inferred from absence: a
+        # reader deciding whether this file is safe to email needs to SEE the
+        # line that says it carries no credentials.
+        check("it states what it contains, including that it carries no credentials",
+              ("凭据" in sx_text or "Credentials" in sx_text)
+              and ("✗" in sx_text), sx_text[:220])
+        check("an empty account map says so rather than looking full",
+              "这里是空的" in sx_text or "This is empty" in sx_text,
+              sx_text[:220])
+        check("a save control is offered",
+              js(window, '!!document.getElementById("sxSave")'))
+
+        # ---- Roadmap 12 Phase 7: the life-transition checklist ----
+        # `server/life_transitions.py` shipped 459 lines, four routes and its
+        # own tests with `grep -c life_transition web/app.js` returning 0. The
+        # module's identity is that it PROPOSES and never applies, and the half
+        # of that promise the unit tests cannot see is on this side: what the
+        # page does when the user ticks nothing.
+        js(window, 'document.querySelector(".rtab[data-p=transition]").click()')
+        time.sleep(0.6)
+        check("the life-transition tab opens onto its own page",
+              js(window, '(([...document.querySelectorAll(".rpage")]'
+                         '.find(p=>p.classList.contains("show"))||{}).id||"none")')
+              == "rp-transition")
+        check("the kind select offers exactly the five the server knows",
+              js(window, '[...document.getElementById("ltKind").options]'
+                         '.map(o=>o.value).sort().join(",") === '
+                         '"disability,divorce,inheritance_received,'
+                         'remarriage,widowhood"'),
+              js(window, '[...document.getElementById("ltKind").options]'
+                         '.map(o=>o.value).join(",")'))
+
+        def lt_propose(kind):
+            js(window, 'const s = document.getElementById("ltKind");'
+                       ' s.value = "%s"; s.dispatchEvent(new Event("change"));'
+                       ' document.getElementById("ltPropose").click();' % kind)
+            return wait_js(window,
+                           '(document.getElementById("ltOut")||{}).innerHTML'
+                           ' && document.getElementById("ltOut").innerHTML.length > 40',
+                           timeout=40)
+
+        # The quick plan is one person with a salary, so the applicable kind
+        # here is the disability determination. WHICH kinds apply depends on
+        # the plan, which is why the panel reads the count the server sent
+        # rather than hardcoding kinds.
+        check("proposing a disability award renders a checklist",
+              lt_propose("disability"))
+        check("nothing in the checklist arrives ticked",
+              js(window, '[...document.querySelectorAll("#ltOut [data-lt-path]")]'
+                         '.every(b => !b.checked)'))
+        check("only the rows the server marked editable carry a checkbox",
+              js(window, 'document.querySelectorAll("#ltOut tr.lt-row").length >'
+                         ' document.querySelectorAll("#ltOut [data-lt-path]").length'
+                         ' && [...document.querySelectorAll("#ltOut tr.lt-derived,'
+                         ' #ltOut tr.lt-manual")]'
+                         '.every(r => !r.querySelector("[data-lt-path]"))'))
+        js(window, 'document.getElementById("ltApply").click()')
+        wait_js(window, '(document.getElementById("ltApplied")||{}).innerHTML'
+                        ' && document.getElementById("ltApplied").innerHTML.length > 20',
+                timeout=40)
+        applied_none = js(window, '(document.getElementById("ltApplied")||{})'
+                                  '.textContent||""') or ""
+        check("ticking nothing changes nothing, and the page says so",
+              ("一个字都没有改" in applied_none or "unchanged" in applied_none)
+              and js(window, '!document.getElementById("ltKeep")'),
+              applied_none[:160])
+        js(window, 'const b = document.querySelector("#ltOut [data-lt-path]");'
+                   ' b.checked = true;'
+                   ' document.getElementById("ltApply").click();')
+        wait_js(window, '!!document.getElementById("ltKeep")', timeout=40)
+        check("ticking one line names it and offers to keep the new plan",
+              js(window, '!!document.getElementById("ltKeep")')
+              and "contributions.base_salary_pre" in
+              (js(window, '(document.getElementById("ltApplied")||{})'
+                          '.textContent||""') or ""))
+        # A kind with nothing to apply must say why rather than showing a
+        # button that cannot do anything.
+        check("proposing an inheritance renders", lt_propose("inheritance_received"))
+        empty = js(window, '(document.getElementById("ltOut")||{}).textContent||""') or ""
+        check("with nothing tickable there is no Apply button, and it says why",
+              js(window, '!document.getElementById("ltApply")')
+              and ("没有一处是这一页能替你改的" in empty
+                   or "none of them is something this page can change" in empty),
+              empty[:200])
+        js(window, 'document.querySelector(".rtab[data-p=overview]").click()')
+        time.sleep(0.4)
+
         verdict = js(window, '(document.querySelector("#verdict .v-main")||{}).textContent || ""')
         check("verdict sentence rendered", len(verdict or "") > 20)
         check("verdict carries its sampling interval", "±" in (js(window, '(document.querySelector("#verdict .v-sub")||{}).textContent || ""') or ""))
@@ -958,26 +1819,17 @@ def drive(window):
         # DOM children and dash offsets both looked healthy, which is why the
         # earlier reveal checks could not see the user's blank gauge. Measure
         # the actual visible box on the real overview page.
-        gauge_layout_raw = js(window, '''JSON.stringify((() => {
-          const g = document.getElementById("gauge");
-          const wrap = g && g.parentElement;
-          const r = g && g.getBoundingClientRect();
-          const wr = wrap && wrap.getBoundingClientRect();
-          return {width: r ? r.width : 0, height: r ? r.height : 0,
-                  wrapHeight: wr ? wr.height : 0,
-                  paths: g ? g.querySelectorAll("path").length : 0,
-                  text: (g && g.querySelector("text") || {}).textContent || ""};
-        })())''') or "{}"
+        # ONE definition, shared with the frozen driver: both used to carry
+        # their own copy with the same two numbers, and on 2026-09-16 fixing
+        # this one and not that one refused a promotion after a full build
+        # (LESSONS 20 and 55, in the same failure).
+        gauge_layout_raw = js(window, "JSON.stringify(%s)" % GAUGE.MEASURE_JS) or "null"
         try:
             gauge_layout = json.loads(gauge_layout_raw)
         except (TypeError, ValueError):
-            gauge_layout = {}
+            gauge_layout = None
         check("overview gauge occupies a visible WKWebView layout box",
-              gauge_layout.get("width", 0) >= 200
-              and gauge_layout.get("height", 0) >= 140
-              and gauge_layout.get("wrapHeight", 0) >= 140
-              and gauge_layout.get("paths", 0) >= 2
-              and "%" in gauge_layout.get("text", ""),
+              GAUGE.is_laid_out(gauge_layout),
               str(gauge_layout))
         # The tier in words, checked in the REAL page rather than in the
         # source: a colourblind reader's only way to know which of three
@@ -1266,6 +2118,40 @@ def drive(window):
                                 timeout=90)
         check("Standard archive run reaches results", archive_ready)
 
+        # ---- Roadmap 11 Phase 4: complete and restart one flight ----------
+        # The real page must pause after every choice, keep the non-prediction
+        # disclosure visible, then produce the rule-vs-choice distribution.
+        js(window, 'document.querySelector(".rtab[data-p=dist]").click()')
+        flight_ready = wait_js(window, '!!document.getElementById("flightRun")', timeout=10)
+        check("Flight Simulator renders beside the story path", flight_ready)
+        if flight_ready:
+            js(window, 'document.getElementById("flightRun").click()')
+            first_turn = wait_js(
+                window,
+                'document.getElementById("flightChoices").style.display!=="none"'
+                ' && (document.getElementById("flightOut").textContent||"").includes("Year 1")',
+                timeout=20)
+            check("Flight Simulator pauses at the first annual choice", first_turn)
+            disclosure = js(window, '(document.querySelector(".flight-disclosure")||{}).textContent||""') or ""
+            check("Flight Simulator keeps the sampled-path disclosure visible",
+                  "not a prediction" in disclosure, disclosure[:160])
+            for _ in range(10):
+                js(window, 'document.querySelector("#flightChoices [data-choice=follow_rule]").click()')
+                time.sleep(0.15)
+                wait_js(window, '!document.querySelector("#flightChoices [data-choice=follow_rule]").disabled', timeout=10)
+            debrief = wait_js(
+                window,
+                '(document.getElementById("flightOut").textContent||"").includes("Rehearsal score")'
+                ' && (document.getElementById("flightOut").textContent||"").includes("100")',
+                timeout=20)
+            check("ten committed choices finish with the no-timing debrief", debrief)
+            js(window, 'document.getElementById("flightRestart").click()')
+            restarted = wait_js(
+                window,
+                '(document.getElementById("flightOut").textContent||"").includes("0/10 years flown")',
+                timeout=20)
+            check("Flight Simulator restart clears the local sequence", restarted)
+
         # ---- Phase 2: the annual review, driven end to end -----------------
         # Piggybacks the archived run above rather than starting its own: the
         # review compares against an ARCHIVED forecast, and that is exactly
@@ -1280,6 +2166,40 @@ def drive(window):
             js(window, '[...document.querySelectorAll(".rtab")].find(t=>t.dataset.p==="review").click()')
             form_ready = wait_js(window, '!!document.getElementById("revOpening")', timeout=10)
             check("annual review form renders", form_ready)
+            cockpit_ready = wait_js(
+                window,
+                '!!document.getElementById("revCockpitYear")'
+                ' && !!document.getElementById("revRmdGov457b")'
+                ' && !!document.getElementById("revRmdPretax401k")'
+                ' && !!document.getElementById("revCockpitRun")',
+                timeout=10)
+            check("annual withdrawal Cockpit renders", cockpit_ready)
+            if cockpit_ready:
+                # A single prior-year balance is not an approximation the
+                # compiler can repair. Exercise the real DOM/model binding,
+                # then clear it so the independent annual-review record below
+                # remains a no-facts check-in rather than a partial request.
+                js(window, '(() => {'
+                           ' const g=document.getElementById("revRmdGov457b");'
+                           ' g.value="1000"; g.dispatchEvent(new Event("input",{bubbles:true}));'
+                           ' document.getElementById("revCockpitRun").click(); })()')
+                pair_refused = wait_js(
+                    window,
+                    '(document.getElementById("revCockpitOut").textContent||"")'
+                    '.includes("Enter both prior-December-31 RMD balances")',
+                    timeout=8)
+                check("Cockpit refuses a partial exact RMD balance pair",
+                      pair_refused)
+                js(window, 'document.querySelector("#langToggle button[data-lang=zh]").click()')
+                time.sleep(0.2)
+                pair_zh = js(window, '(document.getElementById("revCockpitOut").textContent||"")') or ""
+                check("Cockpit validation state retranslates to Chinese",
+                      "RMD 余额必须成对填写" in pair_zh, pair_zh[:160])
+                js(window, 'document.querySelector("#langToggle button[data-lang=en]").click()')
+                time.sleep(0.2)
+                js(window, '(() => {'
+                           ' const g=document.getElementById("revRmdGov457b");'
+                           ' g.value=""; g.dispatchEvent(new Event("input",{bubbles:true})); })()')
             # The forecast list arrives asynchronously and the submit refuses
             # without a chosen forecast ("Choose an archived forecast first").
             # The candidate path won this race and the installed path lost it,
@@ -1370,6 +2290,26 @@ def drive(window):
                           ' return String(!!b && !b.disabled && a.indexOf("state.")>=0); })()')
             check("decision lever resolves from the live config",
                   lever_ok == "true", str(lever_ok))
+            # Capture what the page ITSELF posts, by wrapping fetch before the
+            # click that makes it. Nothing is re-issued and nothing new is
+            # exposed by the product: `decidePlan` already POSTs
+            # /api/decide/plan with `state.config`, so the real request body is
+            # the evidence. See the probe below for why this replaced a
+            # synthetic fetch.
+            js(window, 'window.__decBody = null; window.__decResp = null;'
+               'if (!window.__decWrapped) { window.__decWrapped = true;'
+               '  const _f = window.fetch;'
+               '  window.fetch = function(u, o) {'
+               '    const p = _f.apply(this, arguments);'
+               '    try { if (String(u).indexOf("/api/decide/plan") >= 0'
+               '              && o && o.body) {'
+               '      window.__decBody = String(o.body);'
+               '      return p.then(function (r) {'
+               '        try { r.clone().json().then(function (j) {'
+               '          window.__decResp = JSON.stringify(j); }); } catch (e) {}'
+               '        return r; }); } }'
+               '    catch (e) {}'
+               '    return p; }; }')
             js(window, 'document.getElementById("decPlan").click()')
             costed = wait_js(
                 window,
@@ -1399,27 +2339,109 @@ def drive(window):
             # inside the running study -- after the cost was quoted and the
             # user pressed Run -- and reached an installed app twice without a
             # single test failing.
-            js(window, 'window.__decProbe = null;'
-               '(async () => { try {'
-               '  const r = await fetch("/api/decide/plan", {method:"POST",'
-               '    headers:{"Content-Type":"application/json",'
-               '             "X-FIRE-Capability": (await (await fetch("/api/capability",{cache:"no-store"})).json()).capability},'
-               '    body: JSON.stringify({question:"higher_spending", paths:10000,'
-               '      config: (typeof buildConfig === "function" ? buildConfig() : null),'
-               '      alternatives:[{name:"less", changes:{"state.expenses_y0":40000}}]})});'
-               '  window.__decProbe = JSON.stringify(await r.json());'
-               '} catch (e) { window.__decProbe = "ERR:" + e.message; } })()')
-            probe_ready = wait_js(window, 'window.__decProbe || ""', timeout=30)
-            raw_probe = js(window, 'window.__decProbe || ""') or ""
+            # MEASURED 2026-09-05: this block used to issue its OWN fetch with
+            # `config: (typeof buildConfig === "function" ? buildConfig() : null)`
+            # -- and `buildConfig` does not exist anywhere in web/. So it posted
+            # `null`, which the server turns into `{}` (app.py: `body.get(
+            # "config") or {}`). The check named "the page's own config" was
+            # measuring the empty dict: not the page's config, not even
+            # default_config().
+            #
+            # It stayed green because nothing in the answer depends on the
+            # config being real: `missing_leaves` asks whether the ENGINE knows
+            # a leaf and never consults the config at all, and `apply({})`
+            # setdefaults the missing blocks. What `{}` does change is
+            # `applicable()` -- which silently skips exactly the packs whose
+            # applicability depends on the user's plan, i.e. the ones this
+            # check exists to verify.
+            #
+            # The page is not at fault: app.js:6113 posts `state.config`, and
+            # the comment above it records this same defect reaching production
+            # once already ("answered happily -- about `{}` ... a number about
+            # somebody else"). The FIX shipped; the test guarding it reproduced
+            # the original bug.
+            raw_probe = js(window, 'window.__decBody || ""') or ""
             try:
-                probe = json.loads(raw_probe) if probe_ready and not raw_probe.startswith("ERR:") else {}
+                posted = json.loads(raw_probe) if raw_probe else {}
+            except ValueError:
+                posted = {}
+            posted_config = posted.get("config")
+            check("the page posts a config at all, rather than null",
+                  isinstance(posted_config, dict) and bool(posted_config),
+                  raw_probe[:200])
+            # The page's config, not a fresh default: it has to carry an edit
+            # this smoke made earlier in the run. Without this the check passes
+            # for `default_config()`, which is the substitution that hid the
+            # original defect.
+            # Not merely "a config": THIS page's config. `default_config()`
+            # would satisfy every check above, and substituting it for the
+            # page's is precisely the defect this block exists to catch -- the
+            # server's default carries name "Baseline . de-identified analyst"
+            # and 42000 of spending, neither of which this run ever chose.
+            posted_state = (posted_config or {}).get("state") or {}
+            check("the posted config is the PAGE's, not the server's default",
+                  isinstance(posted_config, dict)
+                  and posted_config.get("name") not in
+                      (None, "", "Baseline \u00b7 de-identified analyst")
+                  and posted_state.get("expenses_y0") not in (None, 42000),
+                  "name=%r expenses_y0=%r keys=%d" % (
+                      (posted_config or {}).get("name"),
+                      posted_state.get("expenses_y0"),
+                      len(posted_config or {})))
+            wait_js(window, 'window.__decResp || ""', timeout=30)
+            raw_resp = js(window, 'window.__decResp || ""') or ""
+            try:
+                probe = json.loads(raw_resp) if raw_resp else {}
             except ValueError:
                 probe = {}
             check("the page's own config survives pack selection",
-                  bool(probe) and not probe.get("error"), raw_probe[:200])
+                  bool(probe) and not probe.get("error"), raw_resp[:200])
             check("the page's own config can be tested against real packs",
                   isinstance(probe.get("packs"), list) and len(probe["packs"]) > 0,
-                  raw_probe[:200])
+                  raw_resp[:200])
+            # The control arm, and the reason the old version of this block was
+            # worthless: post the EMPTY config deliberately and require a
+            # different answer. If `{}` and the page's config select the same
+            # packs, then no assertion here can tell which one was sent, and
+            # every check above passes whatever the page does.
+            js(window, 'window.__ctlResp = null;'
+               '(async () => { try {'
+               '  const cap = (await (await fetch("/api/capability",{cache:"no-store"})).json()).capability;'
+               '  const r = await fetch("/api/decide/plan", {method:"POST",'
+               '    headers:{"Content-Type":"application/json","X-FIRE-Capability":cap},'
+               '    body: JSON.stringify({question:"higher_spending", paths:10000,'
+               '      config:{}, alternatives:[{name:"less",'
+               '      changes:{"state.expenses_y0":40000}}]})});'
+               '  window.__ctlResp = JSON.stringify(await r.json());'
+               '} catch (e) { window.__ctlResp = "ERR:" + e.message; } })()')
+            wait_js(window, 'window.__ctlResp || ""', timeout=30)
+            raw_ctl = js(window, 'window.__ctlResp || ""') or ""
+            try:
+                control = json.loads(raw_ctl) if raw_ctl.startswith("{") else {}
+            except ValueError:
+                control = {}
+            page_packs = sorted(p.get("name") or p.get("pack") or ""
+                                for p in (probe.get("packs") or []))
+            empty_packs = sorted(p.get("name") or p.get("pack") or ""
+                                 for p in (control.get("packs") or []))
+            # MEASURED, and it changes what this check can honestly assert:
+            # the page's config and `{}` select the SAME four applicable packs
+            # and the same two covered families. Eleven packs are skipped
+            # either way. Only `packs_skipped` differs, in its REASONS -- which
+            # leaves were absent versus which conditions the plan failed.
+            #
+            # So `len(packs) > 0` above could never have detected the empty
+            # config, before or after this fix. Sending the right config was
+            # necessary and is not sufficient: an assertion with no
+            # discriminating power is an assertion that reports whatever
+            # happens. This is the arm that has the power.
+            differing = sorted(k for k in set(probe) | set(control)
+                               if probe.get(k) != control.get(k))
+            check("an empty config is answered differently from the page's",
+                  bool(page_packs) and bool(differing)
+                  and probe.get("packs_skipped") != control.get("packs_skipped"),
+                  "differing=%s page_packs=%s empty_packs=%s" % (
+                      differing, page_packs, empty_packs))
 
             js(window, 'document.querySelector("#langToggle button[data-lang=zh]").click()')
             time.sleep(0.4)
@@ -1459,6 +2481,93 @@ def drive(window):
                   raw_gr[:200])
             check("guardrail never claims to modify the plan",
                   gr.get("modifies_plan") is False, raw_gr[:200])
+
+            # ---- Roadmap 11 Phase 3: one complete Review Day -------------
+            # This must be driven in WebKit, not inferred from strings.  The
+            # flow joins four existing read seams, appends one immutable v14
+            # record, then exposes the letter through the next-year read.
+            js(window, 'document.querySelector(".rtab[data-p=reviewday]").click()')
+            agenda_ready = wait_js(
+                window,
+                'document.querySelectorAll("#reviewDayAgenda .review-day-item").length===4',
+                timeout=20)
+            check("Review Day opens onto exactly four agenda sections",
+                  bool(agenda_ready))
+            agenda_before = js(
+                window, '(document.getElementById("reviewDayAgenda")||{}).textContent||""') or ""
+            js(window, 'document.getElementById("reviewDaySpouse").click()')
+            agenda_after = js(
+                window, '(document.getElementById("reviewDayAgenda")||{}).textContent||""') or ""
+            spouse_class = js(
+                window, '(document.getElementById("reviewDayShell")||{}).className||""') or ""
+            check("spouse co-read changes layout but not agenda facts",
+                  "review-day-spouse" in spouse_class
+                  and agenda_after == agenda_before)
+
+            # ---- E45: the language switch must re-render this panel --------
+            # `setLang` re-renders every surface whose content is BUILT rather
+            # than data-i18n tagged, and it does so by naming each one. This
+            # panel is built (its agenda HTML carries no data-i18n) and is not
+            # in that list, so it could sit in the stale language until the next
+            # tab change. Nothing asserted it until now -- the Review Day block
+            # checked sections, spouse co-read, minutes and export, but never
+            # touched the toggle. CLAUDE.md makes this a standing rule: built UI
+            # must re-render on a language switch.
+            lang_before = js(window,
+                '(document.querySelector("#langToggle [aria-pressed=true]")||{})'
+                '.getAttribute("data-lang")||""') or ""
+            rd_before = js(window,
+                '(document.getElementById("reviewDayAgenda")||{}).textContent||""') or ""
+            other = "zh" if lang_before == "en" else "en"
+            js(window, 'document.querySelector(\'#langToggle [data-lang="%s"]\').click()'
+               % other)
+            time.sleep(0.8)
+            rd_after = js(window,
+                '(document.getElementById("reviewDayAgenda")||{}).textContent||""') or ""
+            check("Review Day agenda re-renders on a language switch",
+                  bool(rd_before.strip()) and rd_after.strip() != rd_before.strip(),
+                  "%s -> %s left the agenda byte-identical: %r"
+                  % (lang_before or "?", other, rd_after[:200]))
+            if other == "en":
+                check("the English Review Day agenda contains no CJK",
+                      not cjk.search(rd_after), rd_after[:200])
+            else:
+                check("the Chinese Review Day agenda actually contains CJK",
+                      bool(cjk.search(rd_after)), rd_after[:200])
+            # Restore the language the rest of this flow expects.
+            js(window, 'document.querySelector(\'#langToggle [data-lang="%s"]\').click()'
+               % (lang_before or "en"))
+            time.sleep(0.5)
+            js(window,
+               'document.getElementById("reviewDayLetter").value='
+               '"Open this together before changing the plan.";'
+               'document.getElementById("reviewDayComplete").click()')
+            completed = wait_js(
+                window,
+                '!document.getElementById("reviewDayMemo").classList.contains("hidden")'
+                ' && !document.getElementById("reviewDayExport").classList.contains("hidden")',
+                timeout=20)
+            memo_text = js(
+                window, '(document.getElementById("reviewDayMemo")||{}).textContent||""') or ""
+            check("Review Day completion returns minutes and calendar export",
+                  bool(completed) and "Open this together" in memo_text,
+                  memo_text[:200])
+            js(window, 'window.__rdHistory=null;(async()=>{try{'
+               'const plans=JSON.parse(localStorage.getItem("fire_plans_v1")||"[]");'
+               'const p=plans.find(x=>x&&x.archive&&x.archive.plan_id);'
+               'const r=await fetch("/api/review_day/history?plan_id="+'
+               'encodeURIComponent(p.archive.plan_id)+"&as_of=2099-12-31",{cache:"no-store"});'
+               'window.__rdHistory=JSON.stringify(await r.json());'
+               '}catch(e){window.__rdHistory="ERR:"+e.message}})()')
+            rd_ready = wait_js(window, 'window.__rdHistory||""', timeout=20)
+            raw_rd = js(window, 'window.__rdHistory||""') or ""
+            try:
+                rd = json.loads(raw_rd) if rd_ready and raw_rd.startswith("{") else {}
+            except ValueError:
+                rd = {}
+            check("the next opening reads the archived future letter",
+                  ((rd.get("letter_to_open") or {}).get("future_letter") ==
+                   "Open this together before changing the plan."), raw_rd[:200])
 
             check("decision page re-renders on language switch",
                   bool(cjk.search(zh_cost)) and not cjk.search(en_decide),
@@ -1753,7 +2862,7 @@ def _drive_fence_composition(window, db_path):
           js(window, 'localStorage.getItem("fire_plans_v1") || ""') == before_plans)
 
     # The real control, not only the API: the button a user would press.
-    js(window, 'document.getElementById("startFresh").click()')
+    start_fresh(window)
     time.sleep(0.5)
     js(window, 'document.getElementById("wizSave").click()')
     time.sleep(1.0)
@@ -2083,7 +3192,7 @@ def _drive_round5_compositions(window, db_path):
         refresh_both(f"__r5B1{tag}")
         js(window, 'document.getElementById("restartBtn").click()')
         time.sleep(0.5)
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
         time.sleep(0.5)
         js(window, 'const el = document.querySelector('
                    '\'.field[data-path="state.start_age"] input\');'
@@ -2194,6 +3303,10 @@ def _drive_parent_identity(window, db_path):
     js(window, 'localStorage.clear(); localStorage.setItem("fire_plans_v1", '
                + encoded + '); location.reload()')
     time.sleep(3.0)
+    # This scenario reloads into a populated archive. Enter through Start before
+    # testing focus on the underlying family controls; a native modal correctly
+    # prevents those controls receiving focus while it remains open.
+    check_welcome_intro(window)
     js(window, "window.confirm = () => true")
     js(window, 'document.getElementById("migrateBtn").click()')
     cutover = wait_js(
@@ -2511,7 +3624,7 @@ def _drive_storage_seam_checks(window, db_path):
               len(imported) == 1, str(imported))
 
         # SAVE, through the real button the user presses.
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
         time.sleep(0.4)
         js(window, 'document.getElementById("wizSavePlan").click()')
         time.sleep(2.5)
@@ -2617,6 +3730,11 @@ def _drive_storage_seam_checks(window, db_path):
                          ' === "v-wizard"'),
               str(js(window, '[...document.querySelectorAll(".view")]'
                             '.find(v => v.classList.contains("show")).id')))
+        # 14.0 Phase 2: a plan opened from a list is not a new plan, so it opens
+        # with its sections expanded -- the held state belongs to "开始分析" only.
+        held_open = js(window, 'document.querySelectorAll("#wizStep [data-expand-section]").length')
+        check("§F A3 a plan opened from the list shows no held sections",
+              held_open == 0, str(held_open))
         js(window, 'document.getElementById("restartBtn").click()')
         plans_before = _archive_count(db_path, "plans")
 
@@ -2652,7 +3770,7 @@ def _drive_storage_seam_checks(window, db_path):
         draft_before = js(window, 'localStorage.getItem("fire_draft")')
         plans_before_draft = _archive_count(db_path, "plans")
         drafts_before_draft = _archive_count(db_path, "recovered_drafts")
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
         time.sleep(0.4)
         # A distinctive value, typed into a real field. Without one, every check
         # below could be satisfied by a *fresh* wizard, and "restored the draft"
@@ -2878,7 +3996,7 @@ def _drive_storage_seam_checks(window, db_path):
               js(window, 'localStorage.getItem("fire_plans_v1")') == plans_marker)
 
         # And the real product path: the Save-draft button must not report success.
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
         time.sleep(0.4)
         js(window, 'document.getElementById("wizSave").click()')
         time.sleep(0.6)
@@ -2907,7 +4025,7 @@ def _drive_storage_seam_checks(window, db_path):
         # read in between.
         js(window, 'localStorage.setItem("fire_plans_v1", "[]")')
         before_a5 = len([r for r in archive_plans() if r[2] != "deleted"])
-        js(window, 'document.getElementById("startFresh").click()')
+        start_fresh(window)
         time.sleep(0.4)
         js(window, 'window.__fA5 = null;'
                    ' (async () => { try { await FIREPlanStore.save('

@@ -652,6 +652,40 @@ class GuytonKlingerRule(WithdrawalRule):
     #: with one number would be asserting they are the same.
     cut_realisation: float = 1.0
 
+    def guardrail_band_receipt(self, target_nominal, portfolio_nominal,
+                               initial_swr):
+        """The exact band test this rule applies, exposed for execution UI.
+
+        Signed distances are rates, not percentage points: positive means the
+        current implied withdrawal rate remains inside that boundary; negative
+        means it has crossed it.  The rule below consumes ``status`` from this
+        same receipt, so a cockpit cannot drift into a second GK formula.
+        """
+        current_implied_swr = target_nominal / max(portfolio_nominal, 1.0)
+        upper_threshold = initial_swr * (1 + self.upper_guardrail)
+        lower_threshold = initial_swr * (1 - self.lower_guardrail)
+        distance_to_upper = upper_threshold - current_implied_swr
+        distance_above_lower = current_implied_swr - lower_threshold
+        if current_implied_swr > upper_threshold:
+            status = "above_upper"
+            trigger = "cut"
+        elif current_implied_swr < lower_threshold:
+            status = "below_lower"
+            trigger = "raise"
+        else:
+            status = "in_band"
+            trigger = None
+        return {
+            "status": status,
+            "trigger": trigger,
+            "current_implied_swr": current_implied_swr,
+            "initial_swr": initial_swr,
+            "upper_threshold_swr": upper_threshold,
+            "lower_threshold_swr": lower_threshold,
+            "signed_distance_to_upper_swr": distance_to_upper,
+            "signed_distance_above_lower_swr": distance_above_lower,
+        }
+
     def compute_target_withdrawal(self, year_in_retirement, age,
                                    portfolio_nominal, inflation_this_year,
                                    cpi_cumulative, state):
@@ -680,15 +714,16 @@ class GuytonKlingerRule(WithdrawalRule):
                 tentative = prev_w
 
         # Capital Preservation / Prosperity Rules
-        current_implied_swr = tentative / max(portfolio_nominal, 1.0)
-        if current_implied_swr > initial_swr * (1 + self.upper_guardrail):
+        band = self.guardrail_band_receipt(
+            tentative, portfolio_nominal, initial_swr)
+        if band["status"] == "above_upper":
             # The cut, times how much of it actually happens. At the default
             # of 1.0 this is exactly `tentative * (1 - adjustment_pct)` --
             # the arithmetic, and the float, are unchanged for every existing
             # plan.
             tentative *= (1 - self.adjustment_pct * self.cut_realisation)
             triggers += 1
-        elif current_implied_swr < initial_swr * (1 - self.lower_guardrail):
+        elif band["status"] == "below_lower":
             tentative *= (1 + self.adjustment_pct)
             triggers += 1
 

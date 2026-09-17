@@ -55,6 +55,89 @@ NOT_A_NUMBER = "not_a_number"
 GRADES = (CITED, EXPLAINED_UNCITED, BARE, NOT_A_NUMBER)
 
 
+class DeterministicRelationship:
+    """A relationship that matters to the health chain but draws no RNG.
+
+    `REGISTRY` stays exactly aligned with the RNG census.  Putting the annual
+    medical trajectory there would falsely claim a random child stream and
+    make the census' reverse check fail.  This adjacent ledger lets Roadmap 11
+    measure the missing relationship without turning "no draw" into a draw.
+    """
+
+    def __init__(self, module: str, *, relates_to: tuple, code_refs: tuple,
+                 rng_stream: Optional[str], note_cn: str, note_en: str):
+        assert relates_to, module
+        assert code_refs, module
+        self.module = module
+        self.relates_to = relates_to
+        self.code_refs = code_refs
+        self.rng_stream = rng_stream
+        self.note_cn = note_cn
+        self.note_en = note_en
+
+
+DETERMINISTIC_RELATIONSHIPS = {
+    "medical_trajectory": DeterministicRelationship(
+        "medical_trajectory",
+        relates_to=("disability", "ltc_onset", "ltc_progression", "mortality"),
+        code_refs=(
+            "engine/fire_v9_8_model.py:compose_annual_medical_target",
+            "engine/fire_v9_8_model.py:simulate_retirement_v98",
+        ),
+        rng_stream=None,
+        note_cn="逐年医疗轨迹由用户填写的保费、年龄曲线与既有死亡/在世状态确定性组成；"
+                "它自己不抽 RNG。当前只在现金流处与死亡状态相遇，尚未与伤残或 LTC 状态"
+                "形成统一转移链；开启 health_chain 后，这些状态共用年度路径，死亡吸收后续状态。",
+        note_en="The annual medical trajectory deterministically composes "
+                "user-entered premiums, age curves and the existing alive/dead "
+                "state. It has no RNG draw of its own. With health_chain on, "
+                "those states share one annual path and death absorbs later "
+                "states.",
+    ),
+}
+
+
+class RelationshipDisposition:
+    """A pair-level ruling when a census module has other unresolved edges."""
+
+    def __init__(self, relationship: str, stance: str, *, code_refs: tuple,
+                 evidence: str, note_cn: str, note_en: str):
+        assert stance in STANCES
+        self.relationship = relationship
+        self.stance = stance
+        self.code_refs = code_refs
+        self.evidence = evidence
+        self.note_cn = note_cn
+        self.note_en = note_en
+
+
+# `disability` still has unresolved market/layoff/human-capital edges, so its
+# module-wide REGISTRY stance cannot honestly be upgraded wholesale.  Phase 5
+# resolves the narrower edge it names and keeps that ruling callable here.
+RELATIONSHIP_DISPOSITIONS = {
+    "disability_mortality": RelationshipDisposition(
+        "disability_mortality", STRUCTURALLY_LINKED,
+        code_refs=(
+            "engine/health_chain.py:HealthChainPath",
+            "engine/fire_v8_model.py:sample_ssdi_entitlement",
+            "engine/fire_v9_8_model.py:simulate_retirement_v98",
+        ),
+        evidence="User ruling 2026-08-31: preserve the separately sourced "
+                 "marginal transition probabilities; do not invent a "
+                 "post-disability mortality multiplier. Death is an absorbing "
+                 "state on the shared age-indexed path.",
+        note_cn="伤残与死亡现在是同一年度状态路径上的结构关系：死亡会吸收并截断"
+                "伤残/LTC/医疗状态。SSA 表没有给出伤残后的可移植死亡倍率，因此保留"
+                "两张表各自边际概率，不猜系数。",
+        note_en="Disability and mortality are now structurally joined on one "
+                "annual state path: death absorbs disability, LTC and medical "
+                "states. The SSA table supplies no portable post-disability "
+                "mortality multiplier, so both sourced marginals are preserved "
+                "and no coefficient is guessed.",
+    ),
+}
+
+
 class Entry:
     """One relationship rooted at a census module, and its evidence ledger."""
 
@@ -337,6 +420,19 @@ REGISTRY = {
                 "with this plan's market, layoff, wage or mortality draws. "
                 "The independent child stream is an examined unresolved gap, "
                 "not a zero-correlation finding."),
+    "health_chain": Entry(
+        "health_chain", STRUCTURALLY_LINKED, NOT_A_NUMBER,
+        relates_to=("disability", "ltc_onset", "ltc_progression", "mortality"),
+        code_refs=("engine/health_chain.py:HealthChainPath",),
+        disclosure_ref="server/limitations.py:health_chain", ui_control=True,
+        note_cn="统一链一次生成按年龄×命名域索引的子流；伤残、LTC 与死亡仍分别使用"
+                "原模块的边际概率，死亡是吸收态。命名列保证关闭一个模块不会移动另一个"
+                "模块的同 seed 路径；这不是现实相关系数。",
+        note_en="The unified chain creates one age-by-domain child stream. "
+                "Disability, LTC and mortality retain the marginal probability "
+                "from their source modules, and death is absorbing. Named "
+                "columns keep one disabled module from moving another's "
+                "same-seed path; this is not a real-world correlation coefficient."),
     "house_price": Entry(
         "house_price", INDEPENDENT_BY_DESIGN, NOT_A_NUMBER,
         relates_to=("market_returns", "inflation"), ui_control=True,

@@ -71,6 +71,18 @@ def _safe_fragment(value: str) -> str:
     return "".join(parser.out)
 
 
+
+def _bold(value: str) -> str:
+    """Sanitize, then turn `**...**` into <strong>.
+
+    The order is the safety argument, and it is the one OPEN_ITEMS U40 settled:
+    sanitizing first means this can only ever emit <strong>, whatever the
+    declaration text contains.
+    """
+    import re as _re
+    return _re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>",
+                   _safe_fragment(value))
+
 _RULE_PACK_COMPONENT_IDS = frozenset({
     "us_federal_tax", "medicare_irmaa", "contribution_limits",
     "aca_marketplace", "ssa_benefit_rules", "ssa_statement_import",
@@ -280,7 +292,8 @@ TXT = {
         scen_reloc="情景 · 搬迁", succ="终身偿付率", succ_note="三分支口径",
         fire="FIRE 年龄 P50", cons="P50 年消费 · real", term="P50 终值 · real",
         ss="P50 社保终生 · real", reached="到达 FI 率", solv="FIRE 后偿付率",
-        ms="里程碑", ms_note="名义余额首次跨越 · 持续工作反事实", target="目标",
+        ms="里程碑", ms_note="名义余额首次跨越 · 积累期到 FIRE，之后接退休期组合",
+        target="目标",
         prob="到达概率", medage="中位年龄", rng="P10–P90",
         pcts="期末组合分位数", basis="口径", real="实际 (real)", nom="名义",
         ab="方案 A/B 对比", metric="指标", honesty="方法与诚实度",
@@ -315,7 +328,8 @@ TXT = {
         succ="Lifetime success", succ_note="three-branch basis",
         fire="FIRE age P50", cons="P50 spend · real", term="P50 terminal · real",
         ss="P50 lifetime SS · real", reached="Reached-FI rate", solv="Post-FIRE solvency",
-        ms="Milestones", ms_note="first nominal crossing · keep-working counterfactual",
+        ms="Milestones",
+        ms_note="first nominal crossing · accumulation to FIRE, then the retirement portfolio",
         target="Target", prob="Reach prob.", medage="Median age", rng="P10–P90",
         pcts="Terminal percentiles", basis="Basis", real="Real", nom="Nominal",
         ab="Scenario A/B", metric="Metric", honesty="Method & honesty",
@@ -542,6 +556,73 @@ def _rule_pack_block(meta: dict, lang: str) -> str:
             f'<div class="b">{body}</div></div>')
 
 
+
+def _jurisdiction_section(lang: str) -> str:
+    """The claimed-jurisdiction boundary, as a table, in the report's language.
+
+    Unconditional: it does not read the config and cannot be switched off,
+    because a report that states amounts for somewhere outside the claimed list
+    without saying so is the exact failure OPEN_ITEMS E50 was opened for.
+    """
+    try:
+        import jurisdiction_scope as SCOPE
+    except Exception:                                       # noqa: BLE001
+        # A report is still worth producing without this section, but it must
+        # not pretend the section was empty rather than unavailable.
+        return ("<h2>%s</h2><p class='note'>%s</p>"
+                % (_H["title"][lang], _H["unavailable"][lang]))
+    data = SCOPE.declaration(lang)
+    words = _H["status"][lang]
+    codes = [row["code"] for row in data["claimed"]]
+    head = "".join("<th>%s</th>" % _safe_fragment(row["name"]) for row in data["claimed"])
+    body = []
+    for feature in data["features"]:
+        cells = []
+        for code in codes:
+            cell = next(c for c in feature["cells"] if c["jurisdiction"] == code)
+            note = cell.get("note")
+            cells.append("<td><b>%s</b>%s</td>" % (
+                _safe_fragment(words.get(cell["status"], cell["status"])),
+                ("<div class='s'>%s</div>" % _bold(note)) if note else ""))
+        body.append("<tr><th>%s</th>%s</tr>"
+                    % (_safe_fragment(feature["feature"]), "".join(cells)))
+    basis = "".join(
+        "<li><b>%s</b> — %s%s</li>" % (
+            _safe_fragment(row["name"]), _bold(row["basis"]),
+            ("<div class='s'>%s: %s</div>"
+             % (_H["pack_scope"][lang], _safe_fragment(row["pack_scope"])))
+            if row.get("pack_scope") else "")
+        for row in data["claimed"])
+    return ("<h2>%s</h2><ul class='lim'>%s</ul>"
+            "<p class='note'>%s</p>"
+            "<table class='scope'><thead><tr><th>%s</th>%s</tr></thead>"
+            "<tbody>%s</tbody></table>"
+            "<p class='note'>%s</p>"
+            % (_H["title"][lang], basis, _bold(data["caveat"]),
+               _H["capability"][lang], head, "".join(body),
+               _bold(data["not_claimed"])))
+
+
+#: Labels for the section above. Kept beside it rather than in the big `T`
+#: table because they are the only strings that section needs, and a reader
+#: checking it should not have to hold two tables open.
+_H = {
+    "title": {"zh": "这个产品声称服务哪些法域",
+              "en": "Which jurisdictions this product serves"},
+    "capability": {"zh": "功能", "en": "Capability"},
+    "pack_scope": {"zh": "规则包自述范围", "en": "The pack's own scope"},
+    "unavailable": {"zh": "本次导出无法读取法域声明 —— 这不表示没有边界，只表示这份文件没能带上它。",
+                    "en": "The jurisdiction declaration could not be read for this "
+                          "export. That does not mean there is no boundary; it means "
+                          "this document did not carry it."},
+    "status": {
+        "zh": {"modelled": "建模", "partial": "部分建模",
+               "user_supplied": "用你填的数", "not_modelled": "未建模"},
+        "en": {"modelled": "modelled", "partial": "partly modelled",
+               "user_supplied": "your figures", "not_modelled": "not modelled"},
+    },
+}
+
 def build(results: dict, extra: dict = None) -> str:
     extra = extra or {}
     lang = extra.get("lang", "zh") if extra.get("lang") in ("zh", "en") else "zh"
@@ -661,6 +742,15 @@ def build(results: dict, extra: dict = None) -> str:
         lis = "".join(f"<li>{_safe_fragment(x)}</li>"
                       for x in extra["limitations"])
         lim = f"<h2>{T['lim']}</h2><ul class='lim'>{lis}</ul>"
+
+    # E50 -- rendered from the server's own declaration, never from `extra`,
+    # for the same reason the receipt above is: which jurisdictions this
+    # product claims to serve is a fact about the product, not about this run.
+    # Taking it from the client would mean a page that forgot to send it
+    # produces a document full of amounts with no boundary on them, and the
+    # omission would be invisible in the output -- there is no gap where a
+    # missing section used to be.
+    lim += _jurisdiction_section(lang)
 
     honesty = f"""
 <h2>{T['honesty']}</h2>

@@ -53,10 +53,19 @@ import guardrails as G
 #: against the engine's own arithmetic -- `portfolio_path[-1] / cpi[-1]` equals
 #: `terminal_after_tax_real` exactly.
 #:
-#: In ACCUMULATION there is no such pair and no CPI series, so real values
-#: cannot be recovered at all. Those years are emitted as unmeasured rather
-#: than as nominal figures wearing a `_real` name, and `guardrails.evaluate`
-#: HOLDS a streak across an unmeasured period instead of clearing it.
+#: In ACCUMULATION that was true when this was written, and it is NOT true any
+#: more: the projector now emits its own cumulative CPI per accumulation row,
+#: so those years are deflated by it and DO count. Measured on the shipped plan
+#: at 60 paths -- 1,560 accumulation rows, every one carrying a CPI, running
+#: 0.99 to 2.87. A path with no CPI is still emitted as unmeasured rather than
+#: as nominal figures wearing a `_real` name, and `guardrails.evaluate` HOLDS a
+#: streak across an unmeasured period instead of clearing it; that mechanism is
+#: still exercised, just not by this engine's ordinary output.
+#:
+#: This paragraph said the opposite until 2026-09-04. The code had moved and
+#: its own description had not, which is the failure Roadmap 12's axis B is
+#: about -- and the payload below carried the same stale claim as a hardcoded
+#: `True`, where a page would have rendered it at the user.
 #:
 #: `income_real` used to be unavailable in both phases, so INCOME_INTERRUPTION
 #: was unobservable and had previously reported `fire_rate 0.0%,
@@ -297,7 +306,14 @@ def study_policies(config: dict, policies: list, *, paths: int, seed: int,
         # Stated in the payload because it is the claim a reader would
         # otherwise have to take on trust, and it is the phase's central one.
         "exercised_phase": OBSERVABLE_PHASE,
-        "accumulation_years_unmeasured": True,
+        # Computed, not asserted. This was a hardcoded `True` and had been
+        # wrong since the projector started emitting a CPI for accumulation --
+        # a payload field that told the reader those years were not measured
+        # while the study was measuring them.
+        "accumulation_years_unmeasured": any(
+            observation["phase"] == "accumulation"
+            and observation.get("unmeasured_reason")
+            for observations in series for observation in observations),
         "same_paths": True,
         "same_paths_basis": (
             "The engine ran once. A guardrail never modifies the plan, so the "

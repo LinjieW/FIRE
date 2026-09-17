@@ -7,8 +7,18 @@
 <!-- No external requests: system font stacks only (privacy claim is literal). -->
 <script>(function(){var t=localStorage.getItem("fire_theme")||((window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light");document.documentElement.dataset.theme=t;}())</script>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="welcome_intro.css">
+<link rel="stylesheet" href="results_polish.css">
 </head>
 <body>
+
+<dialog id="fire-intro" lang="en" aria-label="Welcome to FIRE Plan">
+
+<div class="top"><span>FIRE / PLAN</span><button id="introReplay" class="replay" type="button">Replay ↻</button></div>
+<div class="stage" role="img" aria-label="A slate-blue plan card unfolds as a sage ring, mauve block, and sand-gold sphere spring into place"><div class="world"><div class="shadow"></div><div class="orbit"></div><div class="back"></div><div class="sheet"><div class="eyebrow">YOUR NEXT CHAPTER</div><div class="plan">PLAN.</div><div class="route"><div class="rail"></div><div class="dot small"></div><div class="dot"></div></div></div><div class="ring"></div><div class="cube"></div><div class="ball"></div></div></div>
+<div class="copy"><h1 class="title">FIRE <span>Plan</span></h1><p class="tagline">Make room for possibility.</p><form method="dialog" class="start-form"><button id="introStart" type="submit" class="start" autofocus>Start <span aria-hidden="true">↗</span></button></form></div>
+<div class="footer">A LITTLE STRUCTURE. MORE POSSIBILITY.</div>
+</dialog>
 
 <!-- ============ TOP BAR ============ -->
 <div class="topbar">
@@ -39,12 +49,16 @@
     <h1 class="welcome-h1" data-i18n="welcome.title">FIRE 分析</h1>
     <div class="sub-en" data-i18n="welcome.subtitle">A staged, quantitative roadmap to financial independence.</div>
     <p class="lead" data-i18n="welcome.lead">分步录入你的情况，选择运算精度，看进度条跑真实的蒙特卡洛，然后分页阅读结果与结论。默认预填一份去身份的示例，所有数字都可改成你自己的。</p>
+    <div class="welcome-next hidden" id="homeNext">
+      <p id="homeNextHint"></p>
+      <button class="btn-run lg" id="homeNextBtn"></button>
+    </div>
     <div class="panel hidden" id="standingPanel" style="margin:18px 0 6px;text-align:left">
       <div class="panel-title sm" data-i18n="stand.title">你现在在哪</div>
       <div id="standingBody"></div>
     </div>
     <div class="welcome-actions">
-      <button class="btn-run lg" id="startFresh" data-i18n="welcome.start">开始分析</button>
+      <button class="btn-ghost lg" id="startFresh" data-i18n="welcome.start">开始分析</button>
       <button class="btn-ghost lg" id="startExample" data-i18n="welcome.example">载入示例并直接看结果</button>
       <button class="btn-ghost lg" id="resumeDraft" style="display:none" data-i18n="welcome.resume">继续上次草稿</button>
     </div>
@@ -100,6 +114,14 @@
     </div>
     <div class="personas-head" data-i18n="persona.head">或从一个像你的人开始：</div>
     <div class="personas" id="personas"></div>
+    <div class="plans-box" id="backupBox">
+      <div class="personas-head" data-i18n="bk.head">先做一份备份：</div>
+      <p class="panel-note" style="margin:4px 0 10px" data-i18n="bk.kicker">把本机档案打成一个带清单与校验和的包，放在这台机器的应用支持目录里。它不上传任何地方。做备份不会动你现在的计划。<b>反过来的那一步——把备份写回去——刻意没有做成按钮</b>：它会覆盖你现在的档案，而「把数据取回来」这件事已经有一条不依赖本 App 的路（<code>tools/recover_without_app.py</code>，只用标准库直接从 SQLite 读）。</p>
+      <div class="compute-row">
+        <button class="btn-ghost sm" id="bkRun" data-i18n="bk.run">▶ 现在做一份备份</button>
+      </div>
+      <div id="bkOut" style="margin-top:10px"></div>
+    </div>
     <div class="welcome-actions" style="margin-top:6px">
       <button class="btn-ghost sm" id="impCfgWelcome" data-i18n="quick.import">导入朋友的配置…</button>
       <input type="file" id="impFileWelcome" accept="application/json" style="display:none">
@@ -123,24 +145,33 @@
 <section class="view" id="v-wizard">
   <div class="wrap wizard-wrap">
     <div class="wizard-rail" id="wizardRail"></div>
-    <div class="wizard-main">
-      <div class="wizard-step" id="wizStep"><!-- generated --></div>
-      <div class="wizard-nav">
-        <button class="btn-ghost" id="wizPrev" data-i18n="nav.prev">上一步</button>
-        <div class="wizard-nav-right">
-          <span class="save-hint" id="saveHint"></span>
-          <button class="btn-ghost" id="wizSave" data-i18n="nav.save">暂存草稿</button>
-          <button class="btn-ghost" id="wizSavePlan" data-i18n="plans.save">存为计划</button>
-          <button class="btn-run" id="wizNext" data-i18n="nav.next">下一步</button>
-        </div>
-      </div>
+    <div class="wizard-tools">
+      <button type="button" class="btn-ghost sm" id="wizOverviewToggle" aria-controls="wizOverview" aria-expanded="false" data-i18n="wizard.overview">计划概览</button>
+      <details class="wizard-more" id="wizMore">
+        <summary data-i18n="wizard.more">更多</summary>
+        <div class="wizard-more-body"><button type="button" class="btn-ghost sm" id="wizFeedback" data-i18n="feedback.open">导出反馈包</button></div>
+      </details>
     </div>
-    <aside class="wizard-side">
+    <aside class="wizard-side" id="wizOverview">
       <div class="panel-title sm" data-i18n="side.derived">派生指标</div>
       <div class="readout-grid" id="wizDerived"></div>
       <div class="panel-title sm" style="margin-top:16px" data-i18n="side.holdings">持仓构成</div>
-      <table class="cmp-table" id="wizHoldings"></table>
+      <div class="results-table-scroll"><table class="cmp-table" id="wizHoldings"></table></div>
     </aside>
+    <div class="wizard-main">
+      <div class="wizard-step" id="wizStep"><!-- generated --></div>
+    </div>
+    <div class="wizard-nav wizard-footer">
+      <div class="wizard-save-actions">
+        <span class="save-hint" id="saveHint" role="status"></span>
+        <button class="btn-ghost" id="wizSave" data-i18n="nav.save">暂存草稿</button>
+        <button class="btn-ghost" id="wizSavePlan" data-i18n="plans.save">存为计划</button>
+      </div>
+      <div class="wizard-nav-right">
+        <button class="btn-ghost" id="wizPrev" data-i18n="nav.prev">上一步</button>
+        <button class="btn-run" id="wizNext" data-i18n="nav.next">下一步</button>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -180,11 +211,13 @@
 <section class="view" id="v-results">
   <div class="results-tabbar">
     <div class="wrap results-tabbar-inner">
-      <div class="rtabs" id="resultTabs"></div>
+      <div class="rtabs" id="resultTabs" role="tablist" aria-label="Results"></div>
+      <div class="results-actions">
       <button class="btn-ghost sm" id="saveA" data-i18n="results.saveA">存为 A</button>
       <button class="btn-ghost sm" id="saveB" data-i18n="results.saveB">存为 B</button>
       <button class="btn-ghost sm" id="resSavePlan" data-i18n="plans.save">存为计划</button>
       <button class="btn-ghost sm" id="editParams" data-i18n="results.edit">改参数重跑</button>
+      </div>
     </div>
   </div>
 
@@ -192,30 +225,10 @@
 
     <!-- OVERVIEW -->
     <div class="rpage" id="rp-overview">
-      <div class="verdict" id="verdict" aria-live="polite"></div>
-      <div class="callout hidden" id="rulePackStatus" role="status"></div>
-      <details class="recap" id="inputsRecap">
-        <summary><span data-i18n="recap.title">你输入的</span><span class="recap-plus" aria-hidden="true">+</span></summary>
-        <div class="recap-body" id="inputsRecapBody"></div>
-      </details>
-      <div class="panel" id="livePanel">
-        <div class="panel-title sm" data-i18n="live.title">实时试验 <span class="tag" data-i18n="live.tag">拖杠杆 · 约 2 秒重算</span></div>
-        <div class="compute-row"><button class="btn-run sm" id="liveToggle" data-i18n="live.open">▶ 展开实时试验</button><span class="hint" id="liveHint"></span></div>
-        <div id="liveBody" class="hidden">
-          <p class="panel-note" data-i18n="live.note">同一随机序列下的快速对比（1,500 路径）：拖动杠杆，指标卡显示相对当前基线的变化。图表不实时刷新——满意后「应用到计划」做完整重跑。</p>
-          <div id="liveSliders"></div>
-          <div class="readout-grid" id="liveCards" style="margin-top:14px"></div>
-          <div class="compute-row" style="margin-top:12px">
-            <button class="btn-run sm" id="liveApply" data-i18n="live.apply">✓ 应用到计划并完整重跑</button>
-            <button class="btn-run sm ghost" id="liveReset" data-i18n="live.reset">重置杠杆</button>
-          </div>
-          <p class="cap" id="liveCap"></p>
-        </div>
-      </div>
       <div class="sec-head"><span class="sec-num">I</span><h2 class="sec-title" data-i18n="ov.title">核心结果</h2></div>
       <p class="sec-kicker" data-i18n="ov.kicker">三分支成功率＝到达 FI 且终身偿付，或退休前身故；它不是单纯的偿付率。数字来自你选择精度的完整蒙特卡洛。</p>
       <div class="hero-cards">
-        <div class="hcard">
+        <div class="hcard hcard-success">
           <div class="lab" data-i18n="ov.success">三分支成功率</div>
           <div class="gauge-wrap"><svg id="gauge" viewBox="0 0 200 150" style="max-width:230px"></svg></div>
           <div class="branch" id="branch"></div>
@@ -238,6 +251,28 @@
         <div class="metric"><div class="lab" data-i18n="ov.solv">FIRE 后偿付率</div><div class="val" data-k="solv">—</div><div class="note" data-i18n="ov.solv.note">到达 FI 后不耗尽的条件概率</div></div>
       </div>
       <div class="milestones" id="milestones"></div>
+      <div class="verdict" id="verdict" aria-live="polite"></div>
+      <div class="callout hidden" id="rulePackStatus" role="status"></div>
+      <details class="recap" id="inputsRecap">
+        <summary><span data-i18n="recap.title">你输入的</span><span class="recap-plus" aria-hidden="true">+</span></summary>
+        <div class="recap-body" id="inputsRecapBody"></div>
+      </details>
+      <div class="panel" id="livePanel">
+        <div class="panel-title sm" data-i18n="live.title">实时试验 <span class="tag" data-i18n="live.tag">拖杠杆 · 约 2 秒重算</span></div>
+        <div class="compute-row"><button class="btn-run sm" id="liveToggle" data-i18n="live.open">▶ 展开实时试验</button><span class="hint" id="liveHint"></span></div>
+        <div id="liveBody" class="hidden">
+          <p class="panel-note" data-i18n="live.note">同一随机序列下的快速对比（1,500 路径）：拖动杠杆，指标卡显示相对当前基线的变化。图表不实时刷新——拖动只影响临时试算；应用后才修改当前输入并完整重跑。</p>
+          <p class="panel-note" id="liveState" role="status"></p>
+          <div id="liveSliders"></div>
+          <div class="readout-grid" id="liveCards" style="margin-top:14px"></div>
+          <div class="compute-row" style="margin-top:12px">
+            <button class="btn-run sm" id="liveApply" data-i18n="live.apply">应用到当前输入并重跑</button>
+            <button class="btn-run sm ghost" id="liveReset" data-i18n="live.reset">重置杠杆</button>
+          </div>
+          <p class="cap" id="liveCap"></p>
+        </div>
+      </div>
+
     </div>
 
     <!-- TRAJECTORY -->
@@ -252,7 +287,7 @@
             <button data-unit="nom" aria-pressed="false" data-i18n="unit.nom">名义</button>
           </div>
         </div>
-        <svg id="fanChart" class="chart" viewBox="0 0 760 380" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="fanChart" class="chart" viewBox="0 0 760 380" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="fanLegend"></div>
         <div class="slider-row" style="margin-top:16px">
           <span class="sl-lab" data-i18n="traj.cursor">年龄游标</span>
@@ -270,7 +305,7 @@
         <table class="ed-table" id="ciTable" style="display:none"></table>
         <p class="cap" id="ciCap"></p>
         <div id="fanDrill" style="display:none">
-          <svg id="fanDrillChart" class="chart" viewBox="0 0 760 220" preserveAspectRatio="xMidYMid meet"></svg>
+          <div class="results-chart-scroll"><svg id="fanDrillChart" class="chart" viewBox="0 0 760 220" preserveAspectRatio="xMidYMid meet"></svg></div>
           <div class="legend" id="fanDrillLegend"></div>
           <p class="cap" id="fanDrillCap"></p>
         </div>
@@ -298,9 +333,9 @@
         </div>
         <div class="readout-grid" id="fwdReadout" style="margin-top:18px"></div>
         <div class="panel-note" style="margin:18px 0 4px;font-weight:600" data-i18n="fwd.hist">FIRE 年龄分布</div>
-        <svg id="fwdHist" class="chart" viewBox="0 0 760 200" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="fwdHist" class="chart" viewBox="0 0 760 200" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="panel-note" style="margin:18px 0 4px;font-weight:600" data-i18n="fwd.fan">累积财富扇形（real, log）</div>
-        <svg id="fwdFan" class="chart" viewBox="0 0 760 240" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="fwdFan" class="chart" viewBox="0 0 760 240" preserveAspectRatio="xMidYMid meet"></svg></div>
       </div>
     </div>
 
@@ -318,7 +353,7 @@
           </div>
         </div>
         <svg id="termChart" class="chart chart-action" viewBox="0 0 760 240" preserveAspectRatio="xMidYMid meet" tabindex="0" role="button" aria-describedby="termHint"></svg>
-        <table class="cmp-table" id="termTable" style="margin-top:14px"></table>
+        <div class="results-table-scroll"><table class="cmp-table" id="termTable" style="margin-top:14px"></table></div>
         <p class="cap" id="termHint" data-i18n="drill.term.hint">点直方图的任意一段，看那部分路径有什么共同点。</p>
         <div id="termDrill" style="display:none">
           <div class="readout-grid" id="termDrillCards"></div>
@@ -328,7 +363,7 @@
       </div>
       <div class="panel">
         <div class="panel-title sm" data-i18n="dist.cons">退休消费轨迹</div>
-        <svg id="consChart" class="chart" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="consChart" class="chart" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="consLegend"></div>
         <p class="cap" id="consCap"></p>
       </div>
@@ -349,9 +384,31 @@
           <button class="btn-run sm ghost" id="storyReroll" style="display:none" data-i18n="story.reroll">⟲ 换一条命</button>
           <span class="hint" id="storyHint"></span>
         </div>
-        <svg id="storyChart" class="chart" viewBox="0 0 760 260" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="storyChart" class="chart" viewBox="0 0 760 260" preserveAspectRatio="xMidYMid meet"></svg></div>
         <ul class="story-log" id="storyLog"></ul>
         <p class="cap" id="storyCap"></p>
+      </div>
+      <div class="panel">
+        <div class="panel-title sm"><span data-i18n="flight.title">退休飞行模拟器</span> <span class="tag" data-i18n="flight.tag">练执行，不练择时</span></div>
+        <p class="panel-note" data-i18n="flight.note">沿一条抽样路径逐年暂停：照承诺规则、硬扛原支出，或恐慌卖出。终点只核对依从与稳健，不把碰巧押中市场算本事。</p>
+        <div class="compute-row">
+          <label class="lblg" for="flightScenario" data-i18n="flight.scenario">场景</label>
+          <select id="flightScenario">
+            <option value="bear_start" data-i18n="flight.bear">熊市开局</option>
+            <option value="inflation_decade" data-i18n="flight.inflation">通胀十年</option>
+            <option value="long_bull" data-i18n="flight.bull">长牛</option>
+          </select>
+          <button class="btn-run sm" id="flightRun" data-i18n="flight.run">▶ 开始演习</button>
+          <button class="btn-run sm ghost" id="flightRestart" style="display:none" data-i18n="flight.restart">⟲ 重开</button>
+          <span class="hint" id="flightHint"></span>
+        </div>
+        <p class="flight-disclosure" data-i18n="flight.disclosure">这是一条用于演习的抽样路径，不是预测。场景不联网、不读取实时行情，也不改变已保存计划。</p>
+        <div id="flightOut"></div>
+        <div class="flight-choices" id="flightChoices" style="display:none">
+          <button class="btn-run sm" data-choice="follow_rule" data-i18n="flight.follow">照承诺规则</button>
+          <button class="btn-run sm ghost" data-choice="hold_spending" data-i18n="flight.hold">硬扛原支出</button>
+          <button class="btn-run sm ghost" data-choice="panic_sell" data-i18n="flight.panic">恐慌卖出</button>
+        </div>
       </div>
     </div>
 
@@ -396,7 +453,7 @@
           <button class="btn-run sm ghost" id="efCancel" style="display:none" data-i18n="ef.cancel">✕ 取消</button>
           <span class="hint" id="efHint"></span>
         </div>
-        <svg id="efChart" class="chart" viewBox="0 0 760 330" preserveAspectRatio="xMidYMid meet" style="display:none"></svg>
+        <div class="results-chart-scroll"><svg id="efChart" class="chart" viewBox="0 0 760 330" preserveAspectRatio="xMidYMid meet" style="display:none"></svg></div>
         <div class="legend" id="efLegend"></div>
         <div class="readout-grid" id="efReadout" style="margin-top:14px"></div>
         <p class="cap" id="efCap"></p>
@@ -404,30 +461,30 @@
       <div class="panel">
         <div class="panel-title sm" data-i18n="stress.torn">敏感性 tornado <span class="tag" data-i18n="stress.torn.tag">terminal real P50 摆动</span></div>
         <div class="compute-row"><button class="btn-run sm" id="sensRun" data-i18n="stress.torn.run">▶ 计算敏感性（约 15–40s）</button><span class="hint" id="sensHint"></span></div>
-        <svg id="tornChart" class="chart" viewBox="0 0 760 280" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="tornChart" class="chart" viewBox="0 0 760 280" preserveAspectRatio="xMidYMid meet"></svg></div>
         <p class="cap" id="tornCap"></p>
-        <svg id="ruChart" class="chart" viewBox="0 0 760 230" preserveAspectRatio="xMidYMid meet" style="margin-top:8px"></svg>
+        <div class="results-chart-scroll"><svg id="ruChart" class="chart" viewBox="0 0 760 230" preserveAspectRatio="xMidYMid meet" style="margin-top:8px"></svg></div>
         <p class="cap" id="ruCap"></p>
       </div>
       <div class="panel">
         <div class="panel-title sm" data-i18n="stress.swr">SWR 的反直觉</div>
         <div class="compute-row"><button class="btn-run sm" id="swrRun" data-i18n="stress.swr.run">▶ 扫描 SWR</button></div>
-        <svg id="swrChart" class="chart" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="swrChart" class="chart" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="swrLegend"></div>
         <p class="cap" id="swrCap"></p>
       </div>
       <div class="panel" id="claimPanel">
         <div class="panel-title sm" data-i18n="stress.claim">社保领取年龄</div>
         <div class="compute-row"><button class="btn-run sm" id="claimRun" data-i18n="stress.claim.run">▶ 扫描领取年龄</button></div>
-        <svg id="claimChart" class="chart" viewBox="0 0 760 260" preserveAspectRatio="xMidYMid meet"></svg>
-        <table class="cmp-table" id="claimTable" style="margin-top:12px"></table>
+        <div class="results-chart-scroll"><svg id="claimChart" class="chart" viewBox="0 0 760 260" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div class="results-table-scroll"><table class="cmp-table" id="claimTable" style="margin-top:12px"></table></div>
         <p class="cap" id="claimCap"></p>
       </div>
       <div class="panel">
         <div class="panel-title sm" data-i18n="roth.title">Roth 转换额度对比 <span class="tag" data-i18n="roth.tag">自动启用真实税表</span></div>
         <p class="panel-note" data-i18n="roth.note">固定比较 8 个年转换基准档（$0–$100k）；每档按全局增长率逐年增长，不是多年度独立优化。只在已测试档位中先比较三分支成功率，再在成功率相同的档位中比较全路径税后终值 P50（失败路径记 0）。终值采用账户桶平率清算折扣代理；档位之间/边界之外未测试，结果仅作方向参考。</p>
         <div class="compute-row"><button class="btn-run sm" id="rothRun" data-i18n="roth.run">▶ 对比 8 个转换档位（约 60–90 秒）</button><span class="hint" id="rothHint"></span></div>
-        <svg id="rothChart" class="chart" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="rothChart" class="chart" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="rothLegend"></div>
         <div class="readout-grid" id="rothReadout" style="margin-top:14px"></div>
         <p class="cap" id="rothCap"></p>
@@ -436,7 +493,7 @@
         <div class="panel-title sm" data-i18n="strat.title">提取策略对比 <span class="tag" data-i18n="strat.tag">同一组路径 × 5 种花钱法</span></div>
         <p class="panel-note" data-i18n="strat.note">同一配置、同一随机序列，只换「怎么花钱」：GK 护栏（当前默认）、固定实际额、VPW 变比例、地板+上行、ABW 摊销。看清消费稳定性、破产风险与遗产之间的三角取舍。</p>
         <div class="compute-row"><button class="btn-run sm" id="stratRun" data-i18n="strat.run">▶ 对比五种策略（约 60–90 秒）</button><span class="hint" id="stratHint"></span></div>
-        <table class="cmp-table" id="stratTable" style="margin-top:12px"></table>
+        <div class="results-table-scroll"><table class="cmp-table" id="stratTable" style="margin-top:12px"></table></div>
         <p class="cap" id="stratCap"></p>
         <div id="stratSpread"></div>
       </div>
@@ -444,15 +501,15 @@
         <div class="panel-title sm" data-i18n="hz.title">住房 · 租 vs 买 <span class="tag" data-i18n="hz.tag">按揭真算 + 蒙特卡洛对比</span></div>
         <p class="panel-note" data-i18n="hz.note">用「高级 → 住房」里的参数：左图是确定性净值对比（买方房净值 vs 租方投资差额），右卡是两种安排各跑一遍蒙特卡洛的结果。买方的房净值不计入模拟组合——它是非流动资产，单独列示。</p>
         <div class="compute-row"><button class="btn-run sm" id="hzRun" data-i18n="hz.run">▶ 对比租与买（约 10 秒）</button><span class="hint" id="hzHint"></span></div>
-        <svg id="hzChart" class="chart" viewBox="0 0 760 280" preserveAspectRatio="xMidYMid meet" style="display:none"></svg>
+        <div class="results-chart-scroll"><svg id="hzChart" class="chart" viewBox="0 0 760 280" preserveAspectRatio="xMidYMid meet" style="display:none"></svg></div>
         <div class="legend" id="hzLegend"></div>
-        <table class="cmp-table" id="hzTable" style="margin-top:12px"></table>
+        <div class="results-table-scroll"><table class="cmp-table" id="hzTable" style="margin-top:12px"></table></div>
         <p class="cap" id="hzCap"></p>
       </div>
       <div class="panel">
         <div class="panel-title sm" data-i18n="stress.bt">序列风险回测 <span class="tag" data-i18n="stress.bt.tag">风格化坏开局</span></div>
         <div class="compute-row"><button class="btn-run sm" id="btRun" data-i18n="stress.bt.run">▶ 运行回测</button></div>
-        <svg id="btConsChart" class="chart" viewBox="0 0 760 260" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="btConsChart" class="chart" viewBox="0 0 760 260" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="btLegend"></div>
         <div class="readout-grid" id="btReadout" style="margin-top:14px"></div>
         <p class="cap" id="btCap"></p>
@@ -465,7 +522,7 @@
       <p class="sec-kicker" data-i18n="reloc.kicker">留在本土 vs 搬到你选的目的地：两条中位轨迹叠在一张图（real，log）。累积段重合，分歧发生在搬迁之后。</p>
       <div class="panel">
         <div class="panel-title sm" id="relocDestTitle"></div>
-        <svg id="cmpChart" class="chart" viewBox="0 0 760 360" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="cmpChart" class="chart" viewBox="0 0 760 360" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="cmpLegend"></div>
         <div class="slider-row" style="margin-top:14px">
           <span class="sl-lab" data-i18n="traj.cursor">年龄游标</span>
@@ -474,7 +531,7 @@
         </div>
         <div id="cmpReadout"></div>
         <div class="panel-title sm" style="margin-top:22px" data-i18n="reloc.table">全周期对比</div>
-        <table class="cmp-table" id="cmpTable"></table>
+        <div class="results-table-scroll"><table class="cmp-table" id="cmpTable"></table></div>
         <p class="cap" id="cmpCap"></p>
       </div>
     </div>
@@ -486,9 +543,9 @@
       <p class="sec-kicker" data-i18n="ab.kicker">两套完整配置的并排对比：中位财富轨迹叠加，关键指标逐项对照。保存方案后改参数重跑即可对比任何假设的效果。</p>
       <div class="verdict" id="abVerdict"></div>
       <div class="panel">
-        <svg id="abChart" class="chart" viewBox="0 0 760 360" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="results-chart-scroll"><svg id="abChart" class="chart" viewBox="0 0 760 360" preserveAspectRatio="xMidYMid meet"></svg></div>
         <div class="legend" id="abLegend"></div>
-        <table class="cmp-table" id="abTable" style="margin-top:16px"></table>
+        <div class="results-table-scroll"><table class="cmp-table" id="abTable" style="margin-top:16px"></table></div>
         <p class="cap" id="abCap"></p>
         <div class="compute-row" style="margin-top:12px">
           <button class="btn-ghost sm" id="loadA" data-i18n="ab.loadA">载入 A 的配置</button>
@@ -514,6 +571,16 @@
           <span class="cap" id="revFormNote"></span>
         </div>
       </div>
+      <div class="panel" id="revCockpitPanel">
+        <div class="panel-title sm" data-i18n="rev.cockpit.title">今年怎么提取</div>
+        <p class="cap" data-i18n="rev.cockpit.note">只编译当前计划这一年的执行清单，不跑新的蒙特卡洛，也不写入归档。上一年 12 月 31 日的余额必须来自真实记录；两个余额都留空时，只有 RMD 一节会标成未测量。</p>
+        <div id="revCockpitForm"></div>
+        <div class="compute-row" style="margin-top:14px">
+          <button class="btn-ghost sm" id="revCockpitRun" data-i18n="rev.cockpit.run">编译今年的清单 →</button>
+          <span class="cap" id="revCockpitHint"></span>
+        </div>
+        <div id="revCockpitOut"></div>
+      </div>
       <div class="panel hidden" id="revMemoPanel">
         <div class="panel-title sm" data-i18n="rev.memo.title">这次复核的结论</div>
         <div id="revMemo"></div>
@@ -536,6 +603,42 @@
       <div class="panel hidden" id="revHistoryPanel">
         <div class="panel-title sm" data-i18n="rev.history.title">往年复核</div>
         <div id="revHistory"></div>
+      </div>
+    </div>
+
+    <div class="rpage" id="rp-reviewday">
+      <div class="review-day-shell" id="reviewDayShell">
+        <div class="review-day-head">
+          <div>
+            <div class="sec-head"><span class="sec-num">RD</span><h2 class="sec-title">Review Day</h2></div>
+            <p class="sec-kicker" id="reviewDayKicker">Arrange existing review facts into an annual agenda two people can read together.</p>
+          </div>
+          <div class="compute-row">
+            <button class="btn-ghost sm" id="reviewDaySpouse">Spouse co-read layout</button>
+            <button class="btn-ghost sm" id="reviewDayFullscreen">Full-screen agenda</button>
+          </div>
+        </div>
+
+        <div class="callout hidden" id="reviewDayLetterOpen" role="status"></div>
+        <div class="review-day-agenda" id="reviewDayAgenda"></div>
+
+        <div class="panel review-day-close">
+          <div class="panel-title sm" id="reviewDayCloseTitle">Archive this day</div>
+          <div class="form-grid">
+            <label><span id="reviewDayYearLabel">Review year</span><input id="reviewDayYear" type="number" min="2000" step="1"></label>
+            <label><span id="reviewDayNextLabel">Next Review Day</span><input id="reviewDayNext" type="date"></label>
+          </div>
+          <label class="review-day-letter-label"><span id="reviewDayLetterLabel">Leave a letter to yourselves next year</span>
+            <textarea id="reviewDayLetter" rows="7" placeholder="What matters most to protect? What should you look at first next year?"></textarea>
+          </label>
+          <p class="cap" id="reviewDayPromise">Completion appends immutable minutes and a letter to this plan's local history.</p>
+          <div class="compute-row">
+            <button class="btn-ghost" id="reviewDayComplete">Complete Review Day</button>
+            <button class="btn-ghost hidden" id="reviewDayExport">Export minutes + .ics</button>
+            <span class="cap" id="reviewDayHint"></span>
+          </div>
+          <pre class="review-day-memo hidden" id="reviewDayMemo"></pre>
+        </div>
       </div>
     </div>
 
@@ -620,11 +723,40 @@
       </div>
     </div>
 
+    <div class="rpage" id="rp-transition">
+      <div class="sec-head"><span class="sec-num">VI</span><h2 class="sec-title" data-i18n="lt.title">人生转折</h2></div>
+      <p class="sec-kicker" data-i18n="lt.kicker">丧偶、离婚、伤残认定、继承到账、再婚——这五件事一旦发生，一份计划里同时有好几处会跟着变，而它们分散在不同的步骤里，很容易改了一处漏了三处。这一页把该改的列成一张清单：勾了才改，不勾就一个字不动。有些行只是告诉你「它会自动跟着变」，有些行需要一个只有你才有的数字（比如 SSA 给你的遗属金额）——那两类都不会被替你填上。</p>
+      <div class="panel" style="margin-top:18px" id="transitionPanel">
+        <div class="panel-title sm" data-i18n="lt.panel">发生了什么</div>
+        <div class="compute-row">
+          <select id="ltKind" class="lt-kind"></select>
+          <button class="btn-ghost" id="ltPropose" data-i18n="lt.propose">▶ 看看这份计划里有哪些会跟着变</button>
+        </div>
+        <div id="ltOut" style="margin-top:12px"></div>
+      </div>
+    </div>
+
     <div class="rpage" id="rp-concl">
       <div class="sec-head"><span class="sec-num">VI</span><h2 class="sec-title" data-i18n="concl.title">结论</h2></div>
       <p class="sec-kicker" data-i18n="concl.kicker">以下每条都由你这次跑出的数字生成，随输入改变。计算越多板块（敏感性/SWR/搬迁），结论越完整。</p>
       <div class="callout hidden" id="rulePackConclusionStatus" role="status"></div>
       <div id="conclusions"></div>
+      <div class="panel" style="margin-top:18px" id="guardrailStudyPanel">
+        <div class="panel-title sm" data-i18n="gst.title">这些护栏会不会老是误报</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="gst.kicker">把这份计划跑一遍，然后让每条护栏沿着每一条路径走一遍，看它在**最后其实没事**的路径里喊过多少次。一条误报率 70% 的护栏不是安全网，它正是它本来要预防的那种焦虑决策的来源——而光靠推敲阈值是看不出来的，只能跑。护栏只观察，不改计划：政策臂和无政策臂就是同一条路径，一条是路径本身，另一条是路径旁边多了个观察者。有些触发条件在模拟路径里根本无法被诚实地检验（比如「成功率下降」——人不会在中途观察到自己的成功率），那些会明说没测，而不是报一个让人安心的 0。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="gstRun" data-i18n="gst.run">▶ 量一下误报率</button>
+        </div>
+        <div id="gstOut" style="margin-top:12px"></div>
+      </div>
+      <div class="panel" style="margin-top:18px" id="successionPanel">
+        <div class="panel-title sm" data-i18n="sx.title">如果接手这份计划的人不是你</div>
+        <p class="panel-note" style="margin:6px 0 10px" data-i18n="sx.kicker">生成一份可以交给别人的说明：这份计划假设了什么、账户大致在哪里、先做哪三件事。<b>它不含也拒绝含任何凭据</b>——密码、账号、卡号、助记词都会被点名拒收，因为这份文件的用途就是交出去。账户地图现在是空的，那不等于「没有账户」，只等于还没有人填过它。</p>
+        <div class="compute-row">
+          <button class="btn-ghost" id="sxRun" data-i18n="sx.run">▶ 生成继任者说明书</button>
+        </div>
+        <div id="sxOut" style="margin-top:12px"></div>
+      </div>
       <div class="panel" style="margin-top:18px" id="careerBreakPanel">
         <div class="panel-title sm" data-i18n="cb.title">继续工作，还是休这一段假</div>
         <p class="panel-note" style="margin:6px 0 10px" data-i18n="cb.kicker">同一个计划、同一个种子跑两遍，只差「休不休」这一件事。先看 FIRE 时间和几笔具体的钱——成功率在这个引擎上通常两边都是 100%，因为提取规则靠砍消费吸收损失，看它会以为休假没有代价。</p>
@@ -692,6 +824,7 @@
           <div id="outcomeLayers"></div>
           <div id="regimeConditional"></div>
           <div id="limPersonal"></div>
+          <div id="limJurisdiction"></div>
         <ul class="lim" id="limitations"></ul>
         </div>
         <div class="compute-row" style="margin-top:16px">
@@ -713,10 +846,21 @@
 
 </main>
 
-<div id="logModal" class="modal hidden"><div class="modal-box">
-  <div class="modal-head"><span data-i18n="diag.logs.title">运行日志（最近 300 行）</span>
-    <button class="btn-ghost sm" id="logClose">✕</button></div>
-  <pre id="logBody" class="log-pre"></pre>
+<div id="logModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="logTitle"><div class="modal-box">
+  <div class="modal-head"><span id="logTitle" data-i18n="diag.logs.title">运行日志（最近 300 行）</span>
+    <button class="btn-ghost sm" id="logClose" aria-label="close">✕</button></div>
+  <pre id="logBody" class="log-pre" tabindex="0"></pre>
+</div></div>
+
+<div id="feedbackModal" class="modal hidden"><div class="modal-box feedback-box">
+  <div class="modal-head"><span data-i18n="feedback.title">审阅用户反馈包</span>
+    <button class="btn-ghost sm" id="feedbackClose" aria-label="close">✕</button></div>
+  <div id="feedbackBody" class="feedback-body"></div>
+  <div class="feedback-actions">
+    <span id="feedbackHint" class="save-hint"></span>
+    <button class="btn-ghost" id="feedbackReview" data-i18n="feedback.review">生成内容预览</button>
+    <button class="btn-run" id="feedbackExport" data-i18n="feedback.export" disabled>导出 Markdown + JSON</button>
+  </div>
 </div></div>
 
 <div id="toast" class="toast hidden"></div>
@@ -725,6 +869,7 @@
 <script src="charts.js"></script>
 <script src="destination_catalog.js"></script>
 <script src="family_queue.js"></script>
+<script src="welcome_intro.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

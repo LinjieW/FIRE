@@ -19,9 +19,12 @@ Treat as editable starting points; tests/test_regression.py alarms on staleness.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 
-from fire_rule_pack import IRMAA_RULES, US_FEDERAL_RULES, US_STATE_ARCHETYPES
+from fire_rule_pack import (IRMAA_RULES, RULE_PACK_ID, US_FEDERAL_RULES,
+                            US_STATE_ARCHETYPES)
 
 
 # ---------------------------------------------------------------- parameters
@@ -162,8 +165,119 @@ def ss_taxable_amount(ss_nominal: float, other_income_nominal: float,
 def rmd_required(pretax_balance: float, age: int, p: TrueTaxParams) -> float:
     if not p.rmd_enabled or age < p.rmd_age or pretax_balance <= 0:
         return 0.0
-    div = RMD_TABLE.get(min(int(age), 120), 2.0 if age > 120 else None)
+    div = rmd_divisor(age, p)
     return pretax_balance / div if div else 0.0
+
+
+def rmd_divisor(age: int, p: TrueTaxParams):
+    """Return the exact divisor used by :func:`rmd_required`, or ``None``.
+
+    The Cockpit must not copy the Uniform Lifetime Table lookup merely to
+    explain the amount the engine used.  Keeping the lookup here lets both the
+    solver and its execution receipt consume the same value.
+    """
+    if not p.rmd_enabled or age < p.rmd_age:
+        return None
+    return RMD_TABLE.get(min(int(age), 120), 2.0 if age > 120 else None)
+
+
+def rmd_execution_receipt(prior_year_end_balances, birth_year: int,
+                          calendar_year: int, p: TrueTaxParams,
+                          withdrawal_order=None) -> dict:
+    """Describe the RMD floor already enforced by the true-tax engine.
+
+    ``prior_year_end_balances`` is deliberately required once an RMD is due.
+    The year solver has a backwards-compatible fallback to current balances,
+    but an execution Cockpit may not present that approximation as an exact
+    prior-December-31 calculation.  Every schema-declared forced-distribution
+    field must therefore be present, including fields whose balance is zero.
+
+    The returned rows are *model buckets*, not custodian accounts.  The app's
+    account schema cannot represent IRA-versus-employer-plan aggregation or
+    employer-plan still-working exceptions, so the receipt says that plainly
+    instead of presenting itself as filing or custodian instructions.
+    """
+    for name, value in (("birth_year", birth_year),
+                        ("calendar_year", calendar_year)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("%s must be an integer" % name)
+    age_this_year = calendar_year - birth_year
+    if age_this_year < 0:
+        raise ValueError("birth_year must not be after calendar_year")
+
+    order, _schema = _schema_types(withdrawal_order)
+    forced_accounts = [account for account in order
+                       if account.forced_distribution]
+    common = {
+        "calendar_year": calendar_year,
+        "birth_year": birth_year,
+        "age_this_year": age_this_year,
+        "rmd_start_age": int(p.rmd_age),
+        "rule_pack_id": RULE_PACK_ID,
+        "aggregation_scope": "model_bucket_not_custodian_account",
+        "deadline_scope": "engine_generic_age_rule",
+        "sources": [
+            "https://www.irs.gov/publications/p590b",
+            "https://www.irs.gov/retirement-plans/retirement-plan-and-ira-required-minimum-distributions-faqs",
+            "https://www.irs.gov/retirement-plans/rmd-comparison-chart-iras-vs-defined-contribution-plans",
+        ],
+        "limitations": [
+            "Model buckets do not represent custodian-level RMD aggregation.",
+            "Employer-plan still-working and 5%-owner exceptions are not represented.",
+        ],
+    }
+    if not p.rmd_enabled:
+        return dict(common, status="disabled", divisor=None,
+                    accounts=[], total_required_nominal=0.0,
+                    deadline=None, first_distribution_year=False,
+                    delayed_first_year_two_rmd_warning=False)
+    if age_this_year < p.rmd_age:
+        return dict(common, status="not_due", divisor=None,
+                    accounts=[], total_required_nominal=0.0,
+                    deadline=None, first_distribution_year=False,
+                    delayed_first_year_two_rmd_warning=False)
+
+    if not isinstance(prior_year_end_balances, Mapping):
+        raise ValueError(
+            "prior_year_end_balances must provide every forced-distribution account")
+    missing = [account.field for account in forced_accounts
+               if account.field not in prior_year_end_balances]
+    if missing:
+        raise ValueError(
+            "prior_year_end_balances missing required field(s): %s" %
+            ", ".join(missing))
+
+    divisor = rmd_divisor(age_this_year, p)
+    rows = []
+    for account in forced_accounts:
+        balance = prior_year_end_balances[account.field]
+        if (isinstance(balance, bool) or not isinstance(balance, (int, float))
+                or not math.isfinite(float(balance)) or balance < 0):
+            raise ValueError(
+                "prior_year_end_balances.%s must be finite and non-negative" %
+                account.field)
+        balance = float(balance)
+        rows.append({
+            "account_key": account.key,
+            "account_field": account.field,
+            "prior_year_end_balance_nominal": balance,
+            "required_nominal": float(rmd_required(
+                balance, age_this_year, p)),
+        })
+
+    first_year = age_this_year == p.rmd_age
+    deadline = ("%04d-04-01" % (calendar_year + 1)
+                if first_year else "%04d-12-31" % calendar_year)
+    return dict(
+        common,
+        status="due",
+        divisor=float(divisor),
+        accounts=rows,
+        total_required_nominal=sum(row["required_nominal"] for row in rows),
+        deadline=deadline,
+        first_distribution_year=first_year,
+        delayed_first_year_two_rmd_warning=first_year,
+    )
 
 
 def irmaa_annual_surcharge_real(magi_real: float, mfj: bool, persons: int) -> float:
@@ -175,6 +289,72 @@ def irmaa_annual_surcharge_real(magi_real: float, mfj: bool, persons: int) -> fl
         if magi_real > low:
             return sur * persons
     return tiers[0][1] * persons
+
+
+def ordinary_tax_cliff_receipt(taxable_real: float, mfj: bool) -> dict:
+    """Describe the ordinary bracket this module itself will apply next.
+
+    This is an execution receipt, not another tax calculator: the bracket list
+    is the same object ``ordinary_tax_real`` reads.  ``headroom_real`` is the
+    distance to the next lower bound; the top bracket has no invented ceiling.
+    """
+    taxable_real = float(taxable_real)
+    if not math.isfinite(taxable_real) or taxable_real < 0.0:
+        raise ValueError("taxable_real must be finite and non-negative")
+    brackets = ORD_MFJ if mfj else ORD_SINGLE
+    current_index = max(
+        index for index, (low, _rate) in enumerate(brackets)
+        if taxable_real >= low)
+    next_low = (float(brackets[current_index + 1][0])
+                if current_index + 1 < len(brackets) else None)
+    return {
+        "filing_status": "mfj" if mfj else "single",
+        "taxable_income_real": taxable_real,
+        "bracket_index": current_index,
+        "marginal_rate": float(brackets[current_index][1]),
+        "next_threshold_real": next_low,
+        "headroom_real": (next_low - taxable_real
+                          if next_low is not None else None),
+        "rule_pack_id": RULE_PACK_ID,
+    }
+
+
+def irmaa_cliff_receipt(magi_real: float, mfj: bool, persons: int) -> dict:
+    """Report the exact current IRMAA tier and distance to the next one.
+
+    Boundary behavior delegates to ``irmaa_annual_surcharge_real``.  That is
+    important at the pack's strict middle thresholds: recreating the tier test
+    here with a slightly different ``>=`` would make the cockpit disagree with
+    the premium the retirement engine actually charged.
+    """
+    magi_real = float(magi_real)
+    if not math.isfinite(magi_real) or magi_real < 0.0:
+        raise ValueError("magi_real must be finite and non-negative")
+    if isinstance(persons, bool) or not isinstance(persons, int) or persons < 1:
+        raise ValueError("persons must be a positive integer")
+    tiers = IRMAA_MFJ if mfj else IRMAA_SINGLE
+    household_surcharge = irmaa_annual_surcharge_real(
+        magi_real, mfj, persons)
+    per_person_surcharge = household_surcharge / persons
+    current_index = next(
+        index for index, (_low, surcharge) in enumerate(tiers)
+        if float(surcharge) == float(per_person_surcharge))
+    next_low = (float(tiers[current_index + 1][0])
+                if current_index + 1 < len(tiers) else None)
+    next_surcharge = (float(tiers[current_index + 1][1]) * persons
+                      if current_index + 1 < len(tiers) else None)
+    return {
+        "filing_status": "mfj" if mfj else "single",
+        "persons": persons,
+        "magi_real": magi_real,
+        "tier_index": current_index,
+        "annual_surcharge_household_real": float(household_surcharge),
+        "next_threshold_real": next_low,
+        "headroom_real": (max(0.0, next_low - magi_real)
+                          if next_low is not None else None),
+        "next_annual_surcharge_household_real": next_surcharge,
+        "rule_pack_id": RULE_PACK_ID,
+    }
 
 
 def dividend_drag_rate_real(dividend_real: float, qualified_fraction: float,
@@ -234,7 +414,8 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
                           p: TrueTaxParams,
                           rmd_bases_prior_year_end: dict = None,
                           gain_fraction: float = None,
-                          withdrawal_order=None) -> dict:
+                          withdrawal_order=None, meta_out: dict = None,
+                          rmd_age: int = None) -> dict:
     """Withdraw in the DECLARED order so that after REAL taxes the year's need
     is met. Fixed-point on the tax bill (≤8 iters).
 
@@ -271,6 +452,18 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     as a 401(k) is -- and a scalar cannot say which account it describes. A
     field the caller leaves out falls back to that account's current balance,
     which is what an absent scalar always meant.
+
+    ``rmd_age`` is an optional exact calendar-year age for the forced-
+    distribution rule only. The ordinary ``age`` continues to own early-
+    withdrawal penalties and every other age-sensitive behavior. This split
+    lets an execution worksheet use ``calendar_year - birth_year`` for RMDs
+    without pretending an integer current-age field is a birthday.
+
+    When a caller explicitly supplies ``meta_out``, it receives the declared
+    withdrawal order and the final gross draw from each account.  The ledger
+    is observational: the returned solver dict and every default caller stay
+    unchanged, and tax remains an aggregate because allocating a progressive
+    bill back to buckets would be a second tax model.
     """
     mfj = p.filing_jointly
     # `gain_fraction` is the caller's MEASURED (value - basis) / value for this
@@ -297,6 +490,11 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
         avail[a.field] = balance
     # RMD law uses the account value at the close of the prior December 31,
     # not the post-return balance available when this year's withdrawal runs.
+    if rmd_age is not None and (
+            isinstance(rmd_age, bool) or not isinstance(rmd_age, int)
+            or rmd_age < 0):
+        raise ValueError("rmd_age must be a non-negative integer")
+    forced_age = int(age) if rmd_age is None else rmd_age
     bases = rmd_bases_prior_year_end or {}
     forced = {}
     for a in order:
@@ -304,7 +502,7 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
             continue
         base = (max(0.0, bases[a.field]) if a.field in bases
                 else raw[a.field])
-        forced[a.field] = min(rmd_required(base, int(age), p),
+        forced[a.field] = min(rmd_required(base, forced_age, p),
                               avail[a.field])
 
     tax_guess = 0.0
@@ -419,6 +617,16 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     for a in order:
         if a.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
             capital_gain_wd += took[a.field]
+    if meta_out is not None:
+        meta_out["withdrawal_order"] = [account.key for account in order]
+        meta_out["withdrawals_by_account"] = [
+            {
+                "account_type": account.key,
+                "field": account.field,
+                "gross_nominal": float(took[account.field]),
+            }
+            for account in order if took[account.field] > 0.0
+        ]
     return dict(accounts=out, tax_total=tax_guess, penalty=penalty,
                 taxable_wd=capital_gain_wd, gain_fraction_used=gain_frac,
                 ordinary_taxable_real=taxable_ord_nom / cpi,

@@ -51,6 +51,8 @@ except ImportError:
     sys.exit(2)
 
 import webview  # noqa: E402
+sys.path.insert(0, str(HERE))
+import gauge_box as GAUGE  # noqa: E402
 
 RESULTS = []
 
@@ -535,6 +537,7 @@ def _drive_webview(window, state):
             js("location.reload()")
             time.sleep(settle)
             js(_DIALOG_STUBS)
+            enter_intro()
 
         # Before the first check, not after the first reload: a dialog raised
         # during startup would otherwise block with no stub in place.
@@ -551,6 +554,17 @@ def _drive_webview(window, state):
                 time.sleep(0.5)
             return False
 
+        def enter_intro():
+            opened = wait_for('!!document.querySelector("#fire-intro[open]")', 15)
+            check("bundled three-second intro opens", opened)
+            if opened:
+                check("bundled intro keeps English copy",
+                      js(r'!/[\u3400-\u9fff]/.test(document.getElementById("fire-intro").textContent)'))
+                js('document.getElementById("introStart").click()')
+                check("bundled Start reveals the existing welcome page",
+                      wait_for('!document.getElementById("fire-intro").open && document.getElementById("v-welcome").classList.contains("show")', 3))
+
+        enter_intro()
         check("the frozen server's own web assets render in a real WKWebView",
               bool(js('!!document.getElementById("v-welcome")')))
         check("the bundled app.js loaded and initialised its seams",
@@ -667,23 +681,14 @@ def _drive_webview(window, state):
                 check("the gauge is drawn in the frozen app",
                       bool(gauge) and gauge.get("ok"),
                       str(gauge))
-                geometry = js(
-                    '(() => { const g=document.getElementById("gauge");'
-                    ' const svg=g&&(g.matches("svg")?g:g.querySelector("svg"));'
-                    ' const wrap=g&&g.closest(".gauge-wrap");'
-                    ' if(!svg||!wrap) return null;'
-                    ' const b=svg.getBoundingClientRect();'
-                    ' const w=wrap.getBoundingClientRect();'
-                    ' return {width:b.width,height:b.height,wrapHeight:w.height,'
-                    ' paths:svg.querySelectorAll("path").length,'
-                    ' text:(svg.querySelector("text")||{}).textContent||""};})()')
+                geometry = js("JSON.stringify(%s)" % GAUGE.MEASURE_JS)
+                if isinstance(geometry, str):
+                    try:
+                        geometry = json.loads(geometry)
+                    except ValueError:
+                        geometry = None
                 check("the frozen gauge occupies a nonzero visible WKWebView box",
-                      bool(geometry)
-                      and geometry.get("width", 0) >= 200
-                      and geometry.get("height", 0) >= 140
-                      and geometry.get("wrapHeight", 0) >= 140
-                      and geometry.get("paths", 0) >= 2
-                      and "%" in geometry.get("text", ""),
+                      GAUGE.is_laid_out(geometry),
                       str(geometry))
                 # The number must have finished counting up, and the arc must
                 # not be sitting at its hidden offset. "Drawn" is not enough:

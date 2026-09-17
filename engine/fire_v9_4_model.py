@@ -98,7 +98,7 @@ EARLY_WD_PENALTY_AGE = US_FEDERAL_RULES["early_withdrawal_age"]
 EARLY_WD_PENALTY_RATE = US_FEDERAL_RULES["early_withdrawal_rate"]
 
 
-def _schema_order(withdrawal_order=None):
+def _schema_order(withdrawal_order=None, jurisdiction="US"):
     """The declared account types in draw order, plus the schema module.
 
     Imported lazily so the engine keeps no import-time dependency on the
@@ -116,7 +116,7 @@ def _schema_order(withdrawal_order=None):
     if server not in sys.path:
         sys.path.insert(0, server)
     import account_schema as SCHEMA
-    return SCHEMA.ordered_types(withdrawal_order), SCHEMA
+    return SCHEMA.ordered_types(withdrawal_order, jurisdiction), SCHEMA
 
 
 def withdraw_with_seasoning_v94(
@@ -128,6 +128,7 @@ def withdraw_with_seasoning_v94(
     withdrawal_order: "Optional[list]" = None,
     gain_fraction: "Optional[float]" = None,
     meta_out: "Optional[dict]" = None,
+    jurisdiction: str = "US",
 ) -> tuple[AccountStack, float, float]:
     """
     v9.4 patched withdrawal. Adds 10% IRS early withdrawal penalty when
@@ -151,7 +152,9 @@ def withdraw_with_seasoning_v94(
     `meta_out` receives `capital_gain_withdrawal`, so a caller tracking basis
     can retire it in proportion without re-deriving the draw from balance
     differences -- which would be a second implementation of the ordering rule
-    right here.
+    right here. It also receives the aggregate tax-and-penalty amount already
+    priced by this loop; the caller does not allocate that aggregate back to
+    buckets or recompute the effective rates.
     """
     accounts = accounts.copy()
     remaining = needed_after_tax
@@ -159,6 +162,8 @@ def withdraw_with_seasoning_v94(
     gain_frac = (1.0 if gain_fraction is None
                  else max(0.0, min(1.0, float(gain_fraction))))
     capital_gain_taken = 0.0
+    tax_and_penalty = 0.0
+    withdrawals_by_account = []
 
     # Roadmap 7.0 Phase 2: the order and the per-account rules come from the
     # declaration in `server/account_schema.py` rather than from four blocks
@@ -169,7 +174,7 @@ def withdraw_with_seasoning_v94(
     # `withdrawal_order` absent means the declared default, which is the order
     # this function has used across four engine generations. That is what
     # keeps this change bit-identical for every existing plan.
-    order, SCHEMA = _schema_order(withdrawal_order)
+    order, SCHEMA = _schema_order(withdrawal_order, jurisdiction)
     for account in order:
         if remaining <= 0:
             break
@@ -209,7 +214,14 @@ def withdraw_with_seasoning_v94(
             gross_take = min(remaining, balance)
         setattr(accounts, account.field,
                 getattr(accounts, account.field) - gross_take)
+        if gross_take > 0.0:
+            withdrawals_by_account.append({
+                "account_type": account.key,
+                "field": account.field,
+                "gross_nominal": float(gross_take),
+            })
         remaining -= gross_take * (1 - rate)
+        tax_and_penalty += gross_take * rate
         if account.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
             capital_gain_taken += gross_take
         if penalised:
@@ -218,6 +230,9 @@ def withdraw_with_seasoning_v94(
     actual = needed_after_tax - max(remaining, 0.0)
     if meta_out is not None:
         meta_out["capital_gain_withdrawal"] = capital_gain_taken
+        meta_out["withdrawal_order"] = [account.key for account in order]
+        meta_out["withdrawals_by_account"] = withdrawals_by_account
+        meta_out["tax_and_penalty_nominal"] = float(tax_and_penalty)
     return accounts, actual, total_penalty
 
 

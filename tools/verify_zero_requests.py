@@ -74,8 +74,11 @@ def _sockets(pid: int) -> set:
         # Second belt: even with -a, only rows this process owns are counted.
         if int(parts[1]) != int(pid):
             continue
-        rows.add(parts[-1] if parts[-1] not in ("(LISTEN)", "(ESTABLISHED)")
-                 else parts[-2])
+        # NAME is lsof's ninth column. TCP states are an optional tenth token
+        # and are not limited to LISTEN/ESTABLISHED: CLOSE_WAIT, TIME_WAIT and
+        # friends are states, not remote addresses. Reading the last token made
+        # one ordinary loopback close look exactly like an external host.
+        rows.add(parts[8])
     return rows
 
 

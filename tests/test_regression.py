@@ -138,6 +138,7 @@ class TestI18nLint(unittest.TestCase):
     CJK = __import__("re").compile(r"[一-鿿]")
     ALLOW = [__import__("re").compile(p) for p in (
         r"\btt\(",                                   # tt(zh, en)
+        r"\bplanSaveFeedback\(",                      # retained zh/en status, refreshed by setLang
         r"data-i18n",                                # tag-refresh channel
         r'L\s*===?\s*"zh"',                          # explicit branch
         r'"[^"]*[一-鿿][^"]*"\s*,\s*"',      # ["zh","en"] same line
@@ -145,6 +146,12 @@ class TestI18nLint(unittest.TestCase):
         r'^\s*"[^"]*",?\s*$',                        # continuation of a pair
         r'^\s*"[a-z0-9_.]+":\s*\[',                  # dict key opening a pair
         r'^\s*\["[^"]*[一-鿿]',              # array pair opening line
+        # Same channel, with a stable id in front: ["privacy", "中文…", "EN…"].
+        # Roadmap 12 Phase 1 put ids on the limitations list so groups stop
+        # addressing entries by position; the pair itself is unchanged, only
+        # its offset. Kept narrow on purpose -- a lowercase_snake id, then the
+        # bilingual pair -- so it cannot become a way to smuggle a bare string.
+        r'^\s*\["[a-z][a-z_0-9]*",\s*"[^"]*[一-鿿]',
         r'data-lang="zh"',                           # the language button itself
     )]
 
@@ -2891,6 +2898,7 @@ class TestTrueTaxEngine(unittest.TestCase):
         c = cfg0()
         c["mortality"]["enabled"] = False
         c["initial"]["taxable"] = 5_000_000
+        c["ss_nra"]["residency_status"] = "nra"  # fixture states the old NRA assumption
         c["relocation"].update({"enabled": True, "relocation_age": 30})
         off = ENG.summary(c, 20, SEED, True)
         c["tax_true"]["enabled"] = True
@@ -3541,6 +3549,7 @@ class TestFxPPP(unittest.TestCase):
     @staticmethod
     def _reloc_cfg(kappa=None):
         c = cfg0()
+        c["ss_nra"]["residency_status"] = "nra"  # fixture states the old NRA assumption
         c["relocation"].update({"enabled": True, "relocation_age": 50})
         if kappa is None:
             c["relocation"].pop("ppp_kappa", None)

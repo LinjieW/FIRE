@@ -35,6 +35,7 @@ ones:
 """
 from __future__ import annotations
 
+import copy
 from typing import Optional
 
 #: How a withdrawal from this account is taxed, named by which rate on
@@ -73,7 +74,7 @@ CHARACTER_UNTAXED = None
 
 
 class AccountType:
-    """One account type, in six dimensions.
+    """One account type in the shared S8 dimensions plus pack rule links.
 
     `field` is the attribute name on `AccountStack` this type currently maps
     to. It exists so Phase 1 can be checked against today's engine and so
@@ -89,6 +90,9 @@ class AccountType:
                  seasoned: bool = False,
                  contribution_limited: bool = False,
                  forced_distribution: bool = False,
+                 contribution_rule: Optional[str] = None,
+                 disposition_rule: Optional[str] = None,
+                 forced_distribution_rule: Optional[str] = None,
                  note_cn: str = "", note_en: str = ""):
         self.key = key
         self.field = field
@@ -105,6 +109,11 @@ class AccountType:
         self.seasoned = seasoned
         self.contribution_limited = contribution_limited
         self.forced_distribution = forced_distribution
+        #: Rule identifiers resolve against the jurisdiction's offline pack.
+        #: They carry no choice or numeric default in Python.
+        self.contribution_rule = contribution_rule
+        self.disposition_rule = disposition_rule
+        self.forced_distribution_rule = forced_distribution_rule
         self.note_cn = note_cn
         self.note_en = note_en
 
@@ -201,10 +210,63 @@ BY_KEY = {account.key: account for account in US_ACCOUNT_TYPES}
 BY_FIELD = {account.field: account for account in US_ACCOUNT_TYPES
             if account.field}
 
+_COUNTRY_TYPES = {}
+_COUNTRY_PACKS = {}
+
+
+def country_pack(jurisdiction: str):
+    """Return one validated, isolated non-US account pack.
+
+    US remains the pre-existing in-module declaration so its import and float
+    path do not move. Every non-US jurisdiction uses the same filename and
+    validation contract; this function contains no Canada-specific branch.
+    """
+    code = str(jurisdiction).upper()
+    if code == "US":
+        raise ValueError("US account rules use the existing canonical pack")
+    if code not in _COUNTRY_PACKS:
+        import os
+        import sys
+        engine = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "engine")
+        if engine not in sys.path:
+            sys.path.insert(0, engine)
+        import fire_country_pack as PACK
+        _COUNTRY_PACKS[code] = PACK.pack_for(code)
+    return copy.deepcopy(_COUNTRY_PACKS[code])
+
+
+def account_types(jurisdiction: str = "US") -> tuple:
+    """All declared types for one jurisdiction."""
+    code = str(jurisdiction).upper()
+    if code == "US":
+        return US_ACCOUNT_TYPES
+    if code not in _COUNTRY_TYPES:
+        rows = country_pack(code)["account_types"]
+        _COUNTRY_TYPES[code] = tuple(AccountType(
+            row["key"], field=row["field"], jurisdiction=code,
+            default_order=int(row["default_order"]),
+            withdrawal_rate=row["withdrawal_rate"],
+            tax_character=row["tax_character"],
+            early_penalty_rate=float(row["early_penalty_rate"]),
+            early_penalty_age=row["early_penalty_age"],
+            seasoned=bool(row["seasoned"]),
+            contribution_limited=bool(row["contribution_limited"]),
+            forced_distribution=bool(row["forced_distribution"]),
+            contribution_rule=row.get("contribution_rule"),
+            disposition_rule=row.get("disposition_rule"),
+            forced_distribution_rule=row.get("forced_distribution_rule"),
+        ) for row in rows)
+    return _COUNTRY_TYPES[code]
+
+
+def _by_key(jurisdiction: str) -> dict:
+    return {account.key: account for account in account_types(jurisdiction)}
+
 
 def default_order(jurisdiction: str = "US") -> tuple:
     """The draw order a plan uses when it has not asked for another."""
-    types = [a for a in US_ACCOUNT_TYPES if a.jurisdiction == jurisdiction]
+    types = account_types(jurisdiction)
     return tuple(a.key for a in sorted(types, key=lambda a: a.default_order))
 
 
@@ -224,7 +286,8 @@ def resolve_order(override: Optional[list] = None,
     if not override:
         return default
     named = tuple(str(key) for key in override)
-    unknown = [key for key in named if key not in BY_KEY]
+    by_key = _by_key(jurisdiction)
+    unknown = [key for key in named if key not in by_key]
     if unknown:
         raise ValueError(
             "withdrawal order names accounts that do not exist: %s" % (unknown,))
@@ -248,7 +311,64 @@ def ordered_types(override: Optional[list] = None,
     import time), but the ORDERING RULE lives here once -- a second copy of it
     is how two paths start disagreeing about the same plan.
     """
-    return tuple(BY_KEY[key] for key in resolve_order(override, jurisdiction))
+    by_key = _by_key(jurisdiction)
+    return tuple(by_key[key] for key in resolve_order(override, jurisdiction))
+
+
+def disposition_rule(account_key: str, jurisdiction: str):
+    """The legal choices a declared disposition exposes, without choosing."""
+    account = _by_key(jurisdiction)[account_key]
+    if account.disposition_rule is None:
+        return None
+    return copy.deepcopy(
+        country_pack(jurisdiction)["disposition_rules"][account.disposition_rule])
+
+
+def distribution_rule(account_key: str, jurisdiction: str):
+    account = _by_key(jurisdiction)[account_key]
+    if account.forced_distribution_rule is None:
+        return None
+    return copy.deepcopy(country_pack(jurisdiction)["distribution_rules"][
+        account.forced_distribution_rule])
+
+
+def minimum_distribution(account_key: str, balance: float, age: int,
+                         jurisdiction: str, *, establishment_year: bool) -> float:
+    """Apply a pack-declared forced-distribution factor.
+
+    The caller supplies the legally selected age basis (annuitant or elected
+    spouse) as ``age`` and whether this is the establishment year. This helper
+    refuses to choose either fact. Formula constants and table values all come
+    from the pack.
+    """
+    rule = distribution_rule(account_key, jurisdiction)
+    if rule is None:
+        raise ValueError("account has no forced-distribution rule")
+    if isinstance(age, bool) or not isinstance(age, int) or age < 0:
+        raise ValueError("distribution age must be a non-negative integer")
+    if not isinstance(establishment_year, bool):
+        raise ValueError("establishment_year must be true or false")
+    amount = float(balance)
+    if amount < 0:
+        raise ValueError("distribution balance must be non-negative")
+    if establishment_year:
+        factor = float(rule["establishment_year_factor"])
+    elif age < int(rule["under_age"]):
+        formula = rule["under_age_formula"]
+        if formula["kind"] != "reciprocal_base_minus_age":
+            raise ValueError("unsupported pack distribution formula")
+        denominator = float(formula["base_age"]) - age
+        if denominator <= 0:
+            raise ValueError("distribution formula has a non-positive denominator")
+        factor = 1.0 / denominator
+    elif age >= int(rule["terminal_age"]):
+        factor = float(rule["terminal_factor"])
+    else:
+        try:
+            factor = float(rule["factors"][str(age)])
+        except KeyError as exc:
+            raise ValueError("distribution pack has no factor for age %d" % age) from exc
+    return min(amount, amount * factor)
 
 
 def reinvestment_type(override: Optional[list] = None,
@@ -265,7 +385,14 @@ def reinvestment_type(override: Optional[list] = None,
     accounts and never arrives anywhere. Money vanishing is the failure this
     project treats as worst; it keeps the arithmetic looking complete.
     """
-    for account in ordered_types(override, jurisdiction):
+    try:
+        types = ordered_types(override, jurisdiction)
+    except RuntimeError:
+        # Preserve this helper's established contract for an undeclared
+        # jurisdiction: it has no capital-gain destination. Pack loading is
+        # still loud through `country_pack()` and every other direct caller.
+        types = ()
+    for account in types:
         if account.tax_character == CHARACTER_CAPITAL_GAIN:
             return account
     raise ValueError(

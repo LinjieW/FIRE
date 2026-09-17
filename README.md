@@ -12,11 +12,11 @@ history, workstream logs, prompts, or internal audit archive.
 
 The current public candidate is:
 
-`v10.0-public-candidate-1`
+`v14.0-public-candidate-1`
 
-Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v10.0-public-candidate-1):
+Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-1):
 
-`FIRE-Modeling-10.0-macOS-universal2.zip` (47 MB compressed, ~166 MB unpacked)
+`FIRE-Modeling-14.0-macOS-universal2.zip` (47 MB compressed, ~166 MB unpacked)
 
 The bundle runs on Apple Silicon and Intel Macs. It includes its own Python,
 NumPy, and web UI; no separate Python installation or account is required.
@@ -26,13 +26,13 @@ NumPy, and web UI; no separate Python installation or account is required.
 After downloading, verify the SHA-256:
 
 ```bash
-shasum -a 256 FIRE-Modeling-10.0-macOS-universal2.zip
+shasum -a 256 FIRE-Modeling-14.0-macOS-universal2.zip
 ```
 
 It should print:
 
 ```
-d8c52b7e4e02ab3fe649bda5b958c932198e106e0411aca9b2a16239d56d6a3f
+f3d5052a73158b4ce86e2bd2f9e237a2aa6dfea64024ca9151ceb36ad4c1eb48
 ```
 
 `SHA256SUMS.txt` on the same release covers the app zip and the source archive.
@@ -111,13 +111,29 @@ for confirmation. Then double-clicking works normally.
   backtest replays the engine's predicted distribution against the historical
   record and reports where that ruler does and does not apply — including
   saying "not applicable" rather than zero when it cannot measure something.
+- **The page stops moving while you fill it in.** Each wizard section asks its
+  switches first and opens the rest once you say that part is answered, so
+  fields stop appearing and disappearing underneath you as you type.
+- **Results you can read.** Headline numbers lead each result page, the
+  question navigation points at the page that answers it, saving says whether
+  it saved, and the pages hold up in Chinese and English, light and dark, and
+  on a narrow window.
+- **A feedback pack you carry yourself.** Tick the sections you want, preview
+  exactly what they contain, and only then export a Markdown and JSON pair.
+  The app sends nothing anywhere: amounts are left out unless you tick them,
+  the files state plainly that they are not de-identified, and an empty
+  selection is refused rather than quietly exporting everything.
+- **Milestones counted along the life you actually live.** A milestone age is
+  the first crossing on the path the plan describes -- accumulation up to
+  retirement, then the retirement portfolio -- so the overview and the
+  distribution page answer the same question instead of two different ones.
 
 ## What this release is (and is not)
 
 This is a **public candidate**, not a promise of universal equivalence, tax
 advice, investment advice, or a GA/enterprise release. It is the frozen
-universal2 candidate built from the private `main`, seven development versions
-on from the v3.0 snapshot and three on from v7.0.
+universal2 candidate built from the private `main`, eleven development versions
+on from the v3.0 snapshot and four on from v10.0.
 
 Every module added since then that changes what a plan predicts ships **off by
 default**, so a plan saved under an earlier build reproduces its numbers after
@@ -145,9 +161,9 @@ The public source contains the runtime and build inputs used by the candidate:
   promises above can be checked rather than taken on faith.
 
 The public file set is computed from the built candidate's runtime manifest --
-the exact files the application loads -- rather than from a hand-maintained
-list, plus a small set of regression, JavaScript, frozen-bundle and UI smoke
-checks. Internal development history and operational documents (workstream
+the exact files the application loads, ninety-seven of them in this candidate --
+rather than from a hand-maintained list, plus a small set of regression,
+JavaScript, frozen-bundle and UI smoke checks and the helper they share. Internal development history and operational documents (workstream
 logs, handoffs, roadmaps, audits, prompts) remain outside this public
 repository.
 
@@ -185,11 +201,11 @@ FIRE Modeling 是一个离线运行的 macOS 桌面应用，用蒙特卡洛分�
 
 ### 下载
 
-当前公开候选版本是 `v10.0-public-candidate-1`。请从
-[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v10.0-public-candidate-1)
+当前公开候选版本是 `v14.0-public-candidate-1`。请从
+[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-1)
 下载通用 universal2 App：
 
-`FIRE-Modeling-10.0-macOS-universal2.zip`（压缩后 47 MB，解压后约 166 MB）
+`FIRE-Modeling-14.0-macOS-universal2.zip`（压缩后 47 MB，解压后约 166 MB）
 
 同一个包支持 Apple Silicon 和 Intel Mac；App 已内置 Python、NumPy 和网页界面，
 不需要另装 Python，也不需要账号。
@@ -199,13 +215,13 @@ FIRE Modeling 是一个离线运行的 macOS 桌面应用，用蒙特卡洛分�
 下载后请自行核对 SHA-256：
 
 ```bash
-shasum -a 256 FIRE-Modeling-10.0-macOS-universal2.zip
+shasum -a 256 FIRE-Modeling-14.0-macOS-universal2.zip
 ```
 
 应当输出：
 
 ```
-d8c52b7e4e02ab3fe649bda5b958c932198e106e0411aca9b2a16239d56d6a3f
+f3d5052a73158b4ce86e2bd2f9e237a2aa6dfea64024ca9151ceb36ad4c1eb48
 ```
 
 同一个 Release 里的 `SHA256SUMS.txt` 同时覆盖 App 压缩包与源码归档。
@@ -256,12 +272,22 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
   记录当时决定了什么、什么时候决定的。
 - **引擎自己的预测，拿历史校过。** 校准回测把引擎预测的分布放回历史记录里比对，
   并说明这把尺子在哪里适用、在哪里不适用 —— 量不了的时候它写「不适用」，而不是写 0。
+- **填的时候页面不再动。** 向导每一节先问这一节的开关，等你说「这节答好了」再展开其余字段，
+  于是不会在你打字的时候，底下不停地冒出或消失一些框。
+- **结果页能读下去。** 每页把核心数字放在最前，问题导航指向真正回答它的那一页，
+  保存会告诉你到底存没存上；中英文、深浅外观、窄窗口下都照样成立。
+- **可以自己带走的反馈包。** 你逐节勾选、先看预览确认内容，然后才导出 Markdown 与 JSON 两份。
+  **App 不向任何地方发送任何东西**：金额默认不含、勾了才含，两份产物开头都写明「未经脱敏」，
+  一项都没勾时它会点名拒绝，而不是默默把全部导出去。
+- **里程碑按你真实活过的那条路算。** 里程碑年龄是计划描述的那条路径上的首次跨越 ——
+  积累期到退休，之后接退休期的组合 —— 所以概览页与分布页回答的是同一个问题，
+  而不是各答各的。
 
 ### 这次发布是什么（以及不是什么）
 
 这是一个**公开候选版**，不是通用等价性的承诺，也不是税务建议、投资建议或 GA/企业版。
-它是从私有 `main` 构建的冻结 universal2 候选，相对 v3.0 快照已经过了七个开发版本，
-相对 v7.0 过了三个。
+它是从私有 `main` 构建的冻结 universal2 候选，相对 v3.0 快照已经过了十一个开发版本，
+相对 v10.0 过了四个。
 
 自那以后新增的、会改变计划预测的模块**一律默认关闭** —— 所以在旧版本下保存的计划，
 升级后数字逐位复现。这些模块带来的是**问更难的问题的能力**：块状支出、社保削减、
@@ -283,7 +309,10 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 - `tools/recover_without_app.py` 与 `tools/verify_zero_requests.py` —— 上面那两条承诺
   因此可以被验证，而不是只能相信。
 
-公开快照基于仓库最初的 MIT 许可提交压缩而成；私有开发历史和运维文档不在此仓库中。
+公开文件集由构建出来的候选包自己的 runtime manifest 算出 —— 也就是 App 真正加载的那些文件，
+本次候选是 97 个 —— 而不是靠一份手工维护的清单；再加上少量回归、JavaScript、冻结包与 UI 烟测，
+以及它们共用的那个辅助模块。私有开发历史与运维文档（工作日志、交接、路线图、审计、提示词）
+不在此仓库中。
 
 ### 从源码构建（维护者向）
 

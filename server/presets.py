@@ -16,6 +16,9 @@ def _with_relocation() -> dict:
     official de-identified baseline; the destination is a generic lower-cost
     overseas region (relocation @41, cost-of-living 0.85)."""
     c = _baseline()
+    # The worked relocation example states its legacy NRA assumption. New
+    # user plans reset this to unconfirmed at creation, never on loading.
+    c["ss_nra"]["residency_status"] = "nra"
     c["name"] = "Baseline · home vs relocation"
     c["relocation"].update({"enabled": True, "relocation_age": 41, "col_ratio": 0.85})
     return c
