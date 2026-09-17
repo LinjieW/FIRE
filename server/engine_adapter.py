@@ -42,6 +42,7 @@ import numpy as np
 import fire_v8_model
 import fire_v9_8_model as V98
 from fire_v9_8_model import (
+    AlreadyFiredParams,
     HousePriceProcess,
     RetainedStockProcess,
     HumanCapitalParams,
@@ -73,6 +74,7 @@ from fire_v9_3_model import (
 from fire_v9_6_model import ChinaHealthcareParams, SSNRAHaircutParams
 from ltc_model import LtcParams, DEFAULT_LIFETIME_RISK as LTC_LIFETIME_RISK
 import ltc_model as LTC
+import health_chain as HEALTH_CHAIN
 from parents_model import Parent, ParentsParams
 import parents_model as PARENTS
 from guaranteed_income import (
@@ -82,6 +84,7 @@ from guaranteed_income import (
 import guaranteed_income as GI
 import ssa_import as SSA_IMPORT
 import student_debt as STUDENT_DEBT
+import account_schema as ACCOUNT_SCHEMA
 from fire_tax_true import TrueTaxParams
 from fire_tax_true import ORD_SINGLE as TRUE_ORD_SINGLE
 from funded_ratio import FundedRatioParams
@@ -126,6 +129,116 @@ class ConfigIncomplete(ValueError):
             self.code = code
 
 
+#: Config keys renamed in Roadmap 12 Phase 3, old -> new.
+#:
+#: `applyDest` writes EVERY non-US destination into leaves named for China:
+#: the catalogue holds 308 destinations, 255 of them outside the US, so
+#: choosing Lisbon stored Portuguese inflation in `state.inflation_cn`. The
+#: names said China; the values were wherever the user went. Roadmap 11
+#: Phase 7 then added a second country mechanism (`country_accounts`), and
+#: ROADMAP_4.0.md:653 had already recorded that this ownership decision
+#: "cannot be made twice". The user ruled: neutral names.
+#:
+#: ONLY the config contract is renamed. The engine dataclasses keep their
+#: own field names -- engine/ is the vendored v9.8 chain, and rewriting
+#: field names across six of its model files to change what a key is CALLED
+#: would be spending supply-chain risk on a naming problem. Translating
+#: between the product's contract and a vendored engine is what this module
+#: is for.
+#:
+#: The old spelling is accepted FOREVER, not for a deprecation window: the
+#: archive holds 75 saved plans at config_schema_version 2 and
+#: `plan_versions` ABORTs every UPDATE and DELETE ("plan_versions are
+#: immutable"). Rewriting stored configs is not a risk to manage, it is a
+#: thing that cannot happen. So a read-time mapping is the only shape
+#: available, and dropping it later would orphan every plan the user has.
+LEGACY_CONFIG_KEYS = {
+    "state.inflation_cn": "state.inflation_destination",
+    "tax_cn": "tax_destination",
+    "china_healthcare": "destination_healthcare",
+    "relocation.use_cn_inflation": "relocation.use_destination_inflation",
+    "social_security.paid_in_shanghai": "social_security.paid_abroad",
+}
+
+#: new config key -> the engine dataclass field it feeds. The engine is not
+#: renamed, so the adapter carries the translation explicitly rather than
+#: relying on the two happening to match.
+ENGINE_FIELD_FOR = {
+    "state.inflation_destination": "inflation_cn",
+    "relocation.use_destination_inflation": "use_cn_inflation",
+    "social_security.paid_abroad": "paid_in_shanghai",
+}
+
+
+def _to_engine_fields(block: dict, prefix: str) -> dict:
+    """Translate one config block's neutral leaf names back to engine fields.
+
+    Only the three leaves in ENGINE_FIELD_FOR differ; everything else passes
+    through untouched. Returning a new dict rather than editing in place",
+    because build_kwargs is called on the caller's config.
+    """
+    if not isinstance(block, dict):
+        return block
+    out = dict(block)
+    for new_path, engine_field in ENGINE_FIELD_FOR.items():
+        new_block, _, new_leaf = new_path.partition(".")
+        if new_block != prefix:
+            continue
+        if new_leaf in out:
+            out[engine_field] = out.pop(new_leaf)
+    return out
+
+
+def _to_config_names(block: dict, prefix: str) -> dict:
+    """The inverse, for default_config()."""
+    if not isinstance(block, dict):
+        return block
+    out = dict(block)
+    for new_path, engine_field in ENGINE_FIELD_FOR.items():
+        new_block, _, new_leaf = new_path.partition(".")
+        if new_block != prefix:
+            continue
+        if engine_field in out:
+            out[new_leaf] = out.pop(engine_field)
+    return out
+
+
+def normalize_legacy_keys(cfg: dict) -> dict:
+    """Accept a config written with either spelling; return one with the new.
+
+    Copy-on-write: a caller's dict is never mutated, because several callers
+    hold the user's live config and a rename happening under them would be a
+    silent edit of something they are about to save.
+
+    When both spellings are present the NEW one wins and the old is dropped.
+    That case should not occur, but choosing silently by dict order would
+    make it a coin toss.
+    """
+    if not isinstance(cfg, dict):
+        return cfg
+    out = None
+    for old, new in LEGACY_CONFIG_KEYS.items():
+        if "." in old:
+            old_block, old_leaf = old.split(".", 1)
+            new_block, new_leaf = new.split(".", 1)
+            block = cfg.get(old_block)
+            if not isinstance(block, dict) or old_leaf not in block:
+                continue
+            out = copy.deepcopy(cfg) if out is None else out
+            moved = out[old_block].pop(old_leaf)
+            target = out.setdefault(new_block, {})
+            if isinstance(target, dict):
+                target.setdefault(new_leaf, moved)
+        else:
+            if old not in cfg:
+                continue
+            out = copy.deepcopy(cfg) if out is None else out
+            moved = out.pop(old)
+            if new not in out:
+                out[new] = moved
+    return cfg if out is None else out
+
+
 def check_config(cfg: dict) -> None:
     """Raise what a run of `cfg` would raise, before the run exists.
 
@@ -140,6 +253,10 @@ def check_config(cfg: dict) -> None:
     Both postures are mapped when relocation is on, because a plan can be
     complete for the home leg and incomplete for the other one.
     """
+    # A stored plan is spelled the way it was saved, and the archive
+    # cannot be rewritten, so every entry point accepts both.
+    cfg = normalize_legacy_keys(cfg)
+    validate_already_fired(cfg)
     _validate_medical_premium_anchor(cfg)
     _validate_annual_medical_trajectory(cfg)
     _validate_eol_peak(cfg)
@@ -147,6 +264,11 @@ def check_config(cfg: dict) -> None:
     _validate_dividend_drag(cfg)
     _validate_state_archetype(cfg)
     _validate_funded_ratio(cfg)
+    _validate_roth_ladder(cfg)
+    _validate_ltc(cfg)
+    _validate_shock_distributions(cfg)
+    _validate_promotion(cfg)
+    _validate_withdrawal_tax_rates(cfg)
     _validate_career_break(cfg)
     _validate_layoff(cfg)
     _validate_savings_mode(cfg)
@@ -168,10 +290,148 @@ def check_config(cfg: dict) -> None:
     _validate_student_debt(cfg)
     _validate_lifestyle_creep(cfg)
     _validate_disability(cfg)
+    _validate_health_chain(cfg)
+    _validate_country_accounts(cfg)
     build_kwargs(cfg, False)
     if bool((cfg.get("relocation") or {}).get("enabled", False)):
         build_kwargs(cfg, True)
 
+
+def validate_already_fired(cfg: dict) -> None:
+    """Refuse an asserted retirement state whose current facts are absent.
+
+    This validator is public because the archive seam must call the same rule
+    on the raw request before generic default-merging can turn an unanswered
+    balance into the de-identified example portfolio.
+    """
+    group = cfg.get("already_fired")
+    if group is None:
+        return
+    if not isinstance(group, dict):
+        raise ConfigIncomplete(
+            "already_fired must be an object",
+            field="already_fired", code="config_invalid")
+    enabled = group.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigIncomplete(
+            "already_fired.enabled must be true or false",
+            field="already_fired.enabled", code="config_invalid")
+    if not enabled:
+        return
+
+    raw_date = group.get("actual_fire_date")
+    try:
+        actual_date = _dt.date.fromisoformat(raw_date)
+    except (TypeError, ValueError):
+        raise ConfigIncomplete(
+            "already_fired.actual_fire_date must be a calendar date",
+            field="already_fired.actual_fire_date")
+    if actual_date > _dt.date.today():
+        raise ConfigIncomplete(
+            "already_fired.actual_fire_date cannot be in the future",
+            field="already_fired.actual_fire_date", code="config_invalid")
+
+    spending = group.get("annual_spending_real")
+    if (isinstance(spending, bool) or not isinstance(spending, numbers.Real)
+            or not math.isfinite(float(spending)) or float(spending) <= 0):
+        raise ConfigIncomplete(
+            "already_fired.annual_spending_real must be a positive current "
+            "annual spending amount",
+            field="already_fired.annual_spending_real")
+
+    initial_swr = group.get("guardrail_initial_swr")
+    if initial_swr is not None and (
+            isinstance(initial_swr, bool)
+            or not isinstance(initial_swr, numbers.Real)
+            or not math.isfinite(float(initial_swr))
+            or not 0.0 < float(initial_swr) <= 1.0):
+        raise ConfigIncomplete(
+            "already_fired.guardrail_initial_swr must be a rate greater "
+            "than zero and no greater than one",
+            field="already_fired.guardrail_initial_swr",
+            code="config_invalid")
+
+    birth_year = group.get("birth_year")
+    if birth_year is not None and (
+            isinstance(birth_year, bool) or not isinstance(birth_year, int)
+            or birth_year <= 0 or birth_year > _dt.date.today().year):
+        raise ConfigIncomplete(
+            "already_fired.birth_year must be a positive integer no later "
+            "than the current calendar year",
+            field="already_fired.birth_year", code="config_invalid")
+
+    initial = cfg.get("initial")
+    account_fields = tuple(_BASELINE_STACK)
+    country_block = cfg.get("country_accounts") or {}
+    country_balances = (country_block.get("balances")
+                        if (isinstance(country_block, dict)
+                            and country_block.get("enabled") is True)
+                        else None)
+    if ((not isinstance(initial, dict)
+         or not any(field in initial for field in account_fields))
+            and not isinstance(country_balances, dict)):
+        raise ConfigIncomplete(
+            "an already-FIRE plan must state its current account balances",
+            field="initial")
+    for field in account_fields if isinstance(initial, dict) else ():
+        if field not in initial:
+            continue
+        value = initial[field]
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value)) or float(value) < 0):
+            raise ConfigIncomplete(
+                f"initial.{field} must be a non-negative current balance",
+                field=f"initial.{field}", code="config_invalid")
+
+
+def _validate_country_accounts(cfg: dict) -> None:
+    block = cfg.get("country_accounts")
+    if block is None:
+        return
+    if not isinstance(block, dict):
+        raise ConfigIncomplete("country_accounts must be an object",
+                               field="country_accounts", code="config_invalid")
+    enabled = block.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigIncomplete("country_accounts.enabled must be true or false",
+                               field="country_accounts.enabled", code="config_invalid")
+    if not enabled:
+        return
+    if not bool((cfg.get("already_fired") or {}).get("enabled")):
+        raise ConfigIncomplete(
+            "country_accounts beta currently requires already_fired.enabled; "
+            "accumulation and a complete non-US tax system are not modeled",
+            field="already_fired.enabled")
+    jurisdiction = str(block.get("jurisdiction") or "").upper()
+    if not jurisdiction:
+        raise ConfigIncomplete("country_accounts.jurisdiction is required",
+                               field="country_accounts.jurisdiction")
+    try:
+        types = ACCOUNT_SCHEMA.account_types(jurisdiction)
+    except (RuntimeError, ValueError, KeyError) as exc:
+        raise ConfigIncomplete(str(exc), field="country_accounts.jurisdiction",
+                               code="config_invalid") from None
+    balances = block.get("balances")
+    if not isinstance(balances, dict):
+        raise ConfigIncomplete("country_accounts.balances must be an object",
+                               field="country_accounts.balances")
+    expected = {account.field for account in types}
+    if set(balances) != expected:
+        raise ConfigIncomplete(
+            "country_accounts.balances must name exactly %s" % sorted(expected),
+            field="country_accounts.balances", code="config_invalid")
+    for field, amount in balances.items():
+        if (isinstance(amount, bool) or not isinstance(amount, numbers.Real)
+                or not math.isfinite(float(amount)) or float(amount) < 0.0):
+            raise ConfigIncomplete(
+                "country_accounts.balances.%s must be a non-negative amount" % field,
+                field="country_accounts.balances.%s" % field,
+                code="config_invalid")
+    if bool((cfg.get("tax_true") or {}).get("enabled")):
+        raise ConfigIncomplete(
+            "country_accounts beta uses user-supplied flat effective rates; "
+            "the true-tax engine is US-only",
+            field="tax_true.enabled", code="config_invalid")
 
 def _validate_ssa_basis(cfg: dict) -> None:
     """Refuse a malformed or stale exact-replay basis before any draws.
@@ -1288,6 +1548,18 @@ def _validate_disability(cfg: dict) -> None:
                 field="disability.%s" % name, code="config_invalid")
 
 
+def _validate_health_chain(cfg: dict) -> None:
+    raw = cfg.get("health_chain") or {}
+    if not isinstance(raw, dict):
+        raise ConfigIncomplete(
+            "health_chain must be a settings object",
+            field="health_chain", code="config_invalid")
+    if not isinstance(raw.get("enabled", False), bool):
+        raise ConfigIncomplete(
+            "health_chain.enabled must be true or false",
+            field="health_chain.enabled", code="config_invalid")
+
+
 def _validate_career_break(cfg: dict) -> None:
     """Refuse a career break the accumulation loop cannot honour.
 
@@ -1793,9 +2065,11 @@ def default_config() -> dict:
         # this only on a BREAKING semantic change and add a real migrator.
         "config_version": 2,
         "name": "Baseline · de-identified analyst",
+        "already_fired": _gd(AlreadyFiredParams),
         # state/contributions: dataclass defaults carry the real calibration
         # baseline, so the identifying scalars are overridden here (audit P0-1).
-        "state": {**_gd(State), "start_age": 30, "expenses_y0": 42_000},
+        "state": _to_config_names(
+            {**_gd(State), "start_age": 30, "expenses_y0": 42_000}, "state"),
         "initial": dict(_BASELINE_STACK),
         "contributions": {**_gd(V8ContributionParams),
                           "base_salary_pre": 125_000, "ot_income_pre": 20_000,
@@ -1947,7 +2221,8 @@ def default_config() -> dict:
         "household": {**_gd(HouseholdParams),
                       "spouse_catchup_403b_15yr_schedule_nominal": []},
         "roth_ladder": _gd(RothLadderParams),
-        "social_security": _gd(SocialSecurityParams),
+        "social_security": _to_config_names(
+            _gd(SocialSecurityParams), "social_security"),
         "ftc": _gd(FTCParams),
         "obbba": _gd(OBBBAParams),
         "eldercare": _gd(EldercareShockParams),
@@ -1980,10 +2255,12 @@ def default_config() -> dict:
                                  "equity_base_real", "liquidity_discount")),
         "ss_trust_fund": _gd(SSTrustFundParams, drop=("seed_offset",)),
         "tax_us": _gd(TaxParams, drop=("drag_taxable_explicit",)),
-        "tax_cn": _gd(TaxParamsChina),
-        "relocation": {"enabled": False, **_gd(RelocationParams)},
-        "china_healthcare": _gd(ChinaHealthcareParams),
-        "ss_nra": _gd(SSNRAHaircutParams),
+        "tax_destination": _gd(TaxParamsChina),
+        "relocation": _to_config_names(
+            {"enabled": False, **_gd(RelocationParams)}, "relocation"),
+        "destination_healthcare": _gd(ChinaHealthcareParams),
+        "ss_nra": {**_gd(SSNRAHaircutParams), "residency_status": "unconfirmed"},
+        "succession": {"accounts": []},
         "rule": {"upper_guardrail": 0.20, "lower_guardrail": 0.20,
                  "adjustment_pct": 0.10, "inflation_freeze_enabled": True,
                  # 1.0 = the historical behaviour: a triggered cut happens in
@@ -2051,6 +2328,11 @@ def default_config() -> dict:
         # Pure plan-file data — the engine NEVER reads this (guarded by a
         # bit-identical test); the trajectory page overlays it on the fan.
         "checkins": [],
+        # Roadmap 11 Phase 5. Appended as one new attribution leaf so every
+        # earlier phase's ordered peel remains an auditable historical pin.
+        # This opt-in module owns one age-indexed stream; the three source
+        # modules keep their own probability tables.
+        "health_chain": _gd(HEALTH_CHAIN.HealthChainParams),
     }
 
 
@@ -2169,6 +2451,401 @@ def _validate_funded_ratio(cfg: dict) -> None:
                 "funded_ratio.floor_annual_real must be a finite amount of at "
                 "least zero",
                 field="funded_ratio.floor_annual_real", code="config_invalid")
+
+
+def _finite_number(group: dict, key: str, field: str):
+    """A present, non-bool, finite number, or None. Refuses by name."""
+    value = group.get(key, None)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigIncomplete("%s must be a number" % field,
+                               field=field, code="config_invalid")
+    value = float(value)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ConfigIncomplete("%s must be a finite number" % field,
+                               field=field, code="config_invalid")
+    return value
+
+
+def _validate_withdrawal_tax_rates(cfg: dict) -> None:
+    """No withdrawal tax rate may be 100%, on either leg.
+
+    `withdraw_with_seasoning` grosses a withdrawal up as
+    `remaining / (1 - rate)`, so a rate of exactly 1.0 is a ZeroDivisionError
+    inside a background job -- a run that dies rather than a request that is
+    answered. Measured, not reasoned: calling the engine's own function with
+    `withdrawal_tax_traditional=1.0` raises it.
+
+    Two of these leaves have shipped with a control and no upper bound since
+    long before this Phase (`tax_us.*` and `tax_destination.withdrawal_tax_
+    traditional` both take a percent box with no `max`), so this half is an
+    already-reachable defect being closed, not a new one being pre-empted.
+    The other half is new: Phase 5 gives the four FTC rates controls, and the
+    engine folds those into the same object as `max(home, destination)`, so an
+    FTC rate of 100% reaches exactly the same division.
+    """
+    for block_name in ("tax_us", "tax_destination"):
+        group = cfg.get(block_name, None)
+        if group is None:
+            continue
+        if not isinstance(group, dict):
+            raise ConfigIncomplete("%s must be an object" % block_name,
+                                   field=block_name, code="config_invalid")
+        for key in ("withdrawal_tax_taxable", "withdrawal_tax_traditional",
+                    "withdrawal_tax_roth", "withdrawal_tax_hsa"):
+            field = "%s.%s" % (block_name, key)
+            rate = _finite_number(group, key, field)
+            if rate is None:
+                continue
+            if not (0.0 <= rate < 1.0):
+                raise ConfigIncomplete(
+                    "%s must be at least 0%% and below 100%% -- a 100%% "
+                    "withdrawal tax means no withdrawal can ever be funded, "
+                    "and the engine divides by (1 - rate)" % field,
+                    field=field, code="config_invalid")
+
+    ftc = cfg.get("ftc", None)
+    if ftc is None:
+        return
+    if not isinstance(ftc, dict):
+        raise ConfigIncomplete("ftc must be an object",
+                               field="ftc", code="config_invalid")
+    enabled = ftc.get("enabled", None)
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigIncomplete("ftc.enabled must be true or false",
+                               field="ftc.enabled", code="config_invalid")
+    for key in ("us_federal_rate_traditional", "us_federal_rate_taxable",
+                "us_federal_rate_roth", "us_federal_rate_hsa"):
+        field = "ftc.%s" % key
+        rate = _finite_number(ftc, key, field)
+        if rate is None:
+            continue
+        if not (0.0 <= rate < 1.0):
+            raise ConfigIncomplete(
+                "%s must be at least 0%% and below 100%% -- the credit is "
+                "applied as max(home rate, destination rate), so a 100%% rate "
+                "lands in the same division by (1 - rate)" % field,
+                field=field, code="config_invalid")
+
+
+def _validate_promotion(cfg: dict) -> None:
+    """The seven promotion settings that had no exit until Phase 10.
+
+    MEASURED on the shipped plan with the promotion on, one value at a time,
+    before this was written. Baseline median consumption 53,321.
+
+      timing_mode = "nonsense"                ValueError from inside the engine
+      bonus_mode  = "nonsense"                ValueError from inside the engine
+      timing_fixed = -5   (timing fixed)      RUNS -> 50,907, same as year 1
+      bonus_pct_fixed = 5.0  (bonus fixed)    RUNS -> 48,143
+      bonus_pct_fixed = -1.0 (bonus fixed)    RUNS -> 54,766, ABOVE baseline
+      base_growth_post = 3.0                  RUNS -> 58,116
+      base_growth_post = -1.0                 RUNS -> 54,455
+
+    Five of the seven answer. The negative bonus is the worst of them: a 100%
+    pay cut RAISES median consumption, which is not a number anyone should be
+    shown, and nothing anywhere objects to it.
+
+    The two modes do fail, and failing is better -- but they fail from inside
+    the sampling loop, so the user gets a run that died with no field named.
+    """
+    block = cfg.get("promotion")
+    if not isinstance(block, dict):
+        return
+
+    for key, allowed in (("timing_mode", ("fixed", "uniform_int", "never")),
+                         ("bonus_mode", ("fixed", "uniform"))):
+        value = block.get(key, None)
+        value = getattr(value, "value", value)
+        if value is None:
+            continue
+        if str(value) not in allowed:
+            raise ConfigIncomplete(
+                "promotion.%s is %r; it has to be one of %s."
+                % (key, value, ", ".join(allowed)),
+                field="promotion.%s" % key, code="config_invalid")
+
+    year = _finite_number(block, "timing_fixed", "promotion.timing_fixed")
+    if year is not None and year < 1:
+        raise ConfigIncomplete(
+            "promotion.timing_fixed is %s. A promotion cannot happen before "
+            "year 1; zero and negatives do not fail, they quietly behave as "
+            "year 1." % year,
+            field="promotion.timing_fixed", code="config_invalid")
+
+    bonus = _finite_number(block, "bonus_pct_fixed", "promotion.bonus_pct_fixed")
+    if bonus is not None and bonus < 0:
+        raise ConfigIncomplete(
+            "promotion.bonus_pct_fixed is %s. A negative bonus is not a pay "
+            "cut this model understands -- measured, -100%% RAISED median "
+            "consumption above the baseline, which is not an answer." % bonus,
+            field="promotion.bonus_pct_fixed", code="config_invalid")
+
+    growth = _finite_number(block, "base_growth_post", "promotion.base_growth_post")
+    if growth is not None and not -0.2 <= growth <= 0.3:
+        # It compounds to retirement, so it carries far more weight than its
+        # size suggests. The bounds are wide enough for any real raise and
+        # narrow enough that a percentage typed as a whole number (3.0 meaning
+        # 3%) is refused rather than compounded into a different plan.
+        raise ConfigIncomplete(
+            "promotion.base_growth_post is %s, i.e. %.0f%% a year compounding "
+            "to retirement. If you meant %.0f%%, enter %s."
+            % (growth, growth * 100, growth, growth / 100.0),
+            field="promotion.base_growth_post", code="config_invalid")
+
+
+def _validate_shock_distributions(cfg: dict) -> None:
+    """The eleven distribution settings the two shock modules draw from.
+
+    Until Roadmap 13 Phase 9 none of these had a control, so none could be
+    wrong: choosing "stochastic" meant accepting a constant. Giving them exits
+    makes every one of them one keystroke from a value the engine will either
+    refuse from inside a running job or, worse, accept.
+
+    MEASURED on the shipped plan, one value at a time, before writing a line of
+    this. Baseline median consumption is about 54,600.
+
+      inheritance.lifetime_prob = 3.0      RUNS  -> 53,219
+      inheritance.lifetime_prob = -1.0     RUNS  -> 53,158
+      eldercare.annual_prob = 3.0          RUNS  -> 28,013
+      eldercare.age_window_start = 90      RUNS  -> 54,615   (window inverted)
+      inheritance.age_window_start = 90    ValueError from inside the engine
+      inheritance.amount_log_sigma = -1.0  ValueError from inside the engine
+      eldercare.severity_log_sigma = -1.0  ValueError from inside the engine
+
+    The first four are the reason this exists. A 300% annual probability did
+    not crash -- it produced a complete, confident answer that moved median
+    consumption by half, wearing exactly the same clothes as a right one. The
+    last three do crash, which is better, but they crash from inside the
+    sampling loop and reach the user as a run that DIED with no field named.
+
+    An inverted window is refused rather than quietly sorted. Swapping the two
+    silently would be answering a question nobody asked: a person who typed
+    90 and 70 meant something, and this cannot know what.
+    """
+    for group, prob_key, prob_label in (
+            ("inheritance", "lifetime_prob", "a lifetime probability"),
+            ("eldercare", "annual_prob", "an annual probability")):
+        block = cfg.get(group)
+        if not isinstance(block, dict):
+            continue
+        prob = _finite_number(block, prob_key, "%s.%s" % (group, prob_key))
+        if prob is not None and not 0.0 <= prob <= 1.0:
+            raise ConfigIncomplete(
+                "%s.%s is %s, which is not %s -- it has to be between 0 and 1. "
+                "Values outside that range do not fail: they produce a "
+                "complete answer that looks like every other answer."
+                % (group, prob_key, prob, prob_label),
+                field="%s.%s" % (group, prob_key), code="config_invalid")
+
+        start = _finite_number(block, "age_window_start",
+                               "%s.age_window_start" % group)
+        end = _finite_number(block, "age_window_end",
+                             "%s.age_window_end" % group)
+        if start is not None and end is not None and start >= end:
+            raise ConfigIncomplete(
+                "%s.age_window_start (%s) must be below %s.age_window_end "
+                "(%s). They are not swapped for you: somebody who typed these "
+                "meant something, and this cannot know what."
+                % (group, start, group, end),
+                field="%s.age_window_start" % group, code="config_invalid")
+
+        sigma_key = ("amount_log_sigma" if group == "inheritance"
+                     else "severity_log_sigma")
+        sigma = _finite_number(block, sigma_key, "%s.%s" % (group, sigma_key))
+        if sigma is not None and sigma < 0:
+            raise ConfigIncomplete(
+                "%s.%s must not be negative; a lognormal's sigma is a width."
+                % (group, sigma_key),
+                field="%s.%s" % (group, sigma_key), code="config_invalid")
+
+        mean_key = ("amount_log_mean" if group == "inheritance"
+                    else "severity_log_mean")
+        mean = _finite_number(block, mean_key, "%s.%s" % (group, mean_key))
+        if mean is not None and not 0.0 <= mean <= 20.0:
+            # 20 is ln($485 million). The bound exists because this field is a
+            # LOG and a person who types a dollar amount into it -- 300000
+            # rather than 12.61 -- gets a number the engine will happily
+            # exponentiate into nonsense rather than reject.
+            raise ConfigIncomplete(
+                "%s.%s is %s. This field is the NATURAL LOG of the median "
+                "amount, not the amount: for a median of $300,000 it is "
+                "ln(300000) = 12.61. A dollar figure typed here becomes an "
+                "amount no plan can survive."
+                % (group, mean_key, mean),
+                field="%s.%s" % (group, mean_key), code="config_invalid")
+
+
+def _validate_ltc(cfg: dict) -> None:
+    """The care module's fourteen settings, checked before a job exists.
+
+    `engine/ltc_model.py` already defends itself well: six of the values below
+    raise `LtcError` rather than producing a wrong number. But it raises from
+    inside the sampling loop, which reaches the user as a run that DIED, with
+    no field named -- lesson 1, refuse at the mapping stage rather than half
+    way through the engine. Phase 6 gives all fourteen a control, so every one
+    of these is now one keystroke away.
+
+    Measured, not assumed. Running the shipped plan with each value in turn:
+
+      * `mode` outside off/stochastic/scenario  -> LtcError, run dies
+      * `scenario_level` outside the three      -> LtcError, run dies
+      * `scenario_years` negative               -> LtcError, run dies
+      * `onset_spread` zero                     -> LtcError, run dies
+      * all three level shares zero             -> LtcError, run dies
+      * `lifetime_risk` negative                -> LtcError, run dies
+      * `lifetime_risk` 3.0                     -> RUNS, and moves the plan
+
+    The last one is the one that matters most and the only one the engine does
+    not catch: a 300% probability produced a complete, confident answer
+    (median consumption 51,517 against 56,029 at the shipped settings). That is
+    the shape this project refuses -- not a crash, a wrong number wearing the
+    same clothes as a right one.
+
+    Negative costs are refused for the same reason, one step milder: with
+    `cost_nursing_home = -1` the scenario run came back BIT-IDENTICAL to one
+    with care switched off, so the user's own input silently vanished.
+    """
+    group = cfg.get("ltc", None)
+    if group is None:
+        return
+    if not isinstance(group, dict):
+        raise ConfigIncomplete("ltc must be an object",
+                               field="ltc", code="config_invalid")
+
+    mode = group.get("mode", None)
+    if mode is not None:
+        if mode not in LTC.MODES:
+            raise ConfigIncomplete(
+                "ltc.mode must be one of %s" % ", ".join(sorted(LTC.MODES)),
+                field="ltc.mode", code="config_invalid")
+    if mode is None or mode == LTC.OFF:
+        # Off draws from nothing, so nothing below can reach the engine. Values
+        # left over from a previous mode are not a reason to refuse a plan the
+        # user has switched the module off in.
+        return
+
+    # The level set comes from the engine's own cost table rather than a second
+    # list here: `scenario_episode` checks membership in exactly that dict, so
+    # a hand-copied tuple would be the one-fact-in-two-places defect this
+    # version exists to remove.
+    levels = tuple(LTC.DEFAULT_ANNUAL_COST)
+    level = group.get("scenario_level", None)
+    if mode == LTC.SCENARIO and level is not None and level not in levels:
+        raise ConfigIncomplete(
+            "ltc.scenario_level must be one of %s" % ", ".join(sorted(levels)),
+            field="ltc.scenario_level", code="config_invalid")
+
+    risk = _finite_number(group, "lifetime_risk", "ltc.lifetime_risk")
+    if risk is not None and not (0.0 <= risk <= 1.0):
+        raise ConfigIncomplete(
+            "ltc.lifetime_risk is a probability: it must be between 0% and "
+            "100%. Zero means 'take it from this plan's mortality sex'",
+            field="ltc.lifetime_risk", code="config_invalid")
+
+    for key, low in (("onset_age", 0.0), ("scenario_onset_age", 0.0),
+                     ("scenario_years", 0.0), ("cost_home_care", 0.0),
+                     ("cost_assisted_living", 0.0), ("cost_nursing_home", 0.0),
+                     ("mix_home_care", 0.0), ("mix_assisted_living", 0.0),
+                     ("mix_nursing_home", 0.0)):
+        field = "ltc.%s" % key
+        value = _finite_number(group, key, field)
+        if value is not None and value < low:
+            raise ConfigIncomplete("%s cannot be negative" % field,
+                                   field=field, code="config_invalid")
+
+    spread = _finite_number(group, "onset_spread", "ltc.onset_spread")
+    if mode == LTC.STOCHASTIC and spread is not None and spread <= 0.0:
+        raise ConfigIncomplete(
+            "ltc.onset_spread must be above zero -- it is the width of the "
+            "entry-age curve, and a width of nothing has no curve to draw from",
+            field="ltc.onset_spread", code="config_invalid")
+
+    if mode == LTC.STOCHASTIC:
+        shares = [_finite_number(group, k, "ltc.%s" % k)
+                  for k in ("mix_home_care", "mix_assisted_living",
+                            "mix_nursing_home")]
+        present = [s for s in shares if s is not None]
+        if present and sum(present) <= 0.0:
+            raise ConfigIncomplete(
+                "the three ltc level shares cannot all be zero -- they are "
+                "relative weights and are normalised, so at least one level "
+                "has to be possible",
+                field="ltc.mix_home_care", code="config_invalid")
+
+
+def _validate_roth_ladder(cfg: dict) -> None:
+    """The ladder's window, rate and lock, checked before a job exists.
+
+    Phase 5 gives all five a control. Before that they were unreachable and
+    every shipped config carried the dataclass defaults, so nothing here can
+    refuse a plan that was archived earlier.
+
+    The rate is the one that matters. `execute_roth_conversion` caps the
+    conversion by `(accounts.taxable / params.federal_tax_rate) / 4.0`, so a
+    rate of exactly zero -- the single most likely thing to type into a percent
+    box -- is a ZeroDivisionError in the middle of a run. Verified by calling
+    the engine function, not by reading it.
+
+    The window is refused when it is inverted rather than silently producing a
+    plan with no conversions at all while the switch beside it says the ladder
+    is on. That is the shape this project keeps refusing: a confident answer to
+    a question the user did not ask.
+    """
+    group = cfg.get("roth_ladder", None)
+    if group is None:
+        return
+    if not isinstance(group, dict):
+        raise ConfigIncomplete("roth_ladder must be an object",
+                               field="roth_ladder", code="config_invalid")
+
+    enabled = group.get("enabled", None)
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigIncomplete("roth_ladder.enabled must be true or false",
+                               field="roth_ladder.enabled",
+                               code="config_invalid")
+
+    ages = {}
+    for key, low, high in (("start_age", 18, 110), ("end_age", 18, 110),
+                           ("senior_age_threshold", 40, 120),
+                           ("seasoning_years", 0, 40)):
+        field = "roth_ladder.%s" % key
+        value = _finite_number(group, key, field)
+        if value is None:
+            continue
+        if value != int(value):
+            raise ConfigIncomplete("%s must be a whole number of years" % field,
+                                   field=field, code="config_invalid")
+        if not (low <= value <= high):
+            raise ConfigIncomplete(
+                "%s must be between %d and %d" % (field, low, high),
+                field=field, code="config_invalid")
+        ages[key] = int(value)
+
+    if ("start_age" in ages and "end_age" in ages
+            and ages["start_age"] > ages["end_age"]):
+        raise ConfigIncomplete(
+            "roth_ladder.end_age cannot be before roth_ladder.start_age -- an "
+            "inverted window converts nothing at all, which is not what a "
+            "ladder switched on is saying",
+            field="roth_ladder.end_age", code="config_invalid")
+
+    rate = _finite_number(group, "federal_tax_rate",
+                "roth_ladder.federal_tax_rate")
+    if rate is not None and not (0.0 < rate < 1.0):
+        raise ConfigIncomplete(
+            "roth_ladder.federal_tax_rate must be above 0% and below 100% -- "
+            "the engine caps the conversion by taxable / rate / 4, so a rate "
+            "of zero divides by zero and the run dies",
+            field="roth_ladder.federal_tax_rate", code="config_invalid")
+
+    amount = _finite_number(group, "annual_conversion_y0",
+                  "roth_ladder.annual_conversion_y0")
+    if amount is not None and amount < 0:
+        raise ConfigIncomplete(
+            "roth_ladder.annual_conversion_y0 cannot be negative",
+            field="roth_ladder.annual_conversion_y0", code="config_invalid")
 
 
 def _validate_state_archetype(cfg: dict) -> None:
@@ -2317,11 +2994,46 @@ def _mk_house_price(block, cfg: dict):
     )
 
 
+def _validate_succession(cfg: dict) -> None:
+    import succession
+    try:
+        succession.config_accounts(cfg)
+    except succession.CredentialRefused as exc:
+        raise ConfigIncomplete(str(exc), field="succession.accounts",
+                               code="config_invalid") from exc
+
+
+def _validate_ss_residency(cfg: dict, relocation_on: bool) -> None:
+    block = cfg.get("ss_nra") or {}
+    if not isinstance(block, dict):
+        raise ConfigIncomplete("ss_nra must be an object", field="ss_nra",
+                               code="config_invalid")
+    status = block.get("residency_status", "legacy")
+    if "residency_status" in block and status not in ("unconfirmed", "nra", "not_nra"):
+        raise ConfigIncomplete("ss_nra.residency_status must be unconfirmed, nra or not_nra",
+                               field="ss_nra.residency_status", code="config_invalid")
+    if (relocation_on and (cfg.get("relocation") or {}).get("enabled")
+            and status == "unconfirmed"):
+        raise ConfigIncomplete("Confirm NRA / non-NRA status before running relocation",
+                               field="ss_nra.residency_status")
+
+
 def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     """Map the JSON config into the v9.8 param objects. Returns a kwargs dict for
     run_lifecycle_mc_v98 (the V7Config lands under 'config')."""
+    # A stored plan is spelled the way it was saved, and the archive
+    # cannot be rewritten, so every entry point accepts both.
+    cfg = normalize_legacy_keys(cfg)
     g = lambda k: cfg.get(k, {}) or {}
+    _already_fired_on = bool(g("already_fired").get("enabled", False))
+    _effective_state_d = dict(g("state"))
+    if _already_fired_on:
+        _effective_state_d["accum_years"] = 0
+        _effective_state_d["expenses_y0"] = float(
+            g("already_fired").get("annual_spending_real"))
 
+    _validate_succession(cfg)
+    _validate_ss_residency(cfg, relocation_on)
     medical_d = g("medical")
 
     rl = dict(g("relocation"))
@@ -2591,7 +3303,7 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     # Ages stay on the primary user's timeline. Disabled streams do not validate
     # dormant owner data and compile to no runtime object (OFF-path identity).
     ist = g("income_streams")
-    st_d = g("state")
+    st_d = _effective_state_d
     _sa = int(st_d.get("start_age", 30) or 30)
     structured_income = []
 
@@ -2712,7 +3424,7 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
                        for i, raw in enumerate(_gi.get("annuities") or [])],
             ladders=[_instrument(TipsLadder, raw, i, "ladders")
                      for i, raw in enumerate(_gi.get("ladders") or [])])
-        _st = _mk(State, g("state"))
+        _st = _mk(State, _effective_state_d)
         _horizon_end = (int(_st.start_age) + int(_st.accum_years)
                         + int(_st.retire_horizon))
         try:
@@ -2740,7 +3452,7 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     # realized-CPI mortgage before generic funding/shortfall handling. Rent and
     # 100%-down buy mode have no mortgage spec and retain static carrying rows.
     mortgage_payload = HOUSING.compile_housing_mortgage(cfg)
-    _state_for_housing = g("state")
+    _state_for_housing = _effective_state_d
     _accum_end_age = (int(_state_for_housing.get(
         "start_age", State().start_age)) + int(_state_for_housing.get(
             "accum_years", State().accum_years)))
@@ -2801,8 +3513,9 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
 
     out = {
         "config": cfg_obj,
-        "state": _mk(State, g("state")),
+        "state": _mk(State, _to_engine_fields(_effective_state_d, "state")),
         "initial": init,
+        "already_fired": _mk(AlreadyFiredParams, g("already_fired")),
         "contrib_params": _mk(V8ContributionParams, contrib_d),
         "promo_params": _mk(PromotionParams, g("promotion")),
         "spouse_promotion": _mk(PromotionParams, {
@@ -2831,7 +3544,8 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
         }, {"scenario": ACAScenario}),
         "mortality": _mk(MortalityParams, mort_d),
         "roth_ladder": _mk(RothLadderParams, g("roth_ladder")),
-        "ss": _mk(SocialSecurityParams, g("social_security")),
+        "ss": _mk(SocialSecurityParams,
+                  _to_engine_fields(g("social_security"), "social_security")),
         "ftc": _mk(FTCParams, g("ftc")),
         "obbba": _mk(OBBBAParams, g("obbba"), {"mode": OBBBAMode}),
         "eldercare": _mk(EldercareShockParams, g("eldercare"), {"mode": ShockMode}),
@@ -2847,7 +3561,7 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
         # U35 / A2b. Built from the SAME kept schedule the fixed-multiple
         # events came from, so the two halves cannot disagree about how much
         # was kept -- only about how it is valued.
-        "retained_stock": _mk_retained_stock(g("contributions"), g("state")),
+        "retained_stock": _mk_retained_stock(g("contributions"), _effective_state_d),
         # Seed offset 90_020: the primary's human capital owns 90_002, and two
         # earners sharing one offset would draw one career twice.
         "spouse_human_capital": dataclasses.replace(
@@ -2856,10 +3570,15 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
         "human_capital": _mk(HumanCapitalParams, g("human_capital")),
         "ss_trust_fund": _mk(SSTrustFundParams, g("ss_trust_fund")),
         "tax_us": _mk_tax_us(g("tax_us")),
-        "tax_cn": _mk(TaxParamsChina, g("tax_cn")),
-        "relocation": _mk(RelocationParams, rl),
-        "china_healthcare": _mk(ChinaHealthcareParams, g("china_healthcare")),
-        "ss_nra": _mk(SSNRAHaircutParams, g("ss_nra")),
+        # kwargs key stays `tax_cn` because that is what the vendored engine
+        # signature expects; only the CONFIG key was renamed.
+        "tax_cn": _mk(TaxParamsChina, g("tax_destination")),
+        "relocation": _mk(RelocationParams,
+                          _to_engine_fields(rl, "relocation")),
+        "china_healthcare": _mk(ChinaHealthcareParams,
+                                g("destination_healthcare")),
+        "ss_nra": _mk(SSNRAHaircutParams, {**g("ss_nra"),
+            **({"haircut_fraction": 0.0} if g("ss_nra").get("residency_status") == "not_nra" else {})}),
         "rule": rule,
         "fire_swr": float(g("state").get("swr_pref", 0.0333)),
         "life_events": (sorted(events) or None),
@@ -2882,6 +3601,9 @@ def _milestones(cfg: dict) -> list:
 
 
 def _expenses_y0(cfg: dict) -> float:
+    already = cfg.get("already_fired") or {}
+    if already.get("enabled"):
+        return float(already.get("annual_spending_real") or 1.0)
     return float((cfg.get("state") or {}).get("expenses_y0", 40_440) or 1.0)
 
 
@@ -3011,6 +3733,7 @@ def _lifestyle_creep_ctx(
 @contextlib.contextmanager
 def _disability_ctx(
     cfg: dict, seed: int, path_index: Optional[int] = None,
+    health_chain_path: Optional["HEALTH_CHAIN.HealthChainPath"] = None,
 ):
     """Install one path's SSA-award stress on an independent stable stream."""
     raw = cfg.get("disability") or {}
@@ -3020,22 +3743,77 @@ def _disability_ctx(
     _validate_disability(cfg)
     params = _mk(DisabilityParams, {
         k: v for k, v in raw.items() if k != "rng"})
-    params.rng = np.random.default_rng(
-        int(seed) + DISABILITY_SEED_OFFSET if path_index is None
-        else [int(seed), int(path_index), DISABILITY_SEED_OFFSET])
+    if health_chain_path is None:
+        params.rng = np.random.default_rng(
+            int(seed) + DISABILITY_SEED_OFFSET if path_index is None
+            else [int(seed), int(path_index), DISABILITY_SEED_OFFSET])
     state = cfg.get("state") or {}
-    event = sample_ssdi_entitlement(
+    sample_args = (
         params,
         int(state.get("start_age", State().start_age)),
         int(state.get("accum_years", State().accum_years)),
         str((cfg.get("mortality") or {}).get("sex")),
     )
+    event = (
+        sample_ssdi_entitlement(
+            *sample_args, draw_at=health_chain_path.disability_draw,
+            alive_at=lambda age: health_chain_path.alive(age, "primary"))
+        if health_chain_path is not None else
+        sample_ssdi_entitlement(*sample_args)
+    )
+    if health_chain_path is not None:
+        health_chain_path.record_disability(
+            (int(state.get("start_age", State().start_age))
+             + int(event.event_year) - 1)
+            if event is not None and event.event_year is not None else None)
     prev = fire_v8_model._DISABILITY
     fire_v8_model._DISABILITY = event
     try:
         yield
     finally:
         fire_v8_model._DISABILITY = prev
+
+
+def _new_health_chain_path(cfg: dict, kw: dict, seed: int, path_index: int):
+    """Create the opt-in path and resolve death before disability is sampled."""
+    if not bool((cfg.get("health_chain") or {}).get("enabled", False)):
+        return None
+    state = kw.get("state") or State()
+    path = HEALTH_CHAIN.HealthChainPath(
+        seed=int(seed), path_index=int(path_index),
+        first_age=int(state.start_age),
+        last_age=int(state.start_age + state.accum_years
+                     + state.retire_horizon),
+    )
+    mortality = kw.get("mortality") or MORTALITY_MALE
+    household = cfg.get("household") or {}
+    spouse_rate = None
+    spouse_offset = 0
+    if household.get("enabled"):
+        spouse_base = (MORTALITY_FEMALE
+                       if household.get("spouse_sex") == "female"
+                       else MORTALITY_MALE)
+        spouse_mortality = dataclasses.replace(
+            spouse_base, enabled=mortality.enabled,
+            cap_age=mortality.cap_age)
+        spouse_rate = lambda age: V98.annual_mortality_rate(
+            age, spouse_mortality)
+        spouse_offset = int(household.get("spouse_age_offset", 0) or 0)
+    path.prepare_mortality(
+        lambda age: V98.annual_mortality_rate(age, mortality),
+        enabled=mortality.enabled, spouse_rate=spouse_rate,
+        spouse_age_offset=spouse_offset,
+    )
+    return path
+
+
+def _attach_health_chain_summary(result: dict, cfg: dict, path) -> dict:
+    if path is not None:
+        result["health_chain_meta"] = path.summary(
+            medical_trajectory=bool(
+                (cfg.get("medical") or {}).get(
+                    "annual_trajectory_enabled", False)))
+    return result
 
 
 @contextlib.contextmanager
@@ -3291,7 +4069,9 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
     # distinct care stream for the same reason its market stream is distinct.
     # Off attaches nothing at all: there is no generator to advance.
     _ltc = kw.get("ltc")
+    _health_on = bool((cfg.get("health_chain") or {}).get("enabled", False))
     if (not per_path_substreams
+            and not _health_on
             and _ltc is not None and _ltc.mode != LTC.OFF):
         _ltc.rng = np.random.default_rng(int(seed) + 11_000_000)
     # Parents get their own stream too, and a different offset, so turning the
@@ -3321,14 +4101,20 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
               _lifestyle_creep_ctx(cfg, seed),
               _event_meta_ctx()):
             for i in range(n):
+                health_path = _new_health_chain_path(cfg, kw, seed, i)
                 # Disability incidence is path-specific even in the legacy
                 # shared-market runner. Its own indexed child stream keeps it
                 # independent without consuming or shifting market/layoff.
-                with _disability_ctx(cfg, seed, path_index=i):
+                with _disability_ctx(
+                        cfg, seed, path_index=i,
+                        health_chain_path=health_path):
                     result = simulate_lifecycle_v98(
-                        config=config, rng=rng, **kw)
-                out.append(_annotate_result(
-                    result, cfg, kw.get("life_events")))
+                        config=config, rng=rng,
+                        health_chain_path=health_path, **kw)
+                result = _annotate_result(
+                    result, cfg, kw.get("life_events"))
+                out.append(_attach_health_chain_summary(
+                    result, cfg, health_path))
                 if cb is not None and i % step == 0:
                     cb(i / n)
         return out
@@ -3338,11 +4124,13 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
           _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg),
           _event_meta_ctx()):
         for i in range(n):
+            health_path = _new_health_chain_path(cfg, kw, seed, i)
             # Auxiliary stochastic modules carry their generator on the
             # parameter object, so resetting only the main rng is not path
             # isolation.  All four domains include the same path index and a
             # stable domain tag; both B4 arms reconstruct these exact streams.
-            if _ltc is not None and _ltc.mode != LTC.OFF:
+            if (not _health_on
+                    and _ltc is not None and _ltc.mode != LTC.OFF):
                 _ltc.rng = np.random.default_rng(
                     [int(seed), int(i), 11_000_000])
             if _parents is not None and _parents.mode != PARENTS.OFF:
@@ -3352,9 +4140,14 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
             with (_layoff_ctx(cfg, seed, path_index=i),
                   _spouse_layoff_ctx(cfg, seed, path_index=i),
                   _lifestyle_creep_ctx(cfg, seed, path_index=i),
-                  _disability_ctx(cfg, seed, path_index=i)):
-                result = simulate_lifecycle_v98(config=config, rng=rng, **kw)
-            out.append(_annotate_result(result, cfg, kw.get("life_events")))
+                  _disability_ctx(
+                      cfg, seed, path_index=i,
+                      health_chain_path=health_path)):
+                result = simulate_lifecycle_v98(
+                    config=config, rng=rng,
+                    health_chain_path=health_path, **kw)
+            result = _annotate_result(result, cfg, kw.get("life_events"))
+            out.append(_attach_health_chain_summary(result, cfg, health_path))
             if cb is not None and i % step == 0:
                 cb(i / n)
     return out
@@ -3513,6 +4306,72 @@ def _annotate_result(r: dict, cfg: dict, life_events) -> dict:
     return r
 
 
+def _milestone_ages(r: dict, milestones: list) -> dict:
+    """First age at which nominal net worth crosses each milestone, along the
+    path this person ACTUALLY lives.
+
+    Accumulation up to FIRE (or to the year an event failed the accumulation,
+    or to death in accumulation, or the whole projection for somebody who
+    never reaches FI), and then the retirement portfolio.
+
+    USER RULING 2026-09-15 (`OPEN_ITEMS.md` UI-RESULTS-MILESTONE). The overview
+    used to scan the entire accumulation projection, which runs to
+    `start_age + accum_years` REGARDLESS of when the person retired -- a
+    counterfactual in which they kept working while the model had already moved
+    them into withdrawal. Measured on 400 default paths: it reported $3M at
+    0.9750, median age 43, next to a median FIRE age of 38 -- and 0.9750 was
+    exactly the share of paths that reached FI at all, so the number carried no
+    information about the milestone. The distribution page truncated at FIRE
+    instead and reported 0.0075 for the same plan. Both were faithful to their
+    own code; neither answered "when do I cross $3M". This does: 0.8750,
+    median 48.5 (the page rounds it to 49).
+
+    ONE definition, called from all THREE places that mark a crossing: the
+    overview (`_path_stats`), the distribution page (`lifecycle_sample`) and
+    the story page (`_story_chronicle`). They were three copies of the same
+    rule that had drifted into three different rules -- LESSONS 55 -- and a
+    user comparing two of the pages is the only thing that noticed. The third
+    copy was found by a review of this very slice: the first version of this
+    docstring said "both places", counted two, and left the story page marking
+    nothing after the FIRE age while drawing its curve through thirty
+    retirement years.
+    """
+    first = {m: None for m in milestones}
+    accum_failure_age = _accum_event_failure_age(r)
+    reached = bool(r.get("reached_fire")) and accum_failure_age is None
+    died_accum = (bool(r.get("died_during_accum"))
+                  and accum_failure_age is None
+                  and r.get("age_at_death") is not None)
+    if accum_failure_age is not None:
+        accum_end = accum_failure_age
+    elif reached and r.get("fire_age") is not None:
+        accum_end = int(r["fire_age"])
+    elif died_accum:
+        accum_end = int(r["age_at_death"])
+    else:
+        accum_end = None
+
+    for step in (r.get("accum_path") or []):
+        if accum_end is not None and int(step["age"]) > accum_end:
+            break
+        total = step["total"]
+        for m in milestones:
+            if first[m] is None and total >= m:
+                first[m] = step["age"]
+
+    if reached and r.get("fire_age") is not None:
+        # `portfolio_path[0]` is the balance AT the FIRE age, so the offset is
+        # the age directly. Off by one here would report a crossing a year
+        # after it happened, and nothing downstream could tell.
+        fire_age = int(r["fire_age"])
+        for offset, balance in enumerate(
+                (r.get("withdrawal") or {}).get("portfolio_path") or []):
+            for m in milestones:
+                if first[m] is None and balance >= m:
+                    first[m] = fire_age + offset
+    return first
+
+
 def _path_stats(results: list, milestones: list) -> dict:
     """Reduce raw per-path dicts to scalar columns (official chunked_runner
     semantics) plus milestone-crossing ages and the cash-conservation residual."""
@@ -3585,18 +4444,7 @@ def _path_stats(results: list, milestones: list) -> dict:
         cols["terminal_liquidated_real"].append(
             float(r.get("terminal_liquidated_real") or 0.0))
 
-        ap = r.get("accum_path") or []
-        censor_age = (int(r["age_at_death"])
-                      if died and r.get("age_at_death") is not None
-                      else accum_failure_age)
-        first = {m: None for m in milestones}
-        for step in ap:
-            if censor_age is not None and int(step["age"]) > censor_age:
-                break
-            t = step["total"]
-            for m in milestones:
-                if first[m] is None and t >= m:
-                    first[m] = step["age"]
+        first = _milestone_ages(r, milestones)
         for m in milestones:
             ms_ages[m].append(first[m])
 
@@ -4510,7 +5358,6 @@ def _story_chronicle(r: dict, cfg: dict) -> dict:
     accum_failure_age = _accum_event_failure_age(r)
 
     curve, events = [], []
-    hit = set()
     prev_real = None
 
     def _mark_crash(age, chg):
@@ -4530,10 +5377,6 @@ def _story_chronicle(r: dict, cfg: dict) -> dict:
         curve.append([int(s["age"]), round(tr, 2)])
         if prev_real is not None and prev_real > 1000 and tr / prev_real - 1 < -0.15:
             _mark_crash(s["age"], tr / prev_real - 1)
-        for m in milestones:
-            if m not in hit and s["total"] >= m:
-                hit.add(m)
-                events.append({"age": int(s["age"]), "kind": "milestone", "v": m})
         prev_real = tr
         if accum_failure_age is None and fire_age is not None and s["age"] == fire_age:
             fire_idx = i
@@ -4564,6 +5407,16 @@ def _story_chronicle(r: dict, cfg: dict) -> dict:
         if prev_real and prev_real > 1000 and tr / prev_real - 1 < -0.15:
             _mark_crash(age, tr / prev_real - 1)
         prev_real = tr
+
+    # Milestones, from the one definition rather than a third copy of the rule.
+    # This loop used to live in the accumulation pass above and stopped at the
+    # FIRE age, so the story drew its wealth curve through thirty retirement
+    # years and never marked a crossing in any of them -- the same page-by-page
+    # disagreement the overview and the distribution had, in the one place
+    # nobody was comparing.
+    for milestone, age in sorted(_milestone_ages(r, milestones).items()):
+        if age is not None:
+            events.append({"age": int(age), "kind": "milestone", "v": milestone})
 
     ss = cfg.get("social_security") or {}
     if ss.get("enabled") and fire_age is not None:
@@ -4773,12 +5626,10 @@ def lifecycle_sample(cfg: dict, n: int, seed: int, relocation_on: bool,
             cpi = (step.get("expenses") or exp0) / exp0
             by_age_nom.setdefault(age, []).append(step["total"])
             by_age_real.setdefault(age, []).append(step["total"] / max(cpi, 1e-9))
-        # milestone ages
-        first = {m: None for m in ms}
-        for step in ap:
-            for m in ms:
-                if first[m] is None and step["total"] >= m:
-                    first[m] = step["age"]
+        # milestone ages -- the same definition the overview uses, and the same
+        # function, because these two having their own copies is what produced
+        # 0.9750 on one page and 0.0075 on the other.
+        first = _milestone_ages(r, ms)
         for m in ms:
             ms_ages[m].append(first[m])
 

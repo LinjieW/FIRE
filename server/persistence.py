@@ -639,6 +639,14 @@ def normalize_config(config: Optional[dict], default_factory: Callable[[], dict]
         raise PersistenceError(
             f"config schema {raw_version} is newer than supported {CONFIG_SCHEMA_VERSION}")
     out = _deep_merge(default_factory(), config)
+    # Missing identity is a legacy assumption, never a newly answered question.
+    if "residency_status" not in (config.get("ss_nra") or {}):
+        out.setdefault("ss_nra", {}).pop("residency_status", None)
+    import succession
+    try:
+        succession.config_accounts(out)
+    except succession.CredentialRefused as exc:
+        raise PersistenceError(str(exc)) from exc
     # Phase 1 additive ownership leaves: explicit JSON null wins a generic
     # deep-merge, but it must mean the same honest legacy sentinel as a missing
     # owner. Preserve unknown non-null strings so enabled streams still fail
@@ -752,7 +760,7 @@ def _readonly_schema_preflight(conn: sqlite3.Connection) -> None:
     except sqlite3.Error as exc:
         raise PersistenceError("timeline database schema is unreadable") from exc
     current = versions[-1] if versions else 0
-    if current in (7, 8, 9, 10, 11, 12):
+    if current in (7, 8, 9, 10, 11, 12, 13, 14):
         expected_versions = list(range(1, current + 1))
         complete = {
             7: PersistenceStore._schema_v7_complete,
@@ -761,6 +769,8 @@ def _readonly_schema_preflight(conn: sqlite3.Connection) -> None:
             10: PersistenceStore._schema_v10_complete,
             11: PersistenceStore._schema_v11_complete,
             12: PersistenceStore._schema_v12_complete,
+            13: PersistenceStore._schema_v13_complete,
+            14: PersistenceStore._schema_v14_complete,
         }[current](conn)
         if (versions != expected_versions or user_version != current
                 or not complete):
@@ -2531,6 +2541,180 @@ class PersistenceStore:
             "VALUES (12, ?, ?)", (utc_now(), app_release_id))
         conn.execute("PRAGMA user_version = 12")
 
+    @staticmethod
+    def _v13_table_statements() -> list[str]:
+        """Exact annual facts used by the Roadmap 11 execution Cockpit.
+
+        The facts are kept beside, rather than inside, the v9 CheckIn header:
+        older check-ins remain byte-for-byte intact and a missing row has one
+        honest meaning -- the annual RMD basis was not measured.  The JSON is
+        canonical application data whose field-level validation lives in
+        ``decumulation_facts.py``; SQLite owns the immutable/root contract.
+        """
+        return [
+            """
+            CREATE TABLE decumulation_checkin_facts (
+              checkin_id TEXT PRIMARY KEY REFERENCES checkins(checkin_id)
+                  ON DELETE RESTRICT,
+              calendar_year INTEGER NOT NULL CHECK (calendar_year > 0),
+              rmd_prior_year_end_balances_json TEXT NOT NULL
+                  CHECK (length(rmd_prior_year_end_balances_json) > 1),
+              created_at TEXT NOT NULL
+            )
+            """,
+        ]
+
+    @staticmethod
+    def _v13_trigger_statements() -> list[str]:
+        return [
+            """
+            CREATE TRIGGER decumulation_checkin_facts_no_update
+            BEFORE UPDATE ON decumulation_checkin_facts
+            BEGIN SELECT RAISE(ABORT,'decumulation check-in facts are immutable'); END
+            """,
+            """
+            CREATE TRIGGER decumulation_checkin_facts_no_delete
+            BEFORE DELETE ON decumulation_checkin_facts
+            BEGIN SELECT RAISE(ABORT,'decumulation check-in facts are retained'); END
+            """,
+        ]
+
+    @classmethod
+    def _schema_v13_complete(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._schema_v12_complete(conn):
+            return False
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        columns = {row[1] for row in conn.execute(
+            "PRAGMA table_info(decumulation_checkin_facts)")}
+        triggers = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        return ("decumulation_checkin_facts" in tables
+                and columns == {"checkin_id", "calendar_year",
+                                "rmd_prior_year_end_balances_json",
+                                "created_at"}
+                and {"decumulation_checkin_facts_no_update",
+                     "decumulation_checkin_facts_no_delete"}.issubset(triggers))
+
+    @classmethod
+    def install_v13_schema(cls, conn: sqlite3.Connection, *,
+                           app_release_id: str) -> None:
+        """Add exact annual facts without rewriting earlier check-ins."""
+        if cls._schema_v13_complete(conn):
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 13:
+                raise PersistenceError("v13 archive user_version mismatch")
+            return
+        if (int(conn.execute("PRAGMA user_version").fetchone()[0]) != 12
+                or not cls._schema_v12_complete(conn)):
+            raise PersistenceError("v12 archive is incomplete before v13 migration")
+        cls._validate_state_rows(conn)
+        for statement in cls._v13_table_statements():
+            conn.execute(statement)
+        for statement in cls._v13_trigger_statements():
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at, app_release_id) "
+            "VALUES (13, ?, ?)", (utc_now(), app_release_id))
+        conn.execute("PRAGMA user_version = 13")
+
+    @staticmethod
+    def _v14_table_statements() -> list[str]:
+        """Immutable Review Day minutes and the letter opened next year.
+
+        A completed ritual is evidence about what the household saw and wrote
+        on that day.  It therefore appends beside the plan rather than editing
+        a current-state row.  The agenda JSON is the structured snapshot; the
+        Markdown is its one-page human rendering.  Keeping both is deliberate:
+        future UI code can read facts without scraping prose, while the exact
+        memo the household exported remains reproducible.
+        """
+        return [
+            """
+            CREATE TABLE review_day_entries (
+              review_day_id TEXT PRIMARY KEY,
+              plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE RESTRICT,
+              plan_version_id TEXT NOT NULL REFERENCES plan_versions(id)
+                  ON DELETE RESTRICT,
+              review_year INTEGER NOT NULL CHECK (review_year >= 2000),
+              language TEXT NOT NULL CHECK (language IN ('zh','en')),
+              next_review_date TEXT NOT NULL
+                  CHECK (length(next_review_date) = 10),
+              agenda_json TEXT NOT NULL CHECK (length(agenda_json) > 1),
+              memo_markdown TEXT NOT NULL CHECK (length(memo_markdown) > 0),
+              future_letter TEXT NOT NULL CHECK (length(trim(future_letter)) > 0),
+              created_at TEXT NOT NULL
+            )
+            """,
+            "CREATE INDEX review_day_entries_by_plan "
+            "ON review_day_entries(plan_id, next_review_date, created_at)",
+        ]
+
+    @staticmethod
+    def _v14_trigger_statements() -> list[str]:
+        return [
+            """
+            CREATE TRIGGER review_day_entries_no_update
+            BEFORE UPDATE ON review_day_entries
+            BEGIN SELECT RAISE(ABORT,'Review Day entries are immutable; complete a new Review Day instead'); END
+            """,
+            """
+            CREATE TRIGGER review_day_entries_no_delete
+            BEFORE DELETE ON review_day_entries
+            BEGIN SELECT RAISE(ABORT,'Review Day entries are retained with plan history'); END
+            """,
+            """
+            CREATE TRIGGER review_day_entries_plan_version_guard
+            BEFORE INSERT ON review_day_entries
+            WHEN NOT EXISTS (
+              SELECT 1 FROM plan_versions
+               WHERE id = NEW.plan_version_id AND plan_id = NEW.plan_id)
+            BEGIN SELECT RAISE(ABORT,'Review Day plan version belongs to another plan'); END
+            """,
+        ]
+
+    @classmethod
+    def _schema_v14_complete(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._schema_v13_complete(conn):
+            return False
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        columns = {row[1] for row in conn.execute(
+            "PRAGMA table_info(review_day_entries)")}
+        triggers = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        indexes = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")}
+        return ("review_day_entries" in tables
+                and columns == {"review_day_id", "plan_id", "plan_version_id",
+                                "review_year", "language", "next_review_date",
+                                "agenda_json", "memo_markdown", "future_letter",
+                                "created_at"}
+                and {"review_day_entries_no_update",
+                     "review_day_entries_no_delete",
+                     "review_day_entries_plan_version_guard"}.issubset(triggers)
+                and "review_day_entries_by_plan" in indexes)
+
+    @classmethod
+    def install_v14_schema(cls, conn: sqlite3.Connection, *,
+                           app_release_id: str) -> None:
+        """Add Review Day history without rewriting any earlier archive row."""
+        if cls._schema_v14_complete(conn):
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 14:
+                raise PersistenceError("v14 archive user_version mismatch")
+            return
+        if (int(conn.execute("PRAGMA user_version").fetchone()[0]) != 13
+                or not cls._schema_v13_complete(conn)):
+            raise PersistenceError("v13 archive is incomplete before v14 migration")
+        cls._validate_state_rows(conn)
+        for statement in cls._v14_table_statements():
+            conn.execute(statement)
+        for statement in cls._v14_trigger_statements():
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at, app_release_id) "
+            "VALUES (14, ?, ?)", (utc_now(), app_release_id))
+        conn.execute("PRAGMA user_version = 14")
+
     @classmethod
     def _schema_v10_complete(cls, conn: sqlite3.Connection) -> bool:
         if not cls._schema_v9_complete(conn):
@@ -3163,7 +3347,7 @@ class PersistenceStore:
             versions = [int(row[0]) for row in rows]
             current = versions[-1] if versions else 0
             user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if current in (7, 8, 9, 10, 11, 12):
+            if current in (7, 8, 9, 10, 11, 12, 13, 14):
                 # A post-cutover archive carries the formal migration's
                 # additive v7/v8 schema, from Phase 2 the v9 CheckIn ledger,
                 # and from Phase 4 the v10 decision record.  It is accepted
@@ -3183,6 +3367,8 @@ class PersistenceStore:
                     10: self._schema_v10_complete,
                     11: self._schema_v11_complete,
                     12: self._schema_v12_complete,
+                    13: self._schema_v13_complete,
+                    14: self._schema_v14_complete,
                 }[current](conn)
                 if (versions != list(range(1, current + 1))
                         or user_version != current or not complete):

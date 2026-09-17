@@ -111,6 +111,7 @@ from fire_v6_model import (
 # the module is pure Python with no cost to import; nothing is DRAWN unless a
 # plan turns it on.
 import ltc_model as LTC
+import health_chain as HEALTH_CHAIN
 # 4.0 Phase 2 · the parent lifecycle. Replaces the eldercare shock and the
 # inheritance draw with one parent who has one death, when the plan opts in;
 # both of those stay exactly as they were for a plan that does not.
@@ -160,6 +161,24 @@ from fire_v9_6_model import (
 INCOME_STREAM_KINDS = ("pension", "rental", "parttime", "equity",
                        "annuity", "tips_ladder")
 INCOME_STREAM_OWNERS = ("unspecified", "household", "primary", "spouse")
+
+
+@dataclass(frozen=True)
+class AlreadyFiredParams:
+    """The entry seam for a plan whose accumulation period has already ended.
+
+    The account stack remains the engine's existing ``initial`` stack.  This
+    object carries only the facts that are not already represented there: the
+    state switch, when FIRE actually happened, current real spending, and the
+    two historical anchors an execution Cockpit must not infer from today's
+    balances.  When disabled it is not read, preserving the historical
+    lifecycle path.
+    """
+    enabled: bool = False
+    actual_fire_date: Optional[str] = None
+    annual_spending_real: Optional[float] = None
+    guardrail_initial_swr: Optional[float] = None
+    birth_year: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -1247,6 +1266,7 @@ def simulate_retirement_v98(
     ss_trust_fund_depletion_year: Optional[int] = None,
     execution_policy: Optional[ExecutionSimplificationPolicy] = None,
     student_debt=None,
+    health_chain_path: Optional["HEALTH_CHAIN.HealthChainPath"] = None,
 ) -> dict:
     state = state or STATE
     tax_us = tax_us or TAX_US
@@ -1587,15 +1607,23 @@ def simulate_retirement_v98(
         deaths_this_year = 0
         if household_on:
             spouse_age = current_age + _hh.spouse_age_offset
-            if primary_alive and rng.random() < annual_mortality_rate(current_age, mortality):
+            if primary_alive and (
+                    health_chain_path.dies_at(current_age, "primary")
+                    if health_chain_path is not None else
+                    rng.random() < annual_mortality_rate(current_age, mortality)):
                 primary_alive = False
                 deaths_this_year += 1
-            if spouse_alive and rng.random() < annual_mortality_rate(max(1, spouse_age), spouse_mort):
+            if spouse_alive and (
+                    health_chain_path.dies_at(current_age, "spouse")
+                    if health_chain_path is not None else
+                    rng.random() < annual_mortality_rate(max(1, spouse_age), spouse_mort)):
                 spouse_alive = False
                 deaths_this_year += 1
             terminal = not primary_alive and not spouse_alive
         elif mortality.enabled:
-            if rng.random() < annual_mortality_rate(current_age, mortality):
+            if (health_chain_path.dies_at(current_age, "primary")
+                    if health_chain_path is not None else
+                    rng.random() < annual_mortality_rate(current_age, mortality)):
                 deaths_this_year = 1
             terminal = deaths_this_year > 0
         else:
@@ -2426,6 +2454,7 @@ def _sample_household_accum_mortality_schedule(
     start_age: int,
     mortality: MortalityParams,
     household,
+    health_chain_path: Optional["HEALTH_CHAIN.HealthChainPath"] = None,
 ):
     """Preview the full household accumulation mortality schedule.
 
@@ -2441,11 +2470,13 @@ def _sample_household_accum_mortality_schedule(
     # whole Generator for every Monte Carlo path. The preview is synchronous
     # and accumulation uses a separate layoff RNG, so the official shared
     # stream remains observationally untouched until `_resume...` advances it.
-    rng_state = copy.deepcopy(rng.bit_generator.state)
-    try:
-        preview_draws = rng.random(max(0, 2 * n_years))
-    finally:
-        rng.bit_generator.state = rng_state
+    preview_draws = None
+    if health_chain_path is None:
+        rng_state = copy.deepcopy(rng.bit_generator.state)
+        try:
+            preview_draws = rng.random(max(0, 2 * n_years))
+        finally:
+            rng.bit_generator.state = rng_state
     preview_idx = 0
     alive_at_start = []
     alive_after_year = []
@@ -2470,17 +2501,25 @@ def _sample_household_accum_mortality_schedule(
         age = start_age + year_idx + 1
         spouse_age = max(1, age + household.spouse_age_offset)
         if primary_alive:
-            primary_draw = preview_draws[preview_idx]
-            preview_idx += 1
-            draw_count += 1
-            if primary_draw < annual_mortality_rate(age, mortality):
+            if health_chain_path is None:
+                primary_draw = preview_draws[preview_idx]
+                preview_idx += 1
+                draw_count += 1
+                died = primary_draw < annual_mortality_rate(age, mortality)
+            else:
+                died = health_chain_path.dies_at(age, "primary")
+            if died:
                 primary_alive = False
         if spouse_alive:
-            spouse_draw = preview_draws[preview_idx]
-            preview_idx += 1
-            draw_count += 1
-            if spouse_draw < annual_mortality_rate(
-                    spouse_age, spouse_mortality):
+            if health_chain_path is None:
+                spouse_draw = preview_draws[preview_idx]
+                preview_idx += 1
+                draw_count += 1
+                died = spouse_draw < annual_mortality_rate(
+                    spouse_age, spouse_mortality)
+            else:
+                died = health_chain_path.dies_at(age, "spouse")
+            if died:
                 spouse_alive = False
         if (last_survivor_death_age is None
                 and not primary_alive and not spouse_alive):
@@ -2548,6 +2587,7 @@ def simulate_lifecycle_v98(
     ss_trust_fund: SSTrustFundParams = None,
     initial: AccountStack = None,
     state: State = None,
+    already_fired: AlreadyFiredParams = None,
     tax_us: TaxParams = None,
     tax_cn: TaxParamsChina = None,
     fire_swr: float = None,
@@ -2564,6 +2604,7 @@ def simulate_lifecycle_v98(
     execution_policy: Optional[ExecutionSimplificationPolicy] = None,
     ssa_pia_resolver=None,
     student_debt=None,
+    health_chain_path: Optional["HEALTH_CHAIN.HealthChainPath"] = None,
 ) -> dict:
     """v9.8 lifecycle: v9.6 accumulation (bit-identical) + v9.8 retirement.
     life_events: optional [(age, amount_real)] — + = outflow, − = inflow;
@@ -2733,11 +2774,48 @@ def simulate_lifecycle_v98(
     inheritance = inheritance or InheritanceParams()
     sh_property = sh_property or ShanghaiPropertyParams()
     state = state or STATE
+    already_fired = already_fired or AlreadyFiredParams()
+    if already_fired.enabled:
+        # Phase 1 is a routing seam, not a second retirement model.  A zero
+        # accumulation span makes the existing initial stack today's FIRE
+        # step; the existing retirement loop then begins at start_age + 1.
+        # The adapter has already required and validated the two user facts.
+        state = replace(
+            state,
+            accum_years=0,
+            expenses_y0=float(already_fired.annual_spending_real),
+        )
     fire_swr = fire_swr or state.swr_pref
     relocation = relocation or RelocationParams()
     rng = rng or np.random.default_rng()
 
     total_years = state.accum_years + state.retire_horizon
+
+    if health_chain_path is not None:
+        _health_household = fire_v8_model._HOUSEHOLD
+        _health_household_on = (
+            _health_household is not None
+            and getattr(_health_household, "enabled", False))
+        _health_spouse_mortality = None
+        if _health_household_on:
+            _health_spouse_base = (
+                MORTALITY_FEMALE
+                if _health_household.spouse_sex == "female"
+                else MORTALITY_MALE)
+            _health_spouse_mortality = replace(
+                _health_spouse_base, enabled=mortality.enabled,
+                cap_age=mortality.cap_age)
+        health_chain_path.prepare_mortality(
+            lambda age: annual_mortality_rate(age, mortality),
+            enabled=mortality.enabled,
+            spouse_rate=(
+                (lambda age: annual_mortality_rate(
+                    age, _health_spouse_mortality))
+                if _health_spouse_mortality is not None else None),
+            spouse_age_offset=(
+                _health_household.spouse_age_offset
+                if _health_household_on else 0),
+        )
 
     # Roadmap 10.0 Phase 7. The two user contracts are mutually exclusive by
     # employment type but share one stochastic module/call site. Deriving its
@@ -2842,7 +2920,10 @@ def simulate_lifecycle_v98(
         effective_life_events.sort(key=lambda item: (int(item[0]), float(item[1])))
     life_events = effective_life_events or None
 
-    promo_year, bonus_pcts = sample_promotion_event(promo_params, rng)
+    if already_fired.enabled:
+        promo_year, bonus_pcts = None, [0.20]
+    else:
+        promo_year, bonus_pcts = sample_promotion_event(promo_params, rng)
     accum_returns = all_equity_returns[:state.accum_years]
     accum_inflations = all_inflations[:state.accum_years]
     _hh_accum = fire_v8_model._HOUSEHOLD
@@ -2889,6 +2970,7 @@ def simulate_lifecycle_v98(
         _accum_mortality_schedule = (
             _sample_household_accum_mortality_schedule(
                 rng, state.accum_years, state.start_age, mortality, _hh_accum,
+                health_chain_path=health_chain_path,
             )
         )
         alive_by_year = _accum_mortality_schedule.alive_at_start
@@ -2985,7 +3067,8 @@ def simulate_lifecycle_v98(
             alive_by_year=alive_by_year,
         )
 
-    fire_step = find_fire_crossing(accum_path, fire_swr)
+    fire_step = (accum_path[0] if already_fired.enabled
+                 else find_fire_crossing(accum_path, fire_swr))
     fire_age = fire_step['age'] if fire_step is not None else None
     fire_year_idx = ((fire_age - state.start_age) if fire_age is not None
                      else max(0, len(accum_path) - 1))
@@ -3004,8 +3087,11 @@ def simulate_lifecycle_v98(
     elif mortality.enabled:
         for i in range(fire_year_idx):
             age = state.start_age + i + 1
-            q = annual_mortality_rate(age, mortality)
-            if rng.random() < q:
+            died = (
+                health_chain_path.dies_at(age, "primary")
+                if health_chain_path is not None else
+                rng.random() < annual_mortality_rate(age, mortality))
+            if died:
                 death_in_accum = age
                 break
 
@@ -3077,6 +3163,10 @@ def simulate_lifecycle_v98(
     ltc_events, ltc_meta = LTC.sample_ltc_events(
         ltc, fire_age + 1, fire_age + state.retire_horizon,
         anchor_age=state.start_age,
+        draw_at=(health_chain_path.ltc_draw
+                 if health_chain_path is not None else None),
+        alive_at=((lambda age: health_chain_path.alive(age, "primary"))
+                  if health_chain_path is not None else None),
         calibration=(
             LTC.calibration_for(
                 (lambda age: annual_mortality_rate(age, mortality))
@@ -3086,6 +3176,10 @@ def simulate_lifecycle_v98(
             if (ltc is not None and ltc.mode == LTC.STOCHASTIC
                 and ltc.lifetime_risk > 0.0) else None),
     )
+    if health_chain_path is not None:
+        health_chain_path.record_ltc(
+            onset_age=ltc_meta.get("onset_age"),
+            years=ltc_meta.get("years"), level=ltc_meta.get("level"))
 
     # Parents. Sampled here for the same reasons as long-term care above — once,
     # before the withdrawal loop, on its OWN generator so `rng` reaches the loop
@@ -3154,6 +3248,7 @@ def simulate_lifecycle_v98(
         spouse_alive_at_start=spouse_alive_accum,
         execution_policy=execution_policy,
         student_debt=student_debt,
+        health_chain_path=health_chain_path,
     )
 
     result = {
@@ -3206,6 +3301,9 @@ def simulate_lifecycle_v98(
     if income_streams:
         result['accum_income_meta'] = _income_accum_meta_through_age(
             _income_accum_meta, fire_age)
+    if already_fired.enabled:
+        result['already_fired'] = True
+        result['actual_fire_date'] = already_fired.actual_fire_date
     return result
 
 

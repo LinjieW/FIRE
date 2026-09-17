@@ -78,7 +78,7 @@ def check_entry(entry: dict) -> dict:
             % (", ".join(ALLOWED_ENTRY_FIELDS), ", ".join(sorted(unknown))))
     for field, value in entry.items():
         if not isinstance(value, str):
-            continue
+            raise CredentialRefused("account field '%s' must be text" % field)
         for pattern, why in CREDENTIAL_PATTERNS:
             if pattern.search(value):
                 raise CredentialRefused(
@@ -89,12 +89,32 @@ def check_entry(entry: dict) -> dict:
     return dict(entry)
 
 
+def config_accounts(config: dict) -> list:
+    block = config.get("succession", {})
+    if not isinstance(block, dict):
+        raise CredentialRefused("succession must be an object")
+    extra = set(block) - {"accounts"}
+    if extra:
+        raise CredentialRefused("unknown succession fields: %s" % ", ".join(sorted(extra)))
+    rows = block.get("accounts", [])
+    if not isinstance(rows, list):
+        raise CredentialRefused("succession.accounts must be a list")
+    checked = []
+    for index, row in enumerate(rows):
+        try:
+            checked.append(check_entry(row))
+        except CredentialRefused as exc:
+            raise CredentialRefused("succession.accounts[%d]: %s" % (index, exc)) from exc
+    return checked
+
+
 def build(*, config: dict, accounts: Optional[list] = None,
           zh: bool = True) -> dict:
     """The capsule's content. Returns markdown plus what it contains."""
     if not isinstance(config, dict):
         raise TypeError("config must be a dict")
-    checked = [check_entry(e) for e in (accounts or [])]
+    # Legacy explicit callers remain supported; the product uses the saved config.
+    checked = config_accounts(config) if accounts is None else [check_entry(e) for e in accounts]
 
     state = config.get("state") or {}
     spend = state.get("expenses_y0")
@@ -118,6 +138,8 @@ def build(*, config: dict, accounts: Optional[list] = None,
                 entry.get("institution") or ("未填" if zh else "unnamed"),
                 entry.get("kind") or ("未填" if zh else "unspecified"),
                 (" — %s" % entry["where_to_look"]) if entry.get("where_to_look") else ""))
+            if entry.get("note"):
+                lines.append("  " + entry["note"])
     else:
         lines.append("**这里是空的。**" if zh else "**This is empty.**")
         lines.append("")

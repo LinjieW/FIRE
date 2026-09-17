@@ -43,7 +43,9 @@ ARCHIVE_SCHEMA_VERSION = 6
 # live archive is v8 the moment a cutover completes, so a backup taken after one
 # is a v8 backup, and refusing it left a cut-over install with no way to take a
 # package at all.
-SUPPORTED_SOURCE_SCHEMA_VERSIONS = ("6", "7", "8", "9", "10", "11", "12")
+SUPPORTED_SOURCE_SCHEMA_VERSIONS = (
+    "6", "7", "8", "9", "10", "11", "12", "13", "14",
+)
 ABSENT_LOGICAL_SHA256 = (
     "98d9795836406c36f08d4ebe3ef610815eb8786d86cd500b6249d9f3c8b91a42")
 EMPTY_TARGET_HASH = (
@@ -733,6 +735,68 @@ def _validate_v12_parent_identity_sex(conn: sqlite3.Connection) -> None:
         raise RecoveryError("v12 parent identity sex evaluation lineage is invalid")
 
 
+def _validate_v13_decumulation_facts(conn: sqlite3.Connection) -> None:
+    """Refuse corrupt or non-canonical exact annual facts before backup/use."""
+    import decumulation_facts as DECUMULATION_FACTS
+
+    for row in conn.execute(
+            "SELECT checkin_id,calendar_year,"
+            "rmd_prior_year_end_balances_json FROM decumulation_checkin_facts"):
+        try:
+            balances = json.loads(row[2])
+            validated = DECUMULATION_FACTS.validate_request({
+                "calendar_year": row[1],
+                "rmd_prior_year_end_balances": balances,
+            })
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RecoveryError(
+                "v13 decumulation check-in facts are invalid") from exc
+        if row[2] != PERSISTENCE.canonical_json_text(
+                validated["rmd_prior_year_end_balances"]):
+            raise RecoveryError(
+                "v13 decumulation check-in facts are not canonical")
+
+
+def _validate_v14_review_day(conn: sqlite3.Connection) -> None:
+    """Rebuild each Review Day identity and memo before backup or restore."""
+    import review_day as REVIEW_DAY
+
+    rows = conn.execute(
+        "SELECT r.review_day_id,r.plan_id,r.plan_version_id,r.review_year,"
+        "r.language,r.next_review_date,r.agenda_json,r.memo_markdown,"
+        "r.future_letter,p.plan_id AS version_plan_id "
+        "FROM review_day_entries r LEFT JOIN plan_versions p "
+        "ON p.id=r.plan_version_id")
+    for row in rows:
+        try:
+            agenda = json.loads(row[6])
+            if row[9] != row[1]:
+                raise ValueError("plan/version mismatch")
+            if row[6] != PERSISTENCE.canonical_json_text(agenda):
+                raise ValueError("non-canonical agenda")
+            if row[4] not in ("zh", "en") or not str(row[8]).strip():
+                raise ValueError("invalid language or letter")
+            next_date = REVIEW_DAY._date(row[5], "next_review_date")
+            if int(next_date[:4]) <= int(row[3]):
+                raise ValueError("next date is not after the review year")
+            canonical = {
+                "plan_id": row[1], "plan_version_id": row[2],
+                "review_year": int(row[3]), "language": row[4],
+                "next_review_date": next_date, "agenda": agenda,
+                "future_letter": row[8],
+            }
+            expected_id = "rdy_" + hashlib.sha256(
+                PERSISTENCE.canonical_json_text(canonical).encode("utf-8")
+            ).hexdigest()[:24]
+            expected_memo = REVIEW_DAY.build_memo(
+                review_year=int(row[3]), next_review_date=next_date,
+                agenda=agenda, future_letter=row[8], language=row[4])
+            if row[0] != expected_id or row[7] != expected_memo:
+                raise ValueError("identity or memo mismatch")
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RecoveryError("v14 Review Day entry is invalid") from exc
+
+
 def validate_archive_connection(conn: sqlite3.Connection) -> dict:
     """Run the single archive validator used before every logical identity."""
     try:
@@ -754,6 +818,10 @@ def validate_archive_connection(conn: sqlite3.Connection) -> dict:
             _validate_v11_parent_identity(conn)
         if version >= 12:
             _validate_v12_parent_identity_sex(conn)
+        if version >= 13:
+            _validate_v13_decumulation_facts(conn)
+        if version >= 14:
+            _validate_v14_review_day(conn)
         return {"schema_version": version, "database_state": "present"}
     except (PERSISTENCE.PersistenceError, sqlite3.Error, RecoveryError) as exc:
         if isinstance(exc, RecoveryError):
@@ -3857,10 +3925,12 @@ _ADDITIVE_STAGE_STEPS = (
     (9, "install_v10_schema", "the decision record"),
     (10, "install_v11_schema", "the parent identity record"),
     (11, "install_v12_schema", "the parent identity sex evidence"),
+    (12, "install_v13_schema", "the decumulation check-in facts"),
+    (13, "install_v14_schema", "the Review Day record"),
 )
 
 #: Highest archive schema a restore stage can be brought to.
-MAX_STAGE_SCHEMA_VERSION = 12
+MAX_STAGE_SCHEMA_VERSION = 14
 
 
 def _migrate_stage_to_target(path: Path, target_schema_version: int) -> None:

@@ -4,12 +4,9 @@
   "use strict";
   const NS = "http://www.w3.org/2000/svg";
 
-  // palettes read from CSS vars at draw time so the theme toggle re-skins
-  // every chart on the next render (dark mode is a designed mapping in CSS).
-  const cv = (n, f) => {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-    return v || f;
-  };
+  // CSS variables stay live inside SVG paint attributes and tooltip styles.
+  // A theme change therefore preserves chart nodes, listeners and cursor state.
+  const cv = (n, f) => `var(${n}, ${f})`;
   let PAL = {}, INK, GRID, AXIS, MUTED, ACCENT;
   function refresh() {
     PAL.home = { line: cv("--ch-home", "#2A4A3A"), band: cv("--ch-home-band", "#BCD6C6"), band2: cv("--ch-home-band2", "#DCE6DF"), dot: cv("--ch-home", "#2A4A3A") };

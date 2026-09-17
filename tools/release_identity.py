@@ -57,6 +57,20 @@ ROOT_FILES: dict[str, str] = {
     # identity gate had been red since. Preflight does not see it: it checks
     # RUNTIME files, and this is a research note.
     "ESPP_CONTRACT_RESEARCH_2026-08-29.md": "documentation",
+    "CANADA_ACCOUNT_RULES_RESEARCH_2026-08-30.md": "documentation",
+    "RULE_PACK_2027_PRECHECK_2026-09-15.md": "documentation",
+    "COGNITIVE_DECLINE_DATA_GATE_2026-08-31.md": "documentation",
+    "ROADMAP11_HEALTH_COUPLING_MATRIX.md": "documentation",
+    "ROADMAP11_RETIREMENT_CAPABILITY_MATRIX.md": "documentation",
+    "RULE_PACK_REFRESH.md": "documentation",
+    "CHINA_RULE_RESEARCH_2026-09-04.md": "documentation",
+    "ROADMAP_14.0.md": "documentation",
+    "ROADMAP_13.0.md": "documentation",
+    "ROADMAP_12.0.md": "documentation",
+    "ROADMAP_12_CLOSEOUT.md": "documentation",
+    "DECISIONS_PENDING_2026-09-05.md": "documentation",
+    "INPUT_SURFACE_2026-09-10.md": "documentation",
+    "ROADMAP_13_CLOSEOUT.md": "documentation",
     "ROADMAP_11.0.md": "documentation",
     "ATTRIBUTION_PROTOCOL_BLOCK_CONDITIONS_2026-07-21.md": "documentation",
     "DESIGN_APPLE_UIUX_2026-07.md": "documentation",
@@ -88,6 +102,7 @@ ROOT_FILES: dict[str, str] = {
     "ROADMAP_10.0.md": "documentation",
     "CALIBRATION_REPORT_9.0.md": "calibration_evidence",
     "CALIBRATION_REPORT_10.0.md": "calibration_evidence",
+    "CALIBRATION_REPORT_11.0.md": "calibration_evidence",
     # The naming migration contract. Documentation: it constrains what a
     # rename may touch (and, as importantly, what it may not -- the
     # historical records) and ships nothing into the bundle.
@@ -100,6 +115,7 @@ ROOT_FILES: dict[str, str] = {
     # constrains what a person does once a year, and ships nothing into
     # the bundle.
     "PACK_OPERATIONS.md": "documentation",
+    "PACK_CONTRIB.md": "documentation",
     "WORKSTREAMS.md": "documentation",
     ".gitignore": "repository_contract",
     "build-app.sh": "build_contract",
@@ -116,7 +132,12 @@ DIRECTORIES: dict[str, tuple[str, set[str]]] = {
     # data rather than code but are exactly as load-bearing: the cutover
     # digest comparison is checked against them.
     "tests": ("validation_tests", {".py", ".json"}),
-    "tools": ("evidence_tool", {".py"}),
+    # .json joined .py when Roadmap 12 Phase 0 added a ruler baseline and an
+    # exit registry: they are the tool's data, not code, but they are exactly as
+    # load-bearing (the ratchet compares against the baseline). Named files are
+    # listed in TOOL_DATA_FILES below, so widening the extension here does not
+    # widen what may enter tools/ unnamed.
+    "tools": ("evidence_tool", {".py", ".json"}),
 }
 
 # The frozen candidate has a narrower input contract than the broad evidence
@@ -144,14 +165,86 @@ RUNTIME_TOOL_FILES = {
 # comment in the promotion orchestrator invalidated a candidate whose runtime
 # bytes had not changed, and §8 is explicit that only runtime, schema, server or
 # bundled-JS changes do that.
+# Non-.py data files under tools/. Kept as an explicit roster for the same
+# reason the .py rosters exist: the extension allowlist alone would let any new
+# JSON in unnamed. Discovered while adding the first two -- `preflight` only
+# globs `*.py`, so an unclassified tools/*.json passed it and was caught 45
+# minutes later by the full gate, which is precisely the gap preflight exists
+# to close.
+TOOL_DATA_FILES = {
+    "tools/roadmap12_baseline.json": "roadmap_ruler_baseline",
+    "tools/roadmap12_exit_registry.json": "roadmap_exit_registry",
+}
+
 RELEASE_ONLY_TOOL_FILES = {
     "tools/promote.py": "release_orchestrator",
+    # E60's guard: what a suite run left in the user's own ~/Downloads. Both
+    # harnesses that run suites call it, the App never does, and a folder on
+    # somebody's machine is not a runtime input -- so tightening what counts as
+    # an export must not move the runtime identity of a candidate.
+    "tools/user_exports.py": "gate_user_data_guard",
+    # Roadmap 13 Phase 6 route B. It decides whether the candidate gate may
+    # accept a checked claim that the full gate already ran green on this exact
+    # tree, instead of re-running it -- 4984s of a measured 7295s promotion.
+    # Release-only, and deliberately so: it is imported by the orchestrator and
+    # never by the App, so changing how evidence is judged must not move the
+    # runtime identity of a candidate whose runtime bytes did not change.
+    "tools/gate_evidence.py": "release_gate_evidence",
+    # Read-only candidate QA and approval/revocation proposal generator. It
+    # never runs in the App and never writes the committed registry.
+    "tools/country_pack_governance.py": "country_pack_governance_evidence",
     # Roadmap 9's read-side historical calibration audit. It consumes engine
     # data and emits evidence but is never imported or bundled by the App.
     # Naming it here keeps that boundary explicit: adding an audit must not
     # silently change the runtime identity it is meant to evaluate.
     "tools/calibration_backtest.py": "calibration_evidence",
     "tools/roadmap10_combined_evidence.py": "calibration_evidence",
+    "tools/roadmap11_combined_evidence.py": "calibration_evidence",
+    # Roadmap 12's close-out. Same classification and the same reason as its
+    # 10.0 and 11.0 predecessors: it imports the engine to MEASURE it, and is
+    # never imported or bundled by the App, so a candidate's runtime bytes do
+    # not move when the close-out changes.
+    "tools/roadmap12_combined_evidence.py": "calibration_evidence",
+    # Roadmap 13's close-out, for the same reason as its 12.0 predecessor: it
+    # imports the engine to MEASURE what the version changed and is never
+    # imported or bundled by the App, so rewriting the report cannot move a
+    # candidate's runtime identity.
+    "tools/roadmap13_combined_evidence.py": "calibration_evidence",
+    "tools/roadmap11_phase0.py": "phase_baseline_generator",
+    # Roadmap 12 Phase 0's four rulers. It measures the gap between what the
+    # engine can do and what the product exposes, plus the disclosure/rule-pack/
+    # jurisdiction axes. Release-only for the same reason as the calibration
+    # evidence above: it reads the tree and emits numbers, and is never
+    # imported or bundled by the App. Classifying it here rather than in
+    # RUNTIME_TOOL_FILES also means editing a ruler cannot invalidate a
+    # candidate whose runtime bytes did not move.
+    "tools/roadmap12_rulers.py": "roadmap_ruler_evidence",
+    # Roadmap 13 Phase 15's ruler. It reads web/app.js's STEPS declaration and
+    # reports how the input surface is shaped -- controls per step and section,
+    # how many sit behind a showIf, how deep the gate chains go. Release-only
+    # for the same reason as the other rulers: it MEASURES the product and is
+    # never imported or bundled by it, so adding a column here must not move a
+    # candidate's runtime identity.
+    "tools/input_surface.py": "roadmap_ruler_evidence",
+    # Roadmap 13 Phase 1. Same classification and the same reason: it
+    # reads the tree and emits a number, and the App never imports it.
+    "tools/drive_coverage.py": "roadmap_ruler_evidence",
+    # Roadmap 13 Phase 2. Reads STEPS and emits a drive plan; never
+    # imported or bundled by the App.
+    "tools/control_plan.py": "roadmap_ruler_evidence",
+    # Roadmap 13 Phase 8. Reads a timing file and ranks suites; the
+    # App never imports it and it writes nothing into the tree.
+    "tools/gate_cost.py": "roadmap_ruler_evidence",
+    # The annual rule-pack refresh procedure. Release-only for the same reason
+    # as the rulers: it reads the pack and the git history, prints what is due
+    # and refuses a dishonest edit, and is never imported or bundled by the
+    # App. It also shells out to `git`, which the runtime never does.
+    "tools/rule_pack_refresh.py": "rule_pack_refresh_procedure",
+    # Selects which suites read the files a change touched, so the full gate
+    # is run ONCE and green rather than used as a search tool. Release-only
+    # like the rulers: it reads the tree and the git index, prints a list, and
+    # is never imported or bundled by the App.
+    "tools/affected.py": "affected_suite_selector",
     # Reads the build's artefacts to author release notes and ships nothing
     # into the bundle, so it is release-only rather than part of the runtime
     # identity. Classified here because the manifest builder refuses an
@@ -297,6 +390,24 @@ UNSAFE_SUFFIXES = (
 )
 
 DATA_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "rules.ca_account_pack",
+        "source_files": [
+            "engine/fire_country_pack.py",
+            "engine/rule_pack_ca_accounts.json",
+            "engine/country_pack_registry.json",
+        ],
+        "symbol": "pack_for('CA')",
+        "scope": "Content-addressed offline Canadian account semantics for non-registered, RRSP, RRIF and TFSA accounts.",
+        "vintage": "2026 CRA and Department of Finance rules verified 2026-09-01",
+        "units": "CAD annual limits, decimal inclusion/factor values, integer ages",
+        "provenance": "Official Canada.ca URLs and per-source vintages are embedded in rule_pack_ca_accounts.json.",
+        "field_source_ledger": "Every account and rule names one or more ids from the pack's sources array.",
+        "transformations": "Strict sorted JSON content identity; RRIF under-71 reciprocal formula is declared by kind and base age, with ages 71-94 tabulated.",
+        "applies_to": ["account_schema.CA"],
+        "status": "offline_embedded_official_vintage",
+        "limitation": "Bounded account semantics only; no provincial tax, CPP/OAS, annuity pricing, HBP/LLP, locked-in plan, or spousal-attribution model.",
+    },
     {
         "id": "rules.offline_pack",
         "source_files": ["engine/fire_rule_pack.py"],
@@ -637,6 +748,42 @@ def _runtime_external_entry(path: Path, label: str) -> dict[str, Any]:
     }
 
 
+def validate_runtime_classification(root: str | Path) -> None:
+    """Validate source/runtime classification without requiring build assets.
+
+    A preflight runs before a build and often from an isolated worktree, so it
+    must be able to catch an unclassified runtime or tool file without first
+    requiring the universal2 wheel that only a build creates.  Candidate
+    identity still uses `build_runtime_manifest` and still requires that wheel.
+    """
+    root_path = _source_root_path(root)
+    tools_dir = root_path / "tools"
+    for path in sorted(tools_dir.glob("*.py")):
+        relative = path.relative_to(root_path).as_posix()
+        if relative not in RELEASE_ONLY_TOOL_FILES \
+                and relative not in RUNTIME_TOOL_FILES:
+            raise EvidenceError(
+                f"unclassified runtime identity tool: {relative}")
+    # Data files too. Without this the preflight passed an unclassified
+    # tools/*.json and the full gate caught it, which is the 45-minute
+    # round trip this check exists to avoid.
+    for path in sorted(tools_dir.glob("*.json")):
+        relative = path.relative_to(root_path).as_posix()
+        if relative not in TOOL_DATA_FILES:
+            raise EvidenceError(
+                f"unclassified tool data file: {relative}")
+    for relative in RUNTIME_TOOL_FILES:
+        path = root_path / relative
+        if not path.exists() or path.is_symlink():
+            raise EvidenceError(
+                f"required runtime identity tool is missing or symlinked: {relative}")
+    for child in root_path.iterdir():
+        if child.suffix in {".sh", ".py"} and child.name not in {
+                *RUNTIME_ROOT_FILES, "build-standalone.sh"}:
+            raise EvidenceError(
+                f"unclassified top-level runtime/build input: {child.name}")
+
+
 def build_runtime_manifest(root: str | Path) -> dict[str, Any]:
     """Build the narrower manifest used to identify a frozen candidate.
 
@@ -645,6 +792,7 @@ def build_runtime_manifest(root: str | Path) -> dict[str, Any]:
     is covered by the broad current-worktree evidence manifest.
     """
     root_path = _source_root_path(root)
+    validate_runtime_classification(root_path)
     entries: list[dict[str, Any]] = []
     for relative, category in RUNTIME_ROOT_FILES.items():
         path = root_path / relative
@@ -676,23 +824,9 @@ def build_runtime_manifest(root: str | Path) -> dict[str, Any]:
                     raise EvidenceError(f"unclassified runtime file: {relative}")
                 entries.append(_source_entry(root_path, path, category))
 
-    tools_dir = root_path / "tools"
-    for path in sorted(tools_dir.glob("*.py")):
-        relative = path.relative_to(root_path).as_posix()
-        if relative in RELEASE_ONLY_TOOL_FILES:
-            continue
-        if relative not in RUNTIME_TOOL_FILES:
-            raise EvidenceError(f"unclassified runtime identity tool: {relative}")
     for relative, category in RUNTIME_TOOL_FILES.items():
         path = root_path / relative
-        if not path.exists() or path.is_symlink():
-            raise EvidenceError(f"required runtime identity tool is missing or symlinked: {relative}")
         entries.append(_source_entry(root_path, path, category))
-
-    for child in root_path.iterdir():
-        if child.suffix in {".sh", ".py"} and child.name not in {
-                *RUNTIME_ROOT_FILES, "build-standalone.sh"}:
-            raise EvidenceError(f"unclassified top-level runtime/build input: {child.name}")
 
     wheel_dir = root_path / ".build" / "wheels" / "merged"
     wheel_candidates = sorted(

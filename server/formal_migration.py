@@ -29,7 +29,13 @@ FORMAL_ENVELOPE_FORMAT = "fire-localstorage-envelope-v1"
 FORMAL_PROJECTION_FORMAT = "fire-migration-projection-v1"
 PROJECTION_VERSION = "migration-projection-v1"
 NORMALIZER_VERSION = "migration-normalizer-v1"
-CONFIG_SCHEMA_VERSION = 2
+# 3 since Roadmap 12 Phase 3: the destination config keys were renamed to
+# neutral names (`tax_cn.*` -> `tax_destination.*` and four others). Version 2
+# configs are NOT rewritten -- `plan_versions` ABORTs every UPDATE, so the 75
+# stored plans keep their original spelling forever and
+# `engine_adapter.normalize_legacy_keys` translates on read. The bump marks
+# what NEW writes look like; it is not a migration anyone can run.
+CONFIG_SCHEMA_VERSION = 3
 FORMAL_KEYS = ("fire_draft", "fire_plans_v1")
 MAX_FORMAL_ENVELOPE_BYTES = RECOVERY.MAX_ENVELOPE_BYTES
 # The HTTP request contains one formal envelope plus a small, fixed request

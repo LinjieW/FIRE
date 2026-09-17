@@ -44,6 +44,7 @@ import re
 import secrets
 import signal
 import sys
+import statistics
 import threading
 import time
 import traceback
@@ -93,11 +94,14 @@ import asset_location as AL        # noqa: E402
 import roth_schedule as RSCH       # noqa: E402
 import funded_ratio as FRATIO      # noqa: E402
 import limitations as LIMITATIONS_MOD  # noqa: E402
+import jurisdiction_scope as SCOPE_MOD  # noqa: E402
 import sampling_error as SAMPLING_ERROR  # noqa: E402
 import throughput as THROUGHPUT  # noqa: E402
 import briefing_pack as BRIEFING_PACK  # noqa: E402
+import feedback_pack as FEEDBACK_PACK  # noqa: E402
 import family_evidence as FAMILY_EVIDENCE  # noqa: E402
 import life_transitions as LIFE_TRANSITIONS  # noqa: E402
+import succession as SUCCESSION  # noqa: E402
 from decision_lab import (  # noqa: E402
     SWEEP_CAP, SENS_CAP,
     _get_path, _set_path, _base_cfg, _scale_portfolio, _select_roth_best,
@@ -114,8 +118,11 @@ import storage_api as STORAGE        # noqa: E402
 import archive_seam as ARCHIVE_SEAM  # noqa: E402
 import working_draft as WORKING_DRAFT  # noqa: E402
 import checkin_seam as CHECKIN         # noqa: E402
+import decumulation_cockpit as DECUMULATION_COCKPIT  # noqa: E402
 import decision_archive as DECISION_ARCHIVE  # noqa: E402
 import decision_review as DECISION_REVIEW  # noqa: E402
+import review_day as REVIEW_DAY  # noqa: E402
+import flight_simulator as FLIGHT_SIMULATOR  # noqa: E402
 from persistence import (  # noqa: E402
     IdempotencyConflictError,
     PersistenceError,
@@ -212,6 +219,7 @@ _IDEMPOTENT_POST_PATHS = (
 # route-inventory contract instead of silently accepting an invalid plan.
 _SYNC_ENGINE_PREFLIGHT_ROUTES = frozenset({
     "/api/roth_opt", "/api/drill", "/api/rentbuy", "/api/story",
+    "/api/flight_simulator",
     "/api/live", "/api/strategies", "/api/robustness", "/api/sweep",
     "/api/sensitivity", "/api/backtest",
     # OPEN_ITEMS E33. The wizard sidebar's savings figure. It belongs in this
@@ -419,6 +427,32 @@ _BUILD_METADATA = {"bundle_version": "0.0.0", "git_tag": None,
                    "data_manifest_id": None}
 
 
+def _feedback_app_version() -> dict:
+    """The exact local build identifiers A34 can carry without networking.
+
+    Frozen builds ship their content identity beside the server.  A source
+    checkout has no such bundled identity, so it says so instead of guessing a
+    release tag from the surrounding checkout.
+    """
+    result = {
+        "runtime_kind": "frozen" if getattr(sys, "frozen", False) else "source",
+        "bundle_version": _BUILD_METADATA.get("bundle_version"),
+        "engine_version": ENG.ENGINE_VERSION,
+        "build_identity_sha256": None,
+    }
+    identity_path = os.path.join(
+        ROOT, "release_identity", "frozen_build_identity.json")
+    try:
+        with open(identity_path, encoding="utf-8") as handle:
+            identity = json.load(handle)
+        value = identity.get("identity_sha256")
+        if isinstance(value, str) and value:
+            result["build_identity_sha256"] = value
+    except (OSError, ValueError, TypeError):
+        pass
+    return result
+
+
 def _formal_migration_manager():
     return FORMAL_MIGRATION.FormalMigrationManager(_recovery_manager())
 
@@ -465,6 +499,20 @@ def _decision_archive_seam():
             reopen_store=_reopen_archive_store_after_recovery)
 
     return DECISION_ARCHIVE.DecisionArchiveSeam(
+        _archive_store(), write=None if writer is None else write)
+
+
+def _review_day_seam():
+    """The offline Review Day record, through the archive's normal writer."""
+    writer = _archive_writer()
+
+    def write(key, mutate):
+        return writer.write(
+            key, mutate,
+            close_store=_close_archive_store_for_recovery,
+            reopen_store=_reopen_archive_store_after_recovery)
+
+    return REVIEW_DAY.ReviewDaySeam(
         _archive_store(), write=None if writer is None else write)
 
 
@@ -623,6 +671,11 @@ def _preflight_config(cfg: dict, *, store=None) -> None:
     and a pre-flight may only convert a would-be failure into an earlier and
     more useful one, never invent a new one.
     """
+    # An already-FIRE request must state its own balances before generic
+    # persistence defaults can fill anything.  The same adapter validator is
+    # used again by check_config after normalization; this first call preserves
+    # the difference between "unanswered" and the de-identified sample stack.
+    ENG.validate_already_fired(cfg)
     if store is not None:
         try:
             cfg = _normalize_persistence_config(cfg, ENG.default_config)
@@ -761,7 +814,7 @@ def start_run_job(cfg: dict, paths: int, seed: int, dist_paths=None, *,
             res["meta"].update({
                 "sampling_error": intervals,
                 "current_age": st.get("start_age"),
-                "annual_retirement_spending": st.get("expenses_y0"),
+                "annual_retirement_spending": ENG._expenses_y0(run_cfg),
                 "safe_withdrawal_rate": st.get("swr_pref"),
                 "relocation_enabled": bool((run_cfg.get("relocation") or {}).get("enabled", False)),
                 "protocol": {"paths": paths, "seed": seed, "engine": ENG.ENGINE_VERSION,
@@ -1299,6 +1352,98 @@ def start_annuity_job(cfg, body, seed) -> str:
 
 
 
+def start_guardrail_study_job(cfg, body, seed) -> str:
+    """How often would this plan's guardrails have cried wolf?
+
+    `server/guardrail_study.py` has been 309 lines with zero importers. Its own
+    docstring states the reason it exists: "a policy with a 70% false-alarm
+    rate is not a safety net, it is a source of exactly the anxious decisions
+    it was meant to prevent -- and no amount of reasoning about thresholds
+    reveals that. Running it does." Nothing ran it.
+
+    ONE engine run, not two. `study_policies` takes a `runner`, so the paths
+    are produced once and used for both halves of the work: deriving the
+    baseline the default policies are anchored to, and walking those policies
+    along the paths. That is not only cheaper -- it means the thresholds are
+    anchored to exactly the trajectories they are then judged against, rather
+    than to a different batch at a different seed.
+
+    The policies are `guardrails.default_policies`, which had no shipping
+    caller either. They are a starting set anchored to this plan's own
+    projection, and the payload says so; this slice gives no way to author a
+    policy, and inventing one here would be advice.
+    """
+    _preflight_config(cfg)         # refusal before the thread, not inside it
+    paths = int(body.get("paths", 2_000))
+    jid = _new_job()
+
+    def work():
+        try:
+            import guardrails as GUARD
+            import guardrail_study as GSTUDY
+            _job_set(jid, pct=0.05, stage="running the plan once")
+            if _JOBS.get(jid, {}).get("cancelled"):
+                raise _GsCancelled()
+            results = ENG._run(cfg, paths, int(seed), False)
+            if not results:
+                raise RuntimeError("the engine returned no paths")
+
+            _job_set(jid, pct=0.7, stage="anchoring the guardrails to this plan")
+            series = [GSTUDY.observations_from_path(r) for r in results]
+
+            def median_first(key):
+                """The plan's own projection for one observable, taken from the
+                FIRST year each path can be measured in. `None` when no path
+                measured it -- never a zero standing in for 'not observed',
+                which is the whole subject of this study."""
+                seen = []
+                for observations in series:
+                    for observation in observations:
+                        if observation.get(key) is not None:
+                            seen.append(observation[key])
+                            break
+                return statistics.median(seen) if seen else None
+
+            milestones = ENG._milestones(cfg)
+            stats = ENG._summarize(ENG._path_stats(results, milestones),
+                                   milestones, ENG._estate_exemption(cfg))
+            baseline = {
+                "portfolio_real": median_first("portfolio_real"),
+                "spending_real": median_first("spending_real"),
+                "income_real": median_first("income_real"),
+                "lifetime_success": stats.get("lifetime_success"),
+                "fire_age": (stats.get("fire_age") or {}).get("p50"),
+            }
+            policies = GUARD.default_policies(baseline)
+            if not policies:
+                _job_set(jid, result={
+                    "applicable": False,
+                    "reason": ("this plan projects none of the five things a "
+                               "default guardrail can be anchored to, so there "
+                               "is no policy to study"),
+                    "baseline": baseline}, done=True, pct=1.0, stage="done")
+                return
+
+            _job_set(jid, pct=0.85, stage="walking each policy along every path")
+            study = GSTUDY.study_policies(cfg, policies, paths=paths,
+                                          seed=int(seed),
+                                          runner=lambda *a, **k: results)
+            _job_set(jid, result={
+                "applicable": True,
+                "baseline": baseline,
+                "described": GUARD.describe_policies(policies),
+                "policy_source": "default_policies",
+                "study": study}, done=True, pct=1.0, stage="done")
+        except _GsCancelled:
+            _job_set(jid, error="cancelled", done=True, stage="cancelled")
+        except Exception as exc:              # noqa: BLE001
+            traceback.print_exc()
+            _job_set(jid, error=_public_error(exc), done=True, stage="error")
+
+    threading.Thread(target=work, daemon=True).start()
+    return jid
+
+
 def start_bequest_job(cfg, body, seed) -> str:
     """Does this plan only work because somebody dies? (`OPEN_ITEMS.md` E5.)
 
@@ -1810,6 +1955,15 @@ class Handler(BaseHTTPRequestHandler):
                     as_of=(query.get("as_of") or
                            [utc_now()])[0]))
             except DECISION_REVIEW.DecisionReviewError as exc:
+                return self._json({"error": str(exc), "code": exc.code},
+                                  exc.http_status)
+        if path == "/api/review_day/history":
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                return self._json(_review_day_seam().history(
+                    (query.get("plan_id") or [""])[0],
+                    as_of=(query.get("as_of") or [utc_now()[:10]])[0]))
+            except REVIEW_DAY.ReviewDayError as exc:
                 return self._json({"error": str(exc), "code": exc.code},
                                   exc.http_status)
         if path in ("/api/decision/archive/list", "/api/decision/archive/get"):
@@ -2346,6 +2500,25 @@ class Handler(BaseHTTPRequestHandler):
                 except RECOVERY.RecoveryError as exc:
                     return self._json({"error": _public_error(exc),
                                        "code": "recovery_failed"}, 400)
+            if path == "/api/decumulation/cockpit":
+                # Pure current-year compiler. It runs no Monte Carlo path and
+                # writes nothing; every numeric field is an engine receipt.
+                try:
+                    return self._json(DECUMULATION_COCKPIT.compile_cockpit(
+                        body.get("config"),
+                        calendar_year=body.get("calendar_year"),
+                        rmd_prior_year_end_balances=body.get(
+                            "rmd_prior_year_end_balances")))
+                except DECUMULATION_COCKPIT.CockpitError as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "invalid_decumulation_cockpit"},
+                                      400)
+            if path == "/api/review_day/complete":
+                try:
+                    return self._json(_review_day_seam().complete(body))
+                except REVIEW_DAY.ReviewDayError as exc:
+                    return self._json({"error": str(exc), "code": exc.code},
+                                      exc.http_status)
             if path in ("/api/decision/archive",
                         "/api/decision/archive/state"):
                 # Phase 4. Both are archive writes: a decision record and a
@@ -2618,6 +2791,52 @@ class Handler(BaseHTTPRequestHandler):
                     sampling_error=(body.get("sampling_error")),
                     limitations=LIMITATIONS_MOD.triggered(cfg, lang),
                     language=lang))
+            if path == "/api/feedback_pack":
+                # A34 is an explicit, synchronous preview. It never starts a
+                # job and never writes: only a later, separately clicked
+                # /api/save_file call can create the reviewed local files.
+                # Unlike the post-run briefing pack, this lives IN the wizard
+                # and must be able to carry an incomplete input that the user
+                # is reporting. FEEDBACK_PACK validates every selected path;
+                # the run preflight would wrongly suppress the evidence.
+                lang = str(body.get("language") or "zh")
+                try:
+                    return self._json(FEEDBACK_PACK.build(
+                        config=cfg,
+                        selection=body.get("selection"),
+                        app_version=_feedback_app_version(),
+                        limitations=LIMITATIONS_MOD.triggered(cfg, lang),
+                        language=lang))
+                except (TypeError, ValueError) as exc:
+                    return self._json({
+                        "error": str(exc),
+                        "code": "invalid_feedback_selection"}, 400)
+            if path == "/api/succession":
+                # `server/succession.py` shipped 266 lines with its own tests
+                # and NO route at all -- so the one thing CONTINUITY_CHARTER.md
+                # names by name could only be produced from a Python prompt.
+                # Reads and formats; it writes nothing and touches no archive.
+                #
+                # The account map is passed straight to `check_entry`, whose
+                # refusal is the point: this document is meant to be handed to
+                # somebody else, so a credential in it is not a typo, it is the
+                # failure. The refusal reaches the user as a 400 naming the
+                # field rather than as a document that quietly carries a
+                # password out of the app.
+                _preflight_config(cfg)
+                accounts = body.get("accounts")
+                if accounts is not None and not isinstance(accounts, list):
+                    return self._json({"error": "accounts must be a list"}, 400)
+                try:
+                    return self._json(SUCCESSION.build(
+                        config=cfg, accounts=accounts,
+                        zh=(str(body.get("language") or "zh") == "zh")))
+                except SUCCESSION.CredentialRefused as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "credential_refused"}, 400)
+                except (TypeError, ValueError) as exc:
+                    return self._json({"error": str(exc),
+                                       "code": "invalid_request"}, 400)
             if path == "/api/transition/propose":
                 # Reads and returns a checklist; it cannot write. The split
                 # between this and `apply` is the feature's whole contract.
@@ -2709,8 +2928,16 @@ class Handler(BaseHTTPRequestHandler):
                 # returning the four that happen to evaluate would be the
                 # worst answer available.
                 _preflight_config(cfg)
-                return self._json(LIMITATIONS_MOD.triggered(
-                    cfg, str(body.get("language") or "zh")))
+                language = str(body.get("language") or "zh")
+                answer = LIMITATIONS_MOD.triggered(cfg, language)
+                # The jurisdiction scope rides along on the disclosure seam
+                # rather than getting an endpoint of its own: it is the same
+                # kind of statement, the page already fetches this once per
+                # config, and a second endpoint would be a second thing to
+                # forget to call. It takes no config -- it is unconditional by
+                # design (OPEN_ITEMS E50) -- so it cannot be wrong for a plan.
+                answer["jurisdiction_scope"] = SCOPE_MOD.declaration(language)
+                return self._json(answer)
             if path == "/api/funded_ratio":
                 # Synchronous on purpose: this runs no simulation at all, it
                 # discounts two sets of cash flows. A background job would be
@@ -2736,6 +2963,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/asset_location/start":
                 try:
                     jid = start_asset_location_job(cfg, body, seed)
+                except ENG.ConfigIncomplete:
+                    raise          # carries code+field; the boundary answers it
+                except Exception as exc:      # noqa: BLE001
+                    return self._json({"error": _public_error(exc)}, 400)
+                return self._json({"job": jid})
+            if path == "/api/guardrail/study/start":
+                # Background job on the same polling channel as everything
+                # else: /api/progress, /api/result, /api/cancel.
+                try:
+                    jid = start_guardrail_study_job(cfg, body, seed)
                 except ENG.ConfigIncomplete:
                     raise          # carries code+field; the boundary answers it
                 except Exception as exc:      # noqa: BLE001
@@ -2793,6 +3030,16 @@ class Handler(BaseHTTPRequestHandler):
                 # = the client bumps the seed.
                 n = max(60, min(int(body.get("paths", 150)), 500))
                 return self._json(ENG.story(cfg, n, seed))
+            if path == "/api/flight_simulator":
+                # A23: a stateless annual rehearsal.  Every request replays
+                # the same stylised path through the real retirement engine;
+                # it never changes or appends to the saved plan.
+                try:
+                    return self._json(FLIGHT_SIMULATOR.rehearse(
+                        cfg, str(body.get("scenario") or "bear_start"),
+                        body.get("choices") or [], seed))
+                except (ValueError, TypeError) as exc:
+                    return self._json({"error": _public_error(exc)}, 400)
             if path == "/api/estimate/savings":
                 # OPEN_ITEMS E33. Deliberately synchronous and deliberately
                 # NOT a job: this is a single year of arithmetic, and a job
@@ -2933,6 +3180,34 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({
                         "path": "~/Downloads/" + os.path.basename(out),
                         "json_path": "~/Downloads/" + os.path.basename(outj)})
+                elif kind == "feedback":
+                    # Write the exact pack the user previewed. The browser
+                    # invalidates this cached object after any selection
+                    # change, so this click is the second explicit action in
+                    # the review-before-export contract.
+                    pack = body.get("pack") or {}
+                    document = pack.get("json")
+                    markdown = pack.get("markdown")
+                    if (not isinstance(document, dict)
+                            or document.get("format") != FEEDBACK_PACK.FORMAT
+                            or document.get("de_identified") is not False
+                            or not isinstance(markdown, str)
+                            or "NOT de-identified" not in markdown
+                               and "未经脱敏" not in markdown):
+                        return self._json({
+                            "error": "invalid reviewed feedback pack",
+                            "code": "invalid_feedback_pack"}, 400)
+                    f, out = _open_export(
+                        ddir, f"{safe}_feedback_{stamp}", "md")
+                    with f:
+                        f.write(markdown)
+                    fj, outj = _open_export(
+                        ddir, f"{safe}_feedback_{stamp}", "json")
+                    with fj:
+                        json.dump(document, fj, indent=1, ensure_ascii=False)
+                    return self._json({
+                        "path": "~/Downloads/" + os.path.basename(out),
+                        "json_path": "~/Downloads/" + os.path.basename(outj)})
                 elif kind == "family_evidence":
                     try:
                         pack = FAMILY_EVIDENCE.build(
@@ -2954,6 +3229,41 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({
                         "path": "~/Downloads/" + os.path.basename(out),
                         "json_path": "~/Downloads/" + os.path.basename(outj)})
+                elif kind == "succession":
+                    # Markdown only, and re-BUILT here rather than trusted from
+                    # the request: a caller that posted its own text could put
+                    # anything in a file the user is told to hand to somebody
+                    # else, including the credentials `check_entry` exists to
+                    # refuse. So the page sends the inputs and the server
+                    # produces the document, exactly as `/api/succession` does.
+                    accounts = body.get("accounts")
+                    if accounts is not None and not isinstance(accounts, list):
+                        return self._json({"error": "accounts must be a list"}, 400)
+                    try:
+                        built = SUCCESSION.build(
+                            config=cfg, accounts=accounts,
+                            zh=(str(body.get("language") or "zh") == "zh"))
+                    except SUCCESSION.CredentialRefused as exc:
+                        return self._json({"error": str(exc),
+                                           "code": "credential_refused"}, 400)
+                    f, out = _open_export(ddir, f"{safe}_{stamp}", "md")
+                    with f:
+                        f.write(built["markdown"])
+                    return self._json({"path": "~/Downloads/" + os.path.basename(out)})
+                elif kind == "review_day":
+                    memo = str(body.get("memo") or "")
+                    ics = str(body.get("ics") or "")
+                    if not memo.strip() or not ics.startswith("BEGIN:VCALENDAR\r\n"):
+                        return self._json({"error": "invalid Review Day export"}, 400)
+                    f, out = _open_export(ddir, f"{safe}_minutes_{stamp}", "md")
+                    with f:
+                        f.write(memo)
+                    fi, outi = _open_export(ddir, f"{safe}_{stamp}", "ics")
+                    with fi:
+                        fi.write(ics)
+                    return self._json({
+                        "path": "~/Downloads/" + os.path.basename(out),
+                        "ics_path": "~/Downloads/" + os.path.basename(outi)})
                 else:
                     return self._json({"error": "unknown kind"}, 400)
                 return self._json({"path": "~/Downloads/" + os.path.basename(out)})

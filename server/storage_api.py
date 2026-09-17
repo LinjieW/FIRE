@@ -940,10 +940,10 @@ class StorageSeam:
 
     @staticmethod
     def _install_parent_identity(store: Any) -> bool:
-        """Bring a staged archive to v12 on its first parent-identity write."""
+        """Bring a staged archive to at least v12 on a parent-identity write."""
         with store._transaction() as conn:
             current = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if current == 12:
+            if current >= 12:
                 if not PERSISTENCE.PersistenceStore._schema_v12_complete(conn):
                     raise StorageError("parent identity schema is incomplete",
                                        code="invalid_projection", http_status=422)

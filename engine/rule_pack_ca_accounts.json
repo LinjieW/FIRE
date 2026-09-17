@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "jurisdiction": "CA",
+  "coverage_year": 2026,
+  "assembled_on": "2026-09-01",
+  "maintenance_due_on": "2026-12-31",
+  "scope": "Bounded Canadian account semantics: non-registered, RRSP, RRIF, and TFSA. Provincial tax, CPP/OAS, HBP/LLP, locked-in plans, spousal attribution, and annuity pricing are outside this pack.",
+  "account_types": [
+    {
+      "key": "ca_non_registered",
+      "field": "ca_non_registered",
+      "default_order": 1,
+      "withdrawal_rate": "withdrawal_tax_taxable",
+      "tax_character": "capital_gain",
+      "early_penalty_rate": 0.0,
+      "early_penalty_age": null,
+      "seasoned": false,
+      "contribution_limited": false,
+      "forced_distribution": false,
+      "capital_gain_inclusion_fraction": 0.5,
+      "source_ids": ["ca_capital_gains_2026"]
+    },
+    {
+      "key": "ca_rrsp",
+      "field": "ca_rrsp",
+      "default_order": 2,
+      "withdrawal_rate": "withdrawal_tax_traditional",
+      "tax_character": "ordinary",
+      "early_penalty_rate": 0.0,
+      "early_penalty_age": null,
+      "seasoned": false,
+      "contribution_limited": true,
+      "contribution_rule": "ca_rrsp_2026",
+      "forced_distribution": false,
+      "disposition_rule": "ca_rrsp_age_71",
+      "source_ids": ["ca_rrsp_limits_2026", "ca_rrsp_tax_2026", "ca_rrsp_age_71"]
+    },
+    {
+      "key": "ca_rrif",
+      "field": "ca_rrif",
+      "default_order": 3,
+      "withdrawal_rate": "withdrawal_tax_traditional",
+      "tax_character": "ordinary",
+      "early_penalty_rate": 0.0,
+      "early_penalty_age": null,
+      "seasoned": false,
+      "contribution_limited": false,
+      "forced_distribution": true,
+      "forced_distribution_rule": "ca_rrif_standard",
+      "source_ids": ["ca_rrif_minimum_2026"]
+    },
+    {
+      "key": "ca_tfsa",
+      "field": "ca_tfsa",
+      "default_order": 4,
+      "withdrawal_rate": null,
+      "tax_character": null,
+      "early_penalty_rate": 0.0,
+      "early_penalty_age": null,
+      "seasoned": false,
+      "contribution_limited": true,
+      "contribution_rule": "ca_tfsa_2026",
+      "forced_distribution": false,
+      "source_ids": ["ca_tfsa_limits_2026", "ca_tfsa_room_2026", "ca_tfsa_withdrawals_2026"]
+    }
+  ],
+  "contribution_rules": {
+    "ca_tfsa_2026": {
+      "annual_dollar_limit": 7000.0,
+      "currency": "CAD",
+      "unused_room_carries_forward": true,
+      "withdrawals_restore_room_next_calendar_year": true,
+      "source_ids": ["ca_tfsa_limits_2026", "ca_tfsa_room_2026"]
+    },
+    "ca_rrsp_2026": {
+      "annual_dollar_limit": 33810.0,
+      "currency": "CAD",
+      "earned_income_fraction": 0.18,
+      "prior_year_earned_income": true,
+      "unused_room_carries_forward": true,
+      "pension_adjustments_apply": true,
+      "source_ids": ["ca_rrsp_limits_2026", "ca_rrsp_tax_2026"]
+    }
+  },
+  "disposition_rules": {
+    "ca_rrsp_age_71": {
+      "trigger_age": 71,
+      "deadline": "December 31 of the year the holder turns 71",
+      "requires_user_choice": true,
+      "options": [
+        {"key": "withdraw_cash", "tax_character": "ordinary"},
+        {"key": "transfer_rrif", "target_account_type": "ca_rrif"},
+        {"key": "buy_annuity", "requires_external_quote": true}
+      ],
+      "source_ids": ["ca_rrsp_age_71"]
+    }
+  },
+  "distribution_rules": {
+    "ca_rrif_standard": {
+      "balance_basis": "start_of_year_fair_market_value",
+      "establishment_year_factor": 0.0,
+      "age_basis_options": ["annuitant", "elected_spouse_or_common_law_partner"],
+      "age_basis_election_irrevocable": true,
+      "under_age": 71,
+      "under_age_formula": {
+        "kind": "reciprocal_base_minus_age",
+        "base_age": 90
+      },
+      "factors": {
+        "71": 0.0528,
+        "72": 0.0540,
+        "73": 0.0553,
+        "74": 0.0567,
+        "75": 0.0582,
+        "76": 0.0598,
+        "77": 0.0617,
+        "78": 0.0636,
+        "79": 0.0658,
+        "80": 0.0682,
+        "81": 0.0708,
+        "82": 0.0738,
+        "83": 0.0771,
+        "84": 0.0808,
+        "85": 0.0851,
+        "86": 0.0899,
+        "87": 0.0955,
+        "88": 0.1021,
+        "89": 0.1099,
+        "90": 0.1192,
+        "91": 0.1306,
+        "92": 0.1449,
+        "93": 0.1634,
+        "94": 0.1879
+      },
+      "terminal_age": 95,
+      "terminal_factor": 0.2000,
+      "source_ids": ["ca_rrif_minimum_2026"]
+    }
+  },
+  "sources": [
+    {
+      "id": "ca_tfsa_limits_2026",
+      "url": "https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/tax-free-savings-account/contributing/before.html",
+      "vintage": "2024-2026 TFSA dollar-limit table",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_tfsa_room_2026",
+      "url": "https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/tax-free-savings-account/contributing/calculate-room.html",
+      "vintage": "current CRA contribution-room method",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_tfsa_withdrawals_2026",
+      "url": "https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/tax-free-savings-account/withdraw.html",
+      "vintage": "current CRA withdrawal treatment",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_rrsp_limits_2026",
+      "url": "https://www.canada.ca/en/revenue-agency/services/tax/registered-plans-administrators/pspa/mp-rrsp-dpsp-tfsa-limits-ympe.html",
+      "vintage": "2026 RRSP dollar-limit table",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_rrsp_tax_2026",
+      "url": "https://www.canada.ca/en/department-finance/services/publications/federal-tax-expenditures/2026/part-7.html",
+      "vintage": "2026 federal tax-expenditure report",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_rrsp_age_71",
+      "url": "https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/rrsps-related-plans/rrsp-options-when-you-turn-71.html",
+      "vintage": "page dated 2026-01-29",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_rrif_minimum_2026",
+      "url": "https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/ic78-18/registered-retirement-income-funds.html",
+      "vintage": "IC78-18R7",
+      "accessed_on": "2026-09-01"
+    },
+    {
+      "id": "ca_capital_gains_2026",
+      "url": "https://www.canada.ca/en/department-finance/services/publications/federal-tax-expenditures/2026/part-2.html",
+      "vintage": "2026 report confirming Budget 2025 did not proceed with the proposed inclusion-rate increase",
+      "accessed_on": "2026-09-01"
+    }
+  ]
+}

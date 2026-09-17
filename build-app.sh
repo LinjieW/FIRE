@@ -210,6 +210,8 @@ run_build_arch "$VENV/bin/pyinstaller" --noconfirm --clean --windowed \
   --distpath "$CANDIDATE_DIST" --workpath "$BUILD/work" --specpath "$BUILD" \
   --add-data "$PROJ/web:web" \
   --add-data "$PROJ/engine/rule_pack_us_offline.json:." \
+  --add-data "$PROJ/engine/rule_pack_ca_accounts.json:." \
+  --add-data "$PROJ/engine/country_pack_registry.json:." \
   --add-data "$FROZEN_IDENTITY:release_identity" \
   --paths "$PROJ/server" --paths "$PROJ/engine" \
   --collect-all numpy \

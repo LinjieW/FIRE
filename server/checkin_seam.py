@@ -43,6 +43,7 @@ import sqlite3
 from typing import Any, Callable, Optional
 
 import checkin_ledger as LEDGER
+import decumulation_facts as DECUMULATION_FACTS
 import persistence as PERSISTENCE
 import review_memo as MEMO
 from attribution import CATEGORIES, LedgerError
@@ -283,8 +284,9 @@ class CheckinSeam:
                 "which installs it",
                 "ledger_unavailable")
 
-    def _install_ledger(self, store: Any, conn: sqlite3.Connection) -> bool:
-        """Bring an older archive up to v9, additively, or do nothing.
+    def _install_ledger(self, store: Any, conn: sqlite3.Connection, *,
+                        include_decumulation_facts: bool = False) -> bool:
+        """Bring an older archive to the exact additive schema this write needs.
 
         A live archive sits at v6: `install_v7_schema` and `install_v8_schema`
         are reached only by the restore path's staged migration, and nothing
@@ -301,7 +303,9 @@ class CheckinSeam:
         Each step is refused unless its predecessor is exactly in place; the
         installers enforce that themselves and are idempotent.
         """
-        if self._has_ledger(conn):
+        current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        target = 13 if include_decumulation_facts else 9
+        if current >= target:
             return False
         release = getattr(store, "app_release_id", "fire-modeling-3.0")
         try:
@@ -318,14 +322,18 @@ class CheckinSeam:
             # Each installer already refuses an archive that is not at its own
             # predecessor version, so selecting by current version applies the
             # same guard in the right order rather than weakening it.
-            current = conn.execute("PRAGMA user_version").fetchone()[0]
             for expected_before, install in (
                     (6, PERSISTENCE.PersistenceStore.install_v7_schema),
                     (7, PERSISTENCE.PersistenceStore.install_v8_schema),
-                    (8, PERSISTENCE.PersistenceStore.install_v9_schema)):
-                if current <= expected_before:
+                    (8, PERSISTENCE.PersistenceStore.install_v9_schema),
+                    (9, PERSISTENCE.PersistenceStore.install_v10_schema),
+                    (10, PERSISTENCE.PersistenceStore.install_v11_schema),
+                    (11, PERSISTENCE.PersistenceStore.install_v12_schema),
+                    (12, PERSISTENCE.PersistenceStore.install_v13_schema)):
+                if target > expected_before and current <= expected_before:
                     install(conn, app_release_id=release)
-                    current = conn.execute("PRAGMA user_version").fetchone()[0]
+                    current = int(conn.execute(
+                        "PRAGMA user_version").fetchone()[0])
         except PERSISTENCE.PersistenceError as exc:
             conn.rollback()
             raise _unprocessable(
@@ -352,17 +360,28 @@ class CheckinSeam:
                            "the actual flows are attributed against")
         actual = validate_lines(body["actual"], "actual", header)
         expected = validate_lines(body["expected"], "expected", header)
+        try:
+            decumulation_facts = DECUMULATION_FACTS.validate_request(
+                body.get("decumulation_facts"))
+        except DECUMULATION_FACTS.DecumulationFactError as exc:
+            raise _invalid(str(exc)) from None
 
         def mutate(store):
             conn = self._ledger_conn(store)
             try:
-                migrated = self._install_ledger(store, conn)
+                migrated = self._install_ledger(
+                    store, conn,
+                    include_decumulation_facts=decumulation_facts is not None)
                 try:
                     LEDGER.insert_checkin(conn, header)
                     LEDGER.append_raw_lines(conn, header["checkin_id"],
                                             "actual", actual)
                     LEDGER.append_raw_lines(conn, header["checkin_id"],
                                             "expected", expected)
+                    if decumulation_facts is not None:
+                        DECUMULATION_FACTS.insert(
+                            conn, header["checkin_id"], decumulation_facts,
+                            created_at=header["created_at"])
                 except sqlite3.IntegrityError as exc:
                     conn.rollback()
                     raise CheckinError(
@@ -407,10 +426,16 @@ class CheckinSeam:
                 "portfolio_currency_exponent, opening_value_minor, "
                 "closing_value_minor, observation_state, created_at, "
                 "supersedes_checkin_id FROM checkins WHERE 0").description]
+            checkins = [dict(zip(columns, row)) for row in rows]
+            for item in checkins:
+                item["decumulation_facts"] = None
+            if PERSISTENCE.PersistenceStore._schema_v13_complete(conn):
+                for item in checkins:
+                    item["decumulation_facts"] = DECUMULATION_FACTS.load(
+                        conn, item["checkin_id"])
         finally:
             conn.close()
-        return {"plan_id": plan_id,
-                "checkins": [dict(zip(columns, row)) for row in rows]}
+        return {"plan_id": plan_id, "checkins": checkins}
 
     # -------------------------------------------------------- old forecasts
 

@@ -28,6 +28,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+# The long-term-care module owns the list of what it does not model; this
+# file builds a disclosure from it instead of keeping a second copy.
+import ltc_model as LTC_MODEL
+
 import correlation_registry as CORRELATION
 
 
@@ -105,11 +109,39 @@ def _mode_on(path: str) -> Callable[[dict], bool]:
     return check
 
 
+def _any_mode_is(paths, wanted: str) -> Callable[[dict], bool]:
+    """True when ANY of these mode leaves is set to `wanted`.
+
+    One rule for both shock modules rather than two near-identical ones: the
+    thing being disclosed -- that the distribution's parameters ship as
+    population averages -- is the same sentence about both, and two copies of
+    a sentence drift.
+    """
+    def check(cfg: dict) -> bool:
+        for path in paths:
+            value = _leaf(cfg, path)
+            value = getattr(value, "value", value)
+            if str(value) == wanted:
+                return True
+        return False
+    return check
+
+
 #: The rules, in the order they will be shown. Ordering is by how much the
 #: approximation can move a number, as far as that is knowable, rather than by
 #: config order -- a reader who stops after three should have read the three
 #: that matter most.
 RULES = [
+    Rule("already_fired", ("already_fired.enabled",),
+         _on("already_fired.enabled"),
+         "已退休入口把你填写的**当前账户余额与当前年度支出**作为今天的退休起点，"
+         "不再倒跑积累期。实际 FIRE 日期与出生年只用来还原历史年龄刻度；它们不是"
+         "市场记录，也不会验证过去每年的余额、收入或支出。",
+         "The already-retired entry treats the current account balances and "
+         "current annual spending you supplied as today's retirement starting "
+         "point; it does not rerun accumulation. Actual FIRE date and birth "
+         "year restore the historical age axis only. They are not a market "
+         "record and do not validate each past year's balances, income or spending."),
     Rule("tax_true", ("tax_true.enabled",), _on("tax_true.enabled"),
          "真实逐年税表已开启：用的是 2026 年的联邦表，且**不随年份更新**。"
          "州税走平率或原型，不是任何一个州的真实税法。这些数字会随立法变化，"
@@ -213,13 +245,24 @@ RULES = [
          "That cap governs additions to one defined-contribution plan, and a "
          "457(b) is a different plan."),
     Rule("ltc", ("ltc.mode",), _mode_on("ltc.mode"),
-         "长期护理已开启：进入概率与时长来自公开分布的近似，"
-         "**Medicaid spend-down 明确不建模**。护理成本按医疗通胀增长，"
+         "长期护理已开启：进入概率与时长来自公开分布的近似。"
+         "护理成本按医疗通胀增长，"
          "而你所在地区的实际价格可能与全国分布相差很远。",
          "Long-term care is on: entry probability and duration are "
          "approximations from published distributions, and Medicaid "
          "spend-down is explicitly NOT modelled. Care costs grow with medical "
          "inflation, and local prices can differ sharply from national ones."),
+    # Generated from engine/ltc_model.py's NOT_MODELLED rather than restated.
+    # That tuple's own comment used to claim it kept the disclosure and the
+    # code from drifting apart, while nothing shipping read it and the same
+    # facts were retyped here and again in web/app.js. Building the sentence
+    # here is what makes the claim true; the test below fails if this stops
+    # covering every entry.
+    Rule("ltc_not_modelled", ("ltc.mode",), _mode_on("ltc.mode"),
+         "长期护理模块**明确不建模**以下各项：" + "；".join(
+             zh for zh, _en in LTC_MODEL.NOT_MODELLED) + "。",
+         "The long-term care module explicitly does NOT model: " + "; ".join(
+             en for _zh, en in LTC_MODEL.NOT_MODELLED) + "."),
     Rule("parents", ("parents.mode",), _mode_on("parents.mode"),
          "父母生命周期已开启：赡养时长与遗产时点由同一条父母死亡率抽样联动，"
          "两者的相关性用一个保守拨盘表示，**不是从数据估计出来的**。",
@@ -791,13 +834,18 @@ RULES = [
          "success rate does not tell you whether the survivor stays covered "
          "when either spouse dies first."),
     Rule("mortality", ("mortality.enabled",), _on("mortality.enabled"),
-         "死亡抽样已开启：用的是全体人口生命表，"
-         "**不按你的健康状况、收入或队列调整**。"
+         "死亡抽样已开启：用的**不是逐岁查表**，而是一条两参数 Gompertz 风险曲线"
+         "（α·exp(β·年龄)），其参数是对 SSA 2020 期间生命表的**近似拟合**，只分男/女/不分。"
+         "**不按你的健康状况、收入或出生队列调整**，也不含逐年的死亡率改善。"
          "「没花完就去世」在结果里算成功，这与「钱够花」是两个不同的问题。",
-         "Mortality sampling is on: it uses population life tables and is NOT "
-         "adjusted for your health, income or birth cohort. Dying with money "
-         "left counts as success here, which is a different question from "
-         "whether the money would have lasted."),
+         "Mortality sampling is on: it is NOT a year-by-year table lookup but a "
+         "two-parameter Gompertz hazard (alpha times exp(beta x age)) whose "
+         "parameters are an approximate fit to the SSA 2020 period life table, "
+         "with only male/female/unisex variants. It is NOT adjusted for your "
+         "health, income or birth cohort, and carries no year-over-year "
+         "mortality improvement. Dying with money left counts as success here, "
+         "which is a different question from whether the money would have "
+         "lasted."),
     Rule("layoff", ("layoff.enabled",), _on("layoff.enabled"),
          "失业冲击已开启：只作用于积累期，先按实际空窗缩主申报人工资，再重算税、生活费、"
          "缴款与社保 covered earnings；配偶工资不缩。空窗期净新增家庭医保费由你按月填写，"
@@ -813,7 +861,8 @@ RULES = [
     Rule("disability", ("disability.enabled",), _on("disability.enabled"),
          "SSDI 压力已开启：发生率来自 **2026 SSA Trustees Report 的 disabled-worker "
          "award 表**，分母是已具 disability insurance 且尚未领残障金的人，不是全人口"
-         "伤残率。首刀在命中后保守地把主收入置零到计划退休，不建模康复、复工、死亡终止、"
+         "伤残率。命中后保守地把主收入置零到计划退休，不建模康复或复工；兼容路径不单独"
+         "建模残障金因死亡终止，开启统一健康链时死亡会吸收整条路径。仍不建模"
          "五个月等待期或 24 个月 Medicare 等待期。SSDI/LTD 必须填写扣税且扣完保单 offset 后"
          "真正可花的金额；新增医保保费也由用户填写。",
          "The SSDI stress is on. Incidence comes from the 2026 SSA Trustees "
@@ -821,11 +870,26 @@ RULES = [
          "insured for disability and not already receiving benefits; it is not "
          "general-population disability incidence. This first slice "
          "conservatively sets primary earnings to zero through planned "
-         "retirement after an award. Recovery, return to work, death "
-         "termination, the five-month cash waiting period and the 24-month "
+         "retirement after an award. Recovery and return to work are not "
+         "modelled; the compatibility path does not separately terminate the "
+         "benefit at death, while unified health-chain death absorbs the whole "
+         "path. The five-month cash waiting period and the 24-month "
          "Medicare wait are not modelled. SSDI/LTD must be entered as "
          "spendable cash after tax and policy offsets, and the user supplies "
          "the extra health premium."),
+    Rule("health_chain", ("health_chain.enabled",), _on("health_chain.enabled"),
+         "统一健康状态链已开启：伤残、本人长期护理与死亡从一条按年龄索引的稳定子流读取，"
+         "死亡会吸收并截断后续状态；逐年医疗轨迹继续由在世状态确定性驱动。每一步仍使用"
+         "原模块有出处的边际概率。**没有证据支持伤残后的死亡倍率，因此本 App 没有猜一个**；"
+         "共用子流是结构接线与复现合同，不是现实相关系数。",
+         "The unified health-state chain is on. Disability, the user's own "
+         "long-term care and mortality read an age-indexed stable child stream; "
+         "death absorbs and truncates later states, while the annual medical "
+         "trajectory remains deterministically driven by alive state. Each step "
+         "keeps the sourced marginal probability from its original module. No "
+         "evidence supports a post-disability mortality multiplier, so the app "
+         "does not guess one; sharing a stream is a structural/replay contract, "
+         "not a real-world correlation coefficient."),
     Rule("human_capital", ("human_capital.enabled",),
          _on("human_capital.enabled"),
          "职业路径已按随机过程建模，分成**持久冲击**（丢掉的层级，你带着走）与"
@@ -1017,12 +1081,34 @@ RULES = [
          "than a finding. Arrivals are INDEPENDENT of market draws: in real "
          "life a roof and a bear market can arrive together, and that "
          "correlation is not modelled."),
-    Rule("roth_ladder", ("roth_ladder.enabled",), _on("roth_ladder.enabled"),
-         "Roth 转换阶梯已开启：转换额被「可用应税账户的 4 倍」封顶、"
+    # Split in two because the engine's behaviour is split in two. The old
+    # single rule said "taxed at a flat rate" unconditionally, but
+    # fire_v9_8_model refunds that flat tax under `_tt_on and not in_china`
+    # and taxes the conversion in real brackets instead. Conditioning on
+    # tax_true follows the simple_retirement_tax precedent above; the
+    # `in_china` half matters because the US true-tax solver is inactive on
+    # that path, so the flat rate really is what gets charged there.
+    Rule("roth_ladder_flat_tax", ("roth_ladder.enabled", "tax_true.enabled"),
+         lambda cfg: (_leaf(cfg, "roth_ladder.enabled") is True
+                      and _leaf(cfg, "tax_true.enabled") is not True),
+         "Roth 转换阶梯已开启，且真实逐年税表关着：转换额被「可用应税账户的 4 倍」封顶、"
          "转换税按一个平率计 —— **两者都是启发式，没有对照真实转换成本校准过**。",
-         "The Roth conversion ladder is on: conversions are capped at 4x "
-         "available taxable and taxed at a flat rate. Both are heuristics and "
-         "neither has been checked against what a real conversion costs."),
+         "The Roth conversion ladder is on with the true-tax engine off: "
+         "conversions are capped at 4x available taxable and taxed at a flat "
+         "rate. Both are heuristics and neither has been checked against what "
+         "a real conversion costs."),
+    Rule("roth_ladder_true_tax", ("roth_ladder.enabled", "tax_true.enabled"),
+         lambda cfg: (_leaf(cfg, "roth_ladder.enabled") is True
+                      and _leaf(cfg, "tax_true.enabled") is True),
+         "Roth 转换阶梯已开启，且真实逐年税表也开着：转换额仍被「可用应税账户的 4 倍」"
+         "封顶（这一半仍是启发式），但**平率转换税会被退回**，转换额改在真实累进档里计税。"
+         "**例外：搬迁到中国之后**，美国真实税表求解器不生效，那几年仍按平率计。",
+         "The Roth conversion ladder is on with the true-tax engine also on: "
+         "conversions are still capped at 4x available taxable (that half "
+         "remains a heuristic), but the flat conversion tax is refunded and "
+         "the conversion is taxed in the real brackets instead. One exception: "
+         "after relocating to China the US true-tax solver is inactive, so "
+         "those years still use the flat rate."),
     Rule("social_security", ("social_security.enabled",),
          _on("social_security.enabled"),
          "社保已开启：按现行规则计算，**不建模未来立法削减**。"
@@ -1044,29 +1130,122 @@ RULES = [
          "uses the contribution model's existing 3% annual-growth proxy, and "
          "AWI stops at the vintage named by the pack. Spouse earnings never "
          "enter the primary record."),
+    # The wording used to warn that this and the parent lifecycle "can
+    # double-count". They cannot: engine_adapter refuses the pair by name
+    # (929f6fb), one day after that sentence was written, and nobody came
+    # back to it. A disclosure describing an impossible state is worse than
+    # none -- a reader who has both on never sees it, they get a refusal.
+    # The Canada account beta. It is the only opt-in surface in the product
+    # that disclosed nothing when switched on, because the closure test walks
+    # default_config() and Phase 7 deliberately kept this block out of it --
+    # adding a default leaf there would have moved the attribution inventory.
+    # So the block was invisible to the gate that exists to catch exactly this.
+    Rule("country_accounts",
+         ("country_accounts.enabled",),
+         lambda cfg: _leaf(cfg, "country_accounts.enabled") is True,
+         "加拿大账户 beta 已开启：这是一张**当前年度的账户工作单**，不是完整的加拿大退休模型。"
+         "它按你填写的四类账户余额和 RRIF 规则算今年的最低强制提取，"
+         "**税只用你自己填的有效税率**——不是加拿大联邦或省级累进税，也没有省份差异。"
+         "**CPP / OAS 未建模**（`unmeasured`，不是 0）；跨境税收协定、预扣税与美国那侧的抵免都不在内。"
+         "RRSP 71 岁处置只建模「转入 RRIF」一种；取现与年金是合法选项但本 beta 会点名拒绝。",
+         "The Canada accounts beta is on: this is a **current-year account "
+         "worksheet**, not a full Canadian retirement model. It computes this "
+         "year's minimum required RRIF withdrawal from the four account "
+         "balances you entered, and **taxes it only at the effective rates you "
+         "supplied** — not Canadian federal or provincial brackets, and with no "
+         "provincial variation. **CPP and OAS are not modelled** (reported as "
+         "`unmeasured`, not as zero); tax treaties, withholding and any US-side "
+         "credit are outside it. Of the age-71 RRSP dispositions only "
+         "'transfer to a RRIF' is modelled; cash-out and annuity are legal "
+         "choices this beta refuses by name."),
     Rule("eldercare", ("eldercare.mode",), _mode_on("eldercare.mode"),
-         "赡养支出已开启：这是旧的独立模块。"
-         "若同时开启父母生命周期，两者可能重复计入同一笔负担。",
-         "Eldercare support is on: this is the older standalone module. With "
-         "the parent lifecycle also on, the two can double-count the same "
-         "burden."),
+         "赡养支出已开启：这是旧的独立模块，把赡养冲击当成一笔与继承无关的支出。"
+         "它**不能**与父母生命周期同时开启 —— 两者会把同一位父母当成两个人，"
+         "所以引擎会点名拒绝这个组合，而不是把它们相加。",
+         "Eldercare support is on: this is the older standalone module, which "
+         "treats the support shock as a cost unrelated to any inheritance. It "
+         "**cannot** run alongside the parent lifecycle: the two would model "
+         "one parent as two different people, so the engine refuses that "
+         "combination by name rather than adding them together."),
     Rule("inheritance", ("inheritance.mode",), _mode_on("inheritance.mode"),
          "预期遗产已开启：**一个依赖遗产才成立的计划应当被单独检验**——"
          "把它关掉再跑一次，看结论是否还成立。",
          "Expected inheritance is on: a plan that only works because of an "
          "inheritance deserves to be checked without one. Turn it off and run "
          "again to see whether the conclusion survives."),
+    # Roadmap 13 Phase 9. Until this version every number these two modules
+    # draw from in stochastic mode was hardcoded and unreachable, so choosing
+    # "random" meant accepting somebody else's parents. The parameters now have
+    # controls -- and the defaults are still population averages, which is
+    # exactly the thing a user cannot tell by looking at a plausible-looking
+    # median. The parent-lifecycle module says "only you know these"; this says
+    # the same thing about the two modules it supersedes.
+    Rule("shock_distribution_defaults",
+         ("inheritance.mode", "eldercare.mode"),
+         _any_mode_is(("inheritance.mode", "eldercare.mode"), "stochastic"),
+         "随机模式的分布参数（发生概率、年龄区间、金额的对数均值与标准差）"
+         "**出厂值是人口平均，不是你家的情况** —— 它们对不认识你家的人是个合理起点，"
+         "对认识的人不是。这些数现在都在**高级面板**里可以改；"
+         "不改就等于接受了别人家的父母。",
+         "The distribution behind stochastic mode -- the probability, the age "
+         "window, and the lognormal mean and sigma of the amount -- **ships as "
+         "population averages, not as your family**. They are a reasonable "
+         "start for somebody who does not know your parents and not for "
+         "somebody who does. Every one of them is now editable in the advanced "
+         "panel; leaving them alone means accepting somebody else's."),
     Rule("obbba", ("obbba.mode",), _mode_on("obbba.mode"),
          "OBBBA 情景已开启：这是对一项**立法**的情景假设，不是预测，"
          "也不代表本 App 对它是否发生持任何看法。",
          "An OBBBA scenario is on: it is a scenario about legislation, not a "
          "forecast, and implies no view from this app about whether it "
          "happens."),
-    Rule("ftc", ("ftc.enabled",), _on("ftc.enabled"),
-         "外国税收抵免已开启：按简化规则计算，"
+    # Gated on the relocation too, and that is a measurement rather than a
+    # tidy-up: with `relocation.enabled` off, turning the credit on leaves the
+    # home leg BIT-IDENTICAL (measured on the shipped plan, 400 paths, seed 7).
+    # The credit only ever rewrites the destination tax object. Until Phase 5
+    # this could not arise, because nothing could switch the credit on; now it
+    # can, and a disclosure describing a mechanism that is provably doing
+    # nothing to this run is the same defect as a missing one wearing the
+    # opposite face.
+    # Roadmap 12 Phase 12. The research that Phase asked for turned up a
+    # US-side figure, not a Chinese one: for a nonresident alien, SSA withholds
+    # 25.5% of the benefit (30% of 85%), and it is zero only for nine
+    # treaty-exempt countries. The destination catalogue prefills 0 for 208 of
+    # its 255 non-US destinations, in the direction that makes a plan look
+    # better, on the largest non-investment income a person has after 65. The
+    # numbers are corrected in their own slice (OPEN_ITEMS E48); what belongs
+    # here is that the reader is told the prefilled figure is theirs to check.
+    Rule("ss_residency_legacy", ("ss_nra.residency_status", "relocation.enabled"),
+         lambda cfg: bool(_leaf(cfg, "relocation.enabled")) and
+         "residency_status" not in (cfg.get("ss_nra") or {}),
+         "旧计划没有记录美国税务身份：保留原社保海外折减，未替你确认 NRA 身份。请在搬迁步骤核对。",
+         "This older plan has no US tax status recorded. Its original overseas Social Security haircut is retained; NRA status has not been confirmed. Review it in the relocation step."),
+    Rule("ss_abroad_haircut", ("relocation.enabled",), _on("relocation.enabled"),
+         "搬迁情景下的美国社保折减，按已公布规则填：非居民按社保金额的 85% × 30% = **25.5%** 预扣，"
+         "为 0 的只有协定豁免的九个国家（加拿大、埃及、德国、爱尔兰、以色列、意大利、日本、罗马尼亚、英国），"
+         "瑞士 15%，美国境内目的地为 0。中国大陆的城市仍是 0.20 —— 那是引擎里写明过的"
+         "复合判断（区间 15–25%），**不是法定值**。"
+         "**它假设你是非居民外国人**：如果你仍是美国公民或绿卡持有者、只是住在国外，"
+         "NRA 预扣对你是 0。身份控件选择非 NRA 时，本 App 的有效折减为 0；这不代表社保免于普通所得税，既有税务模型边界仍适用。",
+         "The Social Security haircut in a relocation scenario follows the "
+         "published rule: 25.5% for a nonresident alien (30% of 85% of the "
+         "benefit), zero only for the nine treaty-exempt countries -- Canada, "
+         "Egypt, Germany, Ireland, Israel, Italy, Japan, Romania and the "
+         "United Kingdom -- 15% for Switzerland, and zero for US destinations. "
+         "Mainland Chinese cities stay at 0.20, which the engine documents as a "
+         "composite judgement (a 15-25% range) and NOT as a statutory rate. "
+         "IT ASSUMES YOU ARE A NONRESIDENT ALIEN: a US citizen or green-card "
+         "holder merely living abroad has no NRA withholding at all. Selecting "
+         "non-NRA makes the effective haircut zero; this does not exempt the "
+         "benefit from ordinary income tax or expand the existing tax model."),
+    Rule("ftc", ("ftc.enabled", "relocation.enabled"),
+         lambda cfg: bool(_leaf(cfg, "ftc.enabled"))
+         and bool(_leaf(cfg, "relocation.enabled")),
+         "外国税收抵免已开启（只作用在搬迁那条路径上）：按简化规则计算，"
          "不建模分篮、结转，也不建模税收协定的具体条款。",
-         "The foreign tax credit is on: computed under simplified rules, with "
-         "no basketing, no carryforward and no treaty specifics."),
+         "The foreign tax credit is on, and it applies only to the relocation "
+         "leg: computed under simplified rules, with no basketing, no "
+         "carryforward and no treaty specifics."),
     Rule("sh_property", ("sh_property.enabled",), _on("sh_property.enabled"),
          "自住房产已开启：按一个实际增长率演化，交易成本为风格化估计。",
          "A primary residence is on: it follows one real growth rate and its "

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "max_new_active_packs_per_release": 2,
+  "entries": [
+    {
+      "jurisdiction": "CA",
+      "content_sha256": "d05ecbea257f974b3e033adb18ad141b2cbcb041b2addfb072fe5f9f2c0e8b7b",
+      "status": "active",
+      "origin": "internal_initial_pack",
+      "contributor_credit": "FIRE App maintainer",
+      "accepted_by": "FIRE App maintainer",
+      "accepted_on": "2026-09-01",
+      "signature_state": "not_activated_embedded_only"
+    }
+  ]
+}

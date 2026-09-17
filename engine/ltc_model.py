@@ -451,9 +451,19 @@ def _note_truncation(meta: dict, events: list, years: float) -> None:
         meta["years_charged"] = charged
 
 
-def _pick(rng, weights: dict):
+def _absorb_events_at_death(events: list, meta: dict, alive_at):
+    if alive_at is None:
+        return events
+    kept = [(age, amount) for age, amount in events if alive_at(age)]
+    if len(kept) < len(events):
+        meta["truncated_by_death"] = True
+        meta["years_charged"] = len(kept)
+    return kept
+
+
+def _pick(rng, weights: dict, *, draw=None):
     """Draw one key, in sorted order so the draw does not depend on dict order."""
-    draw = float(rng.random())
+    draw = float(rng.random()) if draw is None else float(draw)
     total = sum(weights.values())
     if total <= 0:
         raise LtcError("weights must sum to something positive")
@@ -468,7 +478,8 @@ def _pick(rng, weights: dict):
 
 def sample_ltc_events(params: Optional[LtcParams], first_age: int,
                       last_age: int, *, calibration=None,
-                      anchor_age: Optional[int] = None):
+                      anchor_age: Optional[int] = None,
+                      draw_at=None, alive_at=None):
     """Returns `(events, meta)` — `events` shaped exactly like eldercare's.
 
     Two returns rather than one because of the failure this project keeps
@@ -509,6 +520,9 @@ def sample_ltc_events(params: Optional[LtcParams], first_age: int,
                 "%d-%d, so no care was charged — the age was NOT moved to fit"
                 % (onset, first_age, last_age))
             return [], meta
+        if alive_at is not None and not alive_at(onset):
+            meta["reason"] = "death absorbed the health chain before care entry"
+            return [], meta
         events = expand_episode(
             onset, episode["years"], episode["annual_cost"],
             last_age=last_age, excess_inflation=params.cost_excess_inflation,
@@ -517,10 +531,11 @@ def sample_ltc_events(params: Optional[LtcParams], first_age: int,
                      "years": episode["years"], "level": episode["level"],
                      "reason": "exactly the duration the user specified"})
         _note_truncation(meta, events, episode["years"])
+        events = _absorb_events_at_death(events, meta, alive_at)
         return events, meta
 
     # Stochastic.
-    if params.rng is None:
+    if params.rng is None and draw_at is None:
         raise LtcError("stochastic long-term care needs its own rng; the "
                        "adapter sets an independent stream and leaving it "
                        "unset would silently model no care at all")
@@ -543,21 +558,32 @@ def sample_ltc_events(params: Optional[LtcParams], first_age: int,
 
     onset = None
     for age in ages:
+        if alive_at is not None and not alive_at(age):
+            meta["reason"] = "death absorbed the health chain before care entry"
+            break
         rate = min(1.0, calibration["scale"] * unconditional_entry_rate(
             age, risk=float(params.lifetime_risk), onset_age=params.onset_age,
             onset_spread=params.onset_spread))
-        if float(params.rng.random()) < rate:
+        draw = (float(draw_at("ltc_onset", age)) if draw_at is not None
+                else float(params.rng.random()))
+        if draw < rate:
             onset = age
             break
     if onset is None:
-        meta["reason"] = ("no care episode was drawn on this path (modelled "
-                          "lifetime incidence %.3f)"
-                          % calibration["achieved_incidence"])
+        if not (alive_at is not None and any(
+                not alive_at(age) for age in ages)):
+            meta["reason"] = ("no care episode was drawn on this path (modelled "
+                              "lifetime incidence %.3f)"
+                              % calibration["achieved_incidence"])
         return [], meta
 
     buckets = {row["years"]: row["share"] for row in duration_distribution()}
-    years = _pick(params.rng, buckets)
-    level = _pick(params.rng, params_level_mix(params))
+    years = _pick(
+        params.rng, buckets,
+        draw=(draw_at("ltc_duration", onset) if draw_at is not None else None))
+    level = _pick(
+        params.rng, params_level_mix(params),
+        draw=(draw_at("ltc_level", onset) if draw_at is not None else None))
     events = expand_episode(
         onset, years, costs[level], last_age=last_age,
         excess_inflation=params.cost_excess_inflation, anchor_age=anchor)
@@ -566,19 +592,42 @@ def sample_ltc_events(params: Optional[LtcParams], first_age: int,
                  "reason": "drawn from the module's own hazard and duration "
                            "distribution"})
     _note_truncation(meta, events, years)
+    events = _absorb_events_at_death(events, meta, alive_at)
     return events, meta
 
 
-#: What this module does NOT model, for the limitations list. Named here so the
-#: disclosure and the code cannot drift apart.
+#: What this module does NOT model, for the limitations list. Bilingual pairs
+#: (zh, en), because server/limitations.py now BUILDS a disclosure from this
+#: tuple rather than restating it.
+#:
+#: The previous note here claimed "named here so the disclosure and the code
+#: cannot drift apart" -- which was not true of anything: no shipping code
+#: read this, and the same facts were retyped in server/limitations.py and
+#: again in web/app.js. A mechanism that says it prevents drift while doing
+#: nothing is worse than no mechanism, because it stops people looking.
 NOT_MODELLED = (
-    "Medicaid spend-down（资产耗尽后转入 Medicaid 的资格、look-back 期与州际差异）",
-    "长期护理保险的保单条款（等待期、日限额、通胀附加）—— 保费与条款一律用户自填",
-    "非正式照护（配偶或子女无偿提供）对成本的替代",
-    "护理级别在一次照护期内的升级路径（本模块按进入时的级别定价整段）",
-    "护理成本是在原有生活开销之上**叠加**的，不下调既有开销 —— 机构费用通常已含食宿，"
-    "因此两者部分重叠，本模块偏保守；要反映这一点请直接调低年成本参数",
-    "退休前进入护理（本模块只在退休段建模，与 eldercare 冲击同一条通道）",
-    "夫妻序贯护理尚未接入引擎 —— `couples_sequential` 仍只是模型，"
-    "有一条测试断言它没被接进去",
+    ("Medicaid spend-down（资产耗尽后转入 Medicaid 的资格、look-back 期与州际差异）",
+     "Medicaid spend-down: eligibility once assets run out, the look-back "
+     "period, and state-by-state variation"),
+    ("长期护理保险的保单条款（等待期、日限额、通胀附加）—— 保费与条款一律用户自填",
+     "Long-term-care insurance policy terms (elimination period, daily limits, "
+     "inflation riders); premiums and terms are always user-supplied"),
+    ("非正式照护（配偶或子女无偿提供）对成本的替代",
+     "Informal care, unpaid by a spouse or child, substituting for paid cost"),
+    ("护理级别在一次照护期内的升级路径（本模块按进入时的级别定价整段）",
+     "Escalation of care level within one episode; this module prices the "
+     "whole episode at the level it began"),
+    ("护理成本是在原有生活开销之上**叠加**的，不下调既有开销 —— 机构费用通常已含食宿，"
+     "因此两者部分重叠，本模块偏保守；要反映这一点请直接调低年成本参数",
+     "Care cost is added ON TOP OF existing spending rather than replacing "
+     "part of it. Facility fees usually include room and board, so the two "
+     "overlap and this module is deliberately conservative; to reflect that, "
+     "lower the annual cost parameter directly"),
+    ("退休前进入护理（本模块只在退休段建模，与 eldercare 冲击同一条通道）",
+     "Care beginning before retirement; this module models the retirement "
+     "phase only, through the same channel as the eldercare shock"),
+    ("夫妻序贯护理尚未接入引擎 —— `couples_sequential` 仍只是模型，"
+     "有一条测试断言它没被接进去",
+     "Couple-sequential care is not wired into the engine: `couples_sequential` "
+     "remains a model only, and a test asserts it is not connected"),
 )

@@ -248,7 +248,9 @@ def ssdi_incidence_probability(age: int, sex: str) -> float:
 
 def sample_ssdi_entitlement(
     params: Optional[DisabilityParams], start_age: int, accum_years: int,
-    sex: str,
+    sex: str, *,
+    draw_at: Optional[Callable[[int], float]] = None,
+    alive_at: Optional[Callable[[int], bool]] = None,
 ) -> Optional[CompiledDisability]:
     """Sample the first award year; an award is absorbing through retirement.
 
@@ -259,14 +261,18 @@ def sample_ssdi_entitlement(
     """
     if params is None or not params.enabled:
         return None
-    if params.rng is None:
+    if params.rng is None and draw_at is None:
         raise ValueError("disability stress is on but its RNG is missing")
     event_year = None
     for year in range(1, int(accum_years) + 1):
         age = int(start_age) + year - 1
         if age >= 67:
             break
-        if float(params.rng.random()) < ssdi_incidence_probability(age, sex):
+        if alive_at is not None and not alive_at(age):
+            break
+        draw = (float(draw_at(age)) if draw_at is not None
+                else float(params.rng.random()))
+        if draw < ssdi_incidence_probability(age, sex):
             event_year = year
             break
     return CompiledDisability(
