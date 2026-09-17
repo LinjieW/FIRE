@@ -111,6 +111,42 @@ for confirmation. Then double-clicking works normally.
   backtest replays the engine's predicted distribution against the historical
   record and reports where that ruler does and does not apply — including
   saying "not applicable" rather than zero when it cannot measure something.
+- **A plan can start from a retirement that already happened.** Off by default.
+  Turned on, it takes your actual retirement date, balances and spending, and
+  the same engine runs the retirement from today instead of from a predicted
+  FIRE year. A configuration that says it is already retired without giving
+  its balances is refused by name rather than quietly filled in from a sample.
+- **An execution view for the year you are in.** How much you can draw, which
+  buckets it comes from in the account schema's own order, which guardrail band
+  you are in and how far the trigger is, this year's tax tier with the distance
+  to the next IRMAA threshold, and whether a required distribution is due. Every
+  number is a receipt from the engine: the page does no arithmetic of its own,
+  so it cannot tell a different story from the model it is reporting.
+- **An annual review that leaves something behind.** A full-screen agenda read
+  in a fixed order, a larger-type view for going through it with a partner, a
+  letter to next year's self, and a calendar `.ics` file. There are no
+  notifications, no cloud and no background process — what persists is an
+  immutable local record and one all-day event you put in your own calendar.
+- **A ten-year rehearsal that scores discipline, not timing.** Live through a
+  bear-market opening, an inflationary decade or a long bull one year at a
+  time, pausing each year to follow your rule, hold spending anyway, or sell in
+  a panic. The score reads your adherence and your spending floor and never the
+  ending balance, so a lucky run cannot beat a disciplined one. Nothing is
+  saved: closing it forgets the whole rehearsal.
+- **Disability, long-term care and mortality on one chain.** Off by default.
+  Turned on, the three read their own columns of a single stream of draws per
+  path, so switching one of them off does not move another's results. Each
+  transition keeps its own sourced table rather than being melted into a new
+  one, and death absorbs — it stops later onsets and truncates care already
+  under way.
+- **A second country's account rules, as data rather than code.** Canada's
+  non-registered, RRSP, RRIF and TFSA shapes ship as a rule pack in which every
+  number carries an official source and a vintage, including the half-inclusion
+  of capital gains and the ordinary RRIF minimum-withdrawal table. Choosing
+  RRIF at 71 gives a runnable year-by-year account worksheet; cash-out and
+  annuity are disclosed as legal choices that are not modelled, and provincial
+  tax, CPP and OAS are outside the pack. The engine holds no Canadian branch,
+  and the US path is bit-identical to a build without any of this.
 - **The page stops moving while you fill it in.** Each wizard section asks its
   switches first and opens the rest once you say that part is answered, so
   fields stop appearing and disappearing underneath you as you type.
@@ -272,6 +308,28 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
   记录当时决定了什么、什么时候决定的。
 - **引擎自己的预测，拿历史校过。** 校准回测把引擎预测的分布放回历史记录里比对，
   并说明这把尺子在哪里适用、在哪里不适用 —— 量不了的时候它写「不适用」，而不是写 0。
+- **计划可以从「已经退休了」开始。** 默认关闭。打开后它接受你实际的退休日期、实际余额与
+  实际支出，同一个引擎按「从今天起的退休期」跑，而不是从预测出来的 FIRE 年起跑。
+  一份说自己已经退休、却没给余额的配置会被**点名拒绝**，而不是拿一份样例余额悄悄补上。
+- **面向「今年」的执行视图。** 今年可以取多少、按账户 schema 自己的顺序取自哪些桶、
+  guardrail 现在处在哪条带上、距离触发还有多远、今年的税档与下一个 IRMAA 门槛还差多少、
+  以及最低提取额到没到期。每个数字都是引擎给出的回执：**页面自己不做任何算术**，
+  所以它不可能和它正在汇报的那个模型讲两个故事。
+- **会留下东西的年度复盘。** 一份固定顺序阅读的全屏议程、一个放大字号供两个人一起看的版式、
+  一封写给明年自己的信，以及一个日历 `.ics` 文件。没有通知、没有云、没有后台进程 ——
+  留下来的是一份不可变的本地纪要，和一个由你自己放进日历的全天事件。
+- **一场十年演练，评的是纪律不是择时。** 在熊市开局、通胀十年或长牛里逐年过日子，
+  每年暂停一次，选择照你承诺的规则走、硬扛原支出，还是恐慌卖出。评分只看你的规则依从度
+  和支出底线，**永远不读期末余额**，所以一次运气好的路径赢不过一次守纪律的路径。
+  它什么都不保存：关掉就忘掉整场演练。
+- **伤残、长期护理与死亡接在同一条链上。** 默认关闭。打开后三者各读同一条逐路径子流里
+  自己的那一列，所以关掉其中一个不会移动另一个的结果。每条转移仍用它自己有出处的表，
+  没有熔成一张新表；死亡是吸收态 —— 它会阻止之后的发生，并截断已经开始的护理。
+- **第二个国家的账户规则，是数据不是代码。** 加拿大的非注册账户、RRSP、RRIF 与 TFSA 形状
+  以规则包发布，**每一个数字都带官方来源与年份**，包括资本利得的一半计入，以及普通 RRIF
+  完整的最低提取因子表。71 岁明确选择 RRIF 时有一条可运行的逐年账户工作单；取现与年金
+  作为**合法但未建模**的选项如实披露，省级税、CPP 与 OAS 不在这个包的范围内。
+  引擎里没有任何加拿大分支，美国路径与一个完全没有这些东西的构建**逐位相同**。
 - **填的时候页面不再动。** 向导每一节先问这一节的开关，等你说「这节答好了」再展开其余字段，
   于是不会在你打字的时候，底下不停地冒出或消失一些框。
 - **结果页能读下去。** 每页把核心数字放在最前，问题导航指向真正回答它的那一页，
