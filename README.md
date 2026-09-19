@@ -12,9 +12,9 @@ history, workstream logs, prompts, or internal audit archive.
 
 The current public candidate is:
 
-`v14.0-public-candidate-1`
+`v14.0-public-candidate-2`
 
-Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-1):
+Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-2):
 
 `FIRE-Modeling-14.0-macOS-universal2.zip` (47 MB compressed, ~166 MB unpacked)
 
@@ -32,7 +32,7 @@ shasum -a 256 FIRE-Modeling-14.0-macOS-universal2.zip
 It should print:
 
 ```
-f3d5052a73158b4ce86e2bd2f9e237a2aa6dfea64024ca9151ceb36ad4c1eb48
+2d2ac3783d882c9a8df8ee5f4247265834025da00737a69c2f4e460ad3e8fdce
 ```
 
 `SHA256SUMS.txt` on the same release covers the app zip and the source archive.
@@ -163,6 +163,12 @@ for confirmation. Then double-clicking works normally.
   the first crossing on the path the plan describes -- accumulation up to
   retirement, then the retirement portfolio -- so the overview and the
   distribution page answer the same question instead of two different ones.
+- **Controls you can drive from the keyboard, on pages that hold together.**
+  Dropdown menus browse with the arrow keys without committing anything, Enter
+  or Space picks, and Escape puts the previous value back; a field keeps its
+  focus when the page re-renders around it. Dialogs open in 200 milliseconds
+  and stay sharp throughout, and on a narrow window tables fold into labelled
+  groups instead of scrolling sideways.
 
 ## What this release is (and is not)
 
@@ -197,7 +203,7 @@ The public source contains the runtime and build inputs used by the candidate:
   promises above can be checked rather than taken on faith.
 
 The public file set is computed from the built candidate's runtime manifest --
-the exact files the application loads, ninety-seven of them in this candidate --
+the exact files the application loads, ninety-nine of them in this candidate --
 rather than from a hand-maintained list, plus a small set of regression,
 JavaScript, frozen-bundle and UI smoke checks and the helper they share. Internal development history and operational documents (workstream
 logs, handoffs, roadmaps, audits, prompts) remain outside this public
@@ -237,8 +243,8 @@ FIRE Modeling 是一个离线运行的 macOS 桌面应用，用蒙特卡洛分�
 
 ### 下载
 
-当前公开候选版本是 `v14.0-public-candidate-1`。请从
-[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-1)
+当前公开候选版本是 `v14.0-public-candidate-2`。请从
+[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-2)
 下载通用 universal2 App：
 
 `FIRE-Modeling-14.0-macOS-universal2.zip`（压缩后 47 MB，解压后约 166 MB）
@@ -257,7 +263,7 @@ shasum -a 256 FIRE-Modeling-14.0-macOS-universal2.zip
 应当输出：
 
 ```
-f3d5052a73158b4ce86e2bd2f9e237a2aa6dfea64024ca9151ceb36ad4c1eb48
+2d2ac3783d882c9a8df8ee5f4247265834025da00737a69c2f4e460ad3e8fdce
 ```
 
 同一个 Release 里的 `SHA256SUMS.txt` 同时覆盖 App 压缩包与源码归档。
@@ -340,6 +346,9 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 - **里程碑按你真实活过的那条路算。** 里程碑年龄是计划描述的那条路径上的首次跨越 ——
   积累期到退休，之后接退休期的组合 —— 所以概览页与分布页回答的是同一个问题，
   而不是各答各的。
+- **能用键盘操作的控件，和不会散架的页面。** 下拉菜单用方向键连续浏览、不会中途提交，
+  回车或空格确认，Esc 恢复原值；页面在周围重建时，输入框保持焦点。弹窗 200 毫秒打开、
+  全程清晰不模糊；窄窗口下表格折成带标签的分组，而不是横向滚动。
 
 ### 这次发布是什么（以及不是什么）
 
@@ -368,7 +377,7 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
   因此可以被验证，而不是只能相信。
 
 公开文件集由构建出来的候选包自己的 runtime manifest 算出 —— 也就是 App 真正加载的那些文件，
-本次候选是 97 个 —— 而不是靠一份手工维护的清单；再加上少量回归、JavaScript、冻结包与 UI 烟测，
+本次候选是 99 个 —— 而不是靠一份手工维护的清单；再加上少量回归、JavaScript、冻结包与 UI 烟测，
 以及它们共用的那个辅助模块。私有开发历史与运维文档（工作日志、交接、路线图、审计、提示词）
 不在此仓库中。
 

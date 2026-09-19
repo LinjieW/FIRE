@@ -3018,6 +3018,41 @@ def _validate_ss_residency(cfg: dict, relocation_on: bool) -> None:
                                field="ss_nra.residency_status")
 
 
+def plan_relocation_age(cfg: dict) -> Optional[int]:
+    """The age this PLAN relocates at, or None if it never does.
+
+    A property of the plan, not of an arm. `build_kwargs` nulls
+    `relocation.relocation_age` in the home arm on purpose -- that arm IS the
+    counterfactual where the move never happens -- so anything asking "where
+    does this person actually live" must not read it from there.
+
+    Measured 2026-09-17: `decumulation_cockpit._unsupported_current_plan` read
+    it from the home arm, which made its refusal of non-US execution DEAD from
+    the day it was wired. A plan that relocated nine years ago received a
+    complete US-path worksheet -- US brackets, US standard deduction, US IRMAA
+    -- labelled `measurement_state: "measured"`, `reason: None`, while the
+    bilingual refusal message for exactly that case had been shipping in
+    `web/app.js` the whole time and had never once been shown. The shipped
+    `baseline_reloc` preset relocates at 41, so it was the default plan shape.
+
+    This lives here, next to the arm logic it has to agree with, rather than
+    being spelled a second time at each call site:
+    `tests/test_relocation_identity.py` binds it to
+    `build_kwargs(cfg, True)["relocation"].relocation_age` so the two cannot
+    drift apart in silence.
+    """
+    block = cfg.get("relocation") or {}
+    if not block.get("enabled"):
+        return None
+    age = block.get("relocation_age")
+    if age is None:
+        return None
+    try:
+        return int(age)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     """Map the JSON config into the v9.8 param objects. Returns a kwargs dict for
     run_lifecycle_mc_v98 (the V7Config lands under 'config')."""

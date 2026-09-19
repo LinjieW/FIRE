@@ -1975,6 +1975,11 @@
   function polishWizardFields(host, openHelp) {
     host.querySelectorAll(".field").forEach(field => {
       const path = field.dataset.path;
+      field.querySelectorAll(":scope > input, :scope > select, :scope > textarea").forEach((control, i) => {
+        if (!control.id) control.id = `field_${path}_${i}`;
+        const label = control.previousElementSibling;
+        if (label && label.tagName === "LABEL") label.htmlFor = control.id;
+      });
       // Long labels, switches, schedules and structured editors need the full row.
       if (field.querySelector("select, input[type=text], input[type=date], textarea, fieldset") || field.classList.contains("check")) field.classList.add("wizard-field-wide");
       const icon = field.querySelector(":scope > label .help-i");
@@ -1992,8 +1997,8 @@
 
   function buildRail() {
     $("wizardRail").innerHTML = STEPS.map((s, i) =>
-      `<button class="rail-step${i === state.step ? " active" : ""}${i < state.step ? " done" : ""}" data-i="${i}">
-        <span class="rail-dot">${i < state.step ? "✓" : i + 1}</span><span class="rail-t">${s.title[L === "zh" ? 0 : 1]}</span></button>`).join("");
+      `<button class="rail-step${i === state.step ? " active" : ""}" data-i="${i}">
+        <span class="rail-dot">${i + 1}</span><span class="rail-t">${s.title[L === "zh" ? 0 : 1]}</span></button>`).join("");
     $("wizardRail").querySelectorAll(".rail-step").forEach(b =>
       b.addEventListener("click", () => { if (openHeldSections()) return; if (!validateStep()) return; saveDraft(true); state.step = +b.dataset.i; buildStep(); buildRail(); updateStepsMini(); }));
     edgeFade($("wizardRail"));
@@ -2010,6 +2015,7 @@
     // fgroups were open so a checkbox doesn't collapse the group you're working in. Same-step
     // only, keyed by group order; navigation to a different step keeps the defaults.
     const sameStep = host._lastStep === state.step;
+    const focusId = sameStep && host.contains(document.activeElement) ? document.activeElement.id : null;
     const openHelp = new Set(sameStep ? [...host.querySelectorAll("details.wizard-field-help[open]")].map(d => d.dataset.helpPath) : []);
     const wasOpen = sameStep ? [...host.querySelectorAll("details.fgroup")].map(d => d.open) : null;
     host.innerHTML = "";
@@ -2118,6 +2124,10 @@
       if (s.custom === "ssaimport") renderSsaImport(host);
     }
     polishWizardFields(host, openHelp);
+    if (focusId) {
+      const replacement = document.getElementById(focusId);
+      if (replacement && host.contains(replacement)) replacement.focus({ preventScroll: true });
+    }
     $("wizNext").textContent = state.step === STEPS.length - 1 ? tt("去选精度 →", "To precision →") : t("nav.next");
     $("wizPrev").style.visibility = state.step === 0 ? "hidden" : "visible";
     renderWizSide();
@@ -2424,6 +2434,19 @@
         annual_real: 0,
         start_age: +get(state.config, "state.start_age") || 65, years: 10 });
       buildStep(); onWizChange();
+    });
+    box.querySelectorAll(".ed-table").forEach(table => {
+      const headings = Array.from(table.querySelectorAll("thead th"), th => th.textContent);
+      table.querySelectorAll("tbody tr").forEach((row, rowIndex) => {
+        Array.from(row.cells).forEach((cell, column) => {
+          cell.dataset.label = headings[column];
+          const control = cell.querySelector("input, select, button");
+          if (control) {
+            control.id = `${table.id}_${rowIndex}_${column}`;
+            control.setAttribute("aria-label", `${headings[column] || tt("删除", "Remove")} · ${rowIndex + 1}`);
+          }
+        });
+      });
     });
     box.querySelector("#addPar").addEventListener("click", () => {
       if (!get(state.config, "parents")) set(state.config, "parents", { mode: "off", parents: [] });
@@ -8774,7 +8797,10 @@
   // The exit is a two-beat: .leaving fades/sinks, then .hidden removes it — both timers
   // cancelled on a fresh toast so rapid messages never fight the wind-down.
   function toast(m, err) {
-    if (!m) return; const t2 = $("toast");
+    if (!m) return;
+    const banner = $("storageBanner");
+    if (banner && !banner.classList.contains("hidden") && banner.textContent === m) return;
+    const t2 = $("toast");
     t2.textContent = m; t2.className = "toast" + (err ? " err" : "");
     clearTimeout(tT); clearTimeout(tT2);
     tT = setTimeout(() => {
@@ -9546,6 +9572,7 @@
 
   function setLang(l) {
     L = l; localStorage.setItem("fire_lang", l); applyI18n();
+    renderStorageBanner();
     document.querySelectorAll(".plan-save-feedback").forEach(n => { n.textContent = tt(n.dataset.zh, n.dataset.en); });
     // Every view whose content is BUILT (not data-i18n tagged) re-renders here —
     // if you add a rendered surface, add its branch or it will stick in the old
@@ -10293,13 +10320,13 @@
                     || legacyAuthority.status === "source_changed";
     const readOnly = latched || drifted
                      || refusal === "authority_unavailable";
-    if (!readOnly) { if (box) box.remove(); return; }
+    if (!readOnly) { if (box) box.remove(); measureChrome(); return; }
     if (!box) {
       box = document.createElement("div");
       box.id = "storageBanner";
       box.className = "storage-banner";
       box.setAttribute("role", "alert");
-      document.body.appendChild(box);
+      document.querySelector(".topbar").appendChild(box);
     }
     // A latch outranks drift and both outrank "cannot tell": a stated fault is
     // more informative than the absence of a reading, and telling someone to
@@ -10318,6 +10345,7 @@
            + "recovery journal."
            + (code ? ` (${code})` : ""));
     box.classList.remove("hidden");
+    measureChrome();
   }
 
   //: The production cutover control flow.
