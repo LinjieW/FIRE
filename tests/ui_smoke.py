@@ -540,15 +540,26 @@ def check_answer_first(window):
       }
       return { tried, changed, unchanged_after: key() === before };
     })())"""
+    exercised = []
     for name, pattern in (("basics", "/基本|Basics/"), ("portfolio", "/持仓|Portfolio/"),
                           ("income", "/收入与储蓄|Income/"), ("assumptions", "/假设|Assumptions/"),
                           ("relocation", "/搬迁|Relocation/")):
         rail(pattern)
         open_sections(window)
         result = json.loads(js(window, fill_rest) or "{}")
+        exercised.append((name, result.get("tried", 0)))
         check("once its switches are answered, changing any other field on %s changes nothing visible" % name,
               result.get("tried", 0) > 0 and result.get("changed") == [] and result.get("unchanged_after") is True,
               json.dumps(result)[:300])
+    # Phase 2's acceptance asks for this number per step, in the log -- and
+    # `check()` prints its detail only on FAILURE, so a passing run used to
+    # throw `tried` away. The count is the whole strength of the check: the
+    # assertion is `tried > 0`, which is just as green for one field as for
+    # forty, and nobody could tell which they had. Printed on pass for exactly
+    # that reason. (Gap found 2026-09-17 by re-checking Phase 2 against its own
+    # written acceptance; it was the one criterion of six that was not met.)
+    print("  ANSWER-FIRST fields exercised per step: %s"
+          % ", ".join("%s %d" % row for row in exercised))
 
     js(window, "localStorage.clear(); location.reload()")
     time.sleep(2.5)

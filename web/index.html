@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="welcome_intro.css">
 <link rel="stylesheet" href="results_polish.css">
+<link rel="stylesheet" href="controls.css">
 </head>
 <body>
 
@@ -183,7 +184,7 @@
     <div class="prec-grid" id="precGrid"></div>
     <div class="ctrl-bar" style="margin-top:6px">
       <span class="lblg" data-i18n="prec.seed">随机种子</span>
-      <input type="number" id="seedInput" value="96000" step="1" style="width:110px;font-family:var(--mono);font-size:12.5px;border:1px solid var(--rule-medium);border-radius:2px;background:var(--bg-card);color:var(--ink-primary);padding:6px 8px">
+      <input type="number" id="seedInput" value="96000" step="1" class="seed-field">
       <span class="hint" data-i18n="prec.seed.hint">同种子同精度=完全可复现；换个种子重跑是最朴素的稳健性检查</span>
     </div>
     <div class="wizard-nav">
@@ -422,16 +423,16 @@
         <div class="gs-form">
           <div class="gs-row"><span class="lblg" data-i18n="gs.goal">目标</span>
             <select id="gsMetric"></select>
-            <input type="number" id="gsTarget" step="any" style="width:110px">
-            <span class="hint" id="gsTargetUnit"></span></div>
+            <span class="gs-target"><input type="number" id="gsTarget" step="any" style="width:110px">
+            <span class="hint" id="gsTargetUnit"></span></span></div>
           <div class="gs-row"><span class="lblg" data-i18n="gs.lever1">杠杆 X</span>
             <select id="gsLx"></select>
-            <input type="number" id="gsLxMin" step="any" style="width:100px"> ~
-            <input type="number" id="gsLxMax" step="any" style="width:100px"></div>
+            <span class="gs-range"><input type="number" id="gsLxMin" step="any" style="width:100px"> ~
+            <input type="number" id="gsLxMax" step="any" style="width:100px"></span></div>
           <div class="gs-row"><span class="lblg" data-i18n="gs.lever2">杠杆 Y</span>
             <select id="gsLy"></select>
-            <input type="number" id="gsLyMin" step="any" style="width:100px"> ~
-            <input type="number" id="gsLyMax" step="any" style="width:100px"></div>
+            <span class="gs-range"><input type="number" id="gsLyMin" step="any" style="width:100px"> ~
+            <input type="number" id="gsLyMax" step="any" style="width:100px"></span></div>
         </div>
         <div class="compute-row">
           <button class="btn-run sm" id="gsRun" data-i18n="gs.run">▶ 搜索可行域（约 2 分钟）</button>
@@ -871,5 +872,6 @@
 <script src="family_queue.js"></script>
 <script src="welcome_intro.js"></script>
 <script src="app.js"></script>
+<script src="controls.js"></script>
 </body>
 </html>

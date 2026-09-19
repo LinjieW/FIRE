@@ -21,6 +21,7 @@
   --font-mono:var(--font-num);                          /* legacy name; now proportional-tabular */
 
   /* ---- canonical semantic tokens · Morandi (calm color) + liveliness (crisp contrast/depth) ---- */
+  --on-tint:#FFFFFF;
   --tint:#566A88;                                   /* dusty slate-blue, a touch more confident so it reads as interactive */
   --tint-strong:#455673;                            /* pressed / hover-deepened */
   --bg-base:#EAE7E1; --bg-elevated:#FCFBF9; --bg-inset:#F2EFE9;   /* page greige + a CLEAN warm-white card that floats */
@@ -66,6 +67,7 @@
 /* ============ DARK THEME — designed mapping, not inversion ============ */
 :root[data-theme="dark"]{
   color-scheme:dark;
+  --on-tint:#211F1C;
   --tint:#8FA6C6; --tint-strong:#A6BAD6;          /* slate-blue, a bit bluer/brighter so it reads interactive on charcoal */
   /* Dark is charcoal, not black: macOS dark windows live near #1E-#28, and with resting cards
      now flat (no shadows) the base→elevated→inset LIGHTNESS ladder is the whole depth story —
@@ -644,7 +646,7 @@ svg rect[role="slider"]:focus-visible{outline:2px solid var(--tint);outline-offs
 .wizard-footer #wizSavePlan{background:transparent}
 .wizard-footer .save-hint{max-width:240px;line-height:1.5}
 /* A persistent warning is not a bottom-centred, animated toast. */
-.storage-banner{position:fixed;left:12px;right:12px;top:12px;z-index:9999;padding:10px 14px;border-radius:var(--radius-m);background:var(--bad);color:#211d19;text-align:center;font:13px/1.5 var(--font-text);box-shadow:var(--shadow-1)}
+.storage-banner{position:relative;width:100%;padding:10px 14px;border-radius:var(--radius-m);background:var(--bad);color:#211d19;text-align:center;font:13px/1.5 var(--font-text);box-shadow:var(--shadow-1)}
 @media(max-width:1100px){
   .wizard-wrap{grid-template-columns:156px minmax(0,1fr)}
   .wizard-side{grid-column:2;position:static;grid-row:2}
@@ -885,15 +887,15 @@ margin-bottom:8px}
 .plan-timeline .tl-meta{font-family:var(--mono);font-size:10px;color:var(--ink-muted);margin-left:auto;text-align:right}
 /* scrim: a warm-ink dim + blur (the topbar's proven material) rather than a cold pure-black wash —
    the background recedes as a dimmed, defocused layer, not a black sheet in a warm-greige world */
-.modal{position:fixed;inset:0;z-index:100;background:rgba(28,24,18,.34);backdrop-filter:blur(3px) saturate(105%);-webkit-backdrop-filter:blur(3px) saturate(105%);display:flex;align-items:center;justify-content:center;padding:24px;animation:scrimIn .16s ease both}
-.modal-box{background:var(--bg-elevated);border:none;border-radius:var(--radius-l);box-shadow:var(--shadow-3);max-width:860px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;transform-origin:center;animation:sheetIn .28s cubic-bezier(.32,.72,0,1) both}
+.modal{position:fixed;inset:0;z-index:100;background:rgba(28,24,18,.34);backdrop-filter:blur(3px) saturate(105%);-webkit-backdrop-filter:blur(3px) saturate(105%);display:flex;align-items:center;justify-content:center;padding:24px;animation:scrimIn .2s ease both}
+.modal-box{background:var(--bg-elevated);border:none;border-radius:var(--radius-l);box-shadow:var(--shadow-3);max-width:860px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;transform-origin:center;animation:sheetIn .2s cubic-bezier(.32,.72,0,1) both}
 @keyframes scrimIn{from{opacity:0}to{opacity:1}}
-@keyframes sheetIn{from{opacity:0;transform:scale(.96);filter:blur(6px)}to{opacity:1;transform:scale(1);filter:blur(0)}}
+@keyframes sheetIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 /* §5.5 exit — strictly the reverse path of the entrance */
-.modal.closing{animation:scrimOut .18s ease forwards}
-.modal.closing .modal-box{animation:sheetOut .2s cubic-bezier(.32,.72,0,1) forwards}
+.modal.closing{animation:scrimOut .12s ease forwards}
+.modal.closing .modal-box{animation:sheetOut .12s cubic-bezier(.32,.72,0,1) forwards}
 @keyframes scrimOut{to{opacity:0}}
-@keyframes sheetOut{to{opacity:0;transform:scale(.96);filter:blur(6px)}}
+@keyframes sheetOut{to{opacity:0;transform:translateY(6px)}}
 .modal-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--rule-thin);font-family:var(--sans);font-weight:700;font-size:13px}
 .log-pre{overflow:auto;font-family:var(--font-code);font-size:11px;line-height:1.5;padding:14px 16px;color:var(--ink-secondary);white-space:pre-wrap}
 .feedback-box{max-width:960px;max-height:88vh}
@@ -1027,15 +1029,15 @@ margin-bottom:8px}
 /* Roadmap 7.0 side slice: the help page's topic index. The 202 field
    explanations already existed and were reachable only by hovering the exact
    control they belong to; these style the entrance they now have. */
-.help-topic{border:1px solid var(--rule);border-radius:8px;margin:8px 0;
-  background:var(--surface,#fff)}
+.help-topic{border:1px solid var(--separator);border-radius:8px;margin:8px 0;
+  background:var(--bg-elevated)}
 .help-topic>summary{cursor:pointer;padding:11px 14px;font-size:14px;list-style:none}
 .help-topic>summary::-webkit-details-marker{display:none}
 .help-topic>summary::before{content:"\25B8  ";color:var(--ink-tertiary)}
 .help-topic[open]>summary::before{content:"\25BE  "}
 .help-blurb{padding:0 14px 6px;color:var(--ink-tertiary);font-size:12.5px;
   line-height:1.7;margin:0}
-.help-entry{padding:9px 14px;border-top:1px solid var(--rule)}
+.help-entry{padding:9px 14px;border-top:1px solid var(--separator)}
 .help-entry-t{font-size:12.5px;font-weight:600;margin-bottom:3px}
 .help-entry-b{font-size:12px;color:var(--ink-secondary);line-height:1.75}
 .help-index{margin-bottom:18px}
@@ -1056,12 +1058,12 @@ margin-bottom:8px}
 .mini{width:100%;border-collapse:collapse;margin:10px 0 4px;
   font-family:var(--mono);font-size:12.5px}
 .mini th,.mini td{padding:7px 11px;text-align:right;
-  border-bottom:1px solid var(--rule)}
+  border-bottom:1px solid var(--separator)}
 .mini th:first-child,.mini td:first-child{text-align:left;
   font-family:var(--sans);font-weight:600;color:var(--ink-secondary)}
 .mini th{font-family:var(--sans);font-size:10.5px;font-weight:600;
   letter-spacing:.04em;text-transform:uppercase;color:var(--ink-tertiary);
-  border-bottom:1px solid var(--rule-strong,var(--rule))}
+  border-bottom:1px solid var(--rule-strong,var(--separator))}
 .mini tbody tr:hover{background:var(--bg-inset)}
 .mini + .cap{margin-top:6px}
 

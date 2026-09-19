@@ -71,6 +71,7 @@ ROOT_FILES: dict[str, str] = {
     "DECISIONS_PENDING_2026-09-05.md": "documentation",
     "INPUT_SURFACE_2026-09-10.md": "documentation",
     "ROADMAP_13_CLOSEOUT.md": "documentation",
+    "ROADMAP_14_CLOSEOUT.md": "documentation",
     "ROADMAP_11.0.md": "documentation",
     "ATTRIBUTION_PROTOCOL_BLOCK_CONDITIONS_2026-07-21.md": "documentation",
     "DESIGN_APPLE_UIUX_2026-07.md": "documentation",
@@ -210,6 +211,7 @@ RELEASE_ONLY_TOOL_FILES = {
     # imported or bundled by the App, so rewriting the report cannot move a
     # candidate's runtime identity.
     "tools/roadmap13_combined_evidence.py": "calibration_evidence",
+    "tools/roadmap14_combined_evidence.py": "calibration_evidence",
     "tools/roadmap11_phase0.py": "phase_baseline_generator",
     # Roadmap 12 Phase 0's four rulers. It measures the gap between what the
     # engine can do and what the product exposes, plus the disclosure/rule-pack/

@@ -161,9 +161,20 @@ def _rmd_section(kw: dict, calendar_year: int,
 
 
 def _unsupported_current_plan(cfg: dict, kw: dict, age: int) -> Optional[str]:
-    relocation = kw["relocation"]
-    if (relocation.relocation_age is not None
-            and age >= int(relocation.relocation_age)):
+    # From the PLAN, not from `kw`. `compile_cockpit` builds kw with
+    # `build_kwargs(cfg, False)` -- the home arm -- and that arm nulls
+    # `relocation_age` by design, because it is the counterfactual where the
+    # move never happens. Reading it from there asked the wrong question
+    # ("would you have moved, in the world where you don't?") and the answer
+    # was always no, so this refusal was DEAD from the day it was wired:
+    # measured 2026-09-17, a plan that relocated nine years ago got a complete
+    # US-path worksheet -- US brackets, US standard deduction, US IRMAA --
+    # reporting `measurement_state: "measured"` and `reason: None`, while the
+    # bilingual message for this very refusal had been shipping in web/app.js
+    # unused. `baseline_reloc`, whose own docstring calls it "the default
+    # view", relocates at 41.
+    relocation_age = ENG.plan_relocation_age(cfg)
+    if relocation_age is not None and age >= relocation_age:
         return "current_non_us_execution_is_not_compiled"
     if kw["ss_trust_fund"].enabled:
         return "stochastic_social_security_trust_fund_path_is_unresolved"
@@ -283,7 +294,7 @@ def _country_account_worksheet(cfg: dict, kw: dict, calendar_year: int,
     if excess > 0.0:
         reinvest = ACCOUNT_SCHEMA.reinvestment_type(jurisdiction=jurisdiction)
         setattr(accounts, reinvest.field, accounts.balance(reinvest.field) + excess)
-    return {
+    base = {
         "schema_version": SCHEMA_VERSION, "calendar_year": calendar_year,
         "current_age": age, "portfolio_nominal": float(sum(block["balances"].values())),
         "guardrail": _not_applicable("country_account_beta_uses_current_spending"),
@@ -292,6 +303,34 @@ def _country_account_worksheet(cfg: dict, kw: dict, calendar_year: int,
                          age_this_year=holder_age,
                          total_required_nominal=float(forced_gross),
                          accounts=forced_rows, dispositions=dispositions),
+    }
+    # The same four refusals the US arm applies, which this arm was skipping
+    # entirely: `compile_cockpit` returns here BEFORE it ever calls
+    # `_unsupported_current_plan`, so a country-account plan was answered
+    # `measured` for facts this worksheet does not read at all. Measured
+    # 2026-09-17, on the same day the relocation guard was repaired -- and the
+    # relocation guard is one of the four, so that repair did not reach this
+    # arm until now.
+    #
+    # It is not a formality here. Grep this function: `life_events`,
+    # `blocky_spending` and `ss_trust_fund` do not appear in it. A $250,000
+    # mandatory event in the current year was simply absent from the numbers,
+    # and the worksheet said `measured` with `reason: None` -- byte-identical
+    # to a plan with no such event, which is this project's first and most
+    # expensive failure shape.
+    #
+    # Refused AFTER the base is built rather than at the top of the function,
+    # mirroring the US arm exactly: the portfolio, the guardrail stance and the
+    # pack's forced distribution are all still true and still owed. Only the
+    # three receipts that would have swallowed the missing cash flow go
+    # unmeasured.
+    unsupported = _unsupported_current_plan(cfg, kw, age)
+    if unsupported:
+        return {**base, "worksheet": _unmeasured(unsupported),
+                "tax": _unmeasured(unsupported),
+                "irmaa": _unmeasured(unsupported)}
+    return {
+        **base,
         "worksheet": _measured(
             tax_model="flat_effective_rates", target_nominal=target,
             structured_income=income,

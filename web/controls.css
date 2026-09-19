@@ -1,0 +1,51 @@
+/* Shared control polish. The original select remains the form value and focus owner. */
+select:not([multiple]){min-height:38px;max-width:100%;border:1px solid var(--separator);border-radius:var(--radius-s);padding:8px 30px 8px 11px;background-color:var(--bg-inset);color:var(--label);font:inherit}
+.btn-run{color:var(--on-tint)}
+.btn-run.ghost{color:var(--tint)}
+input[type=radio],input[type=checkbox]{accent-color:var(--tint)}
+.seed-field{width:110px;min-height:38px;border:1px solid var(--separator);border-radius:var(--radius-s);background:var(--bg-inset);color:var(--label);padding:9px 11px;font:inherit;font-variant-numeric:tabular-nums}
+.toast{width:max-content;max-width:calc(100vw - 32px);overflow-wrap:anywhere}
+.storage-banner{border-radius:0;box-shadow:none;text-wrap:pretty}
+.gs-row{display:grid;grid-template-columns:80px minmax(120px,1fr) minmax(0,1fr)}
+.gs-row .hint{grid-column:3}
+.gs-target{display:flex;align-items:center;gap:8px;min-width:0}
+.gs-range{display:flex;align-items:center;gap:8px;min-width:0}
+.gs-range input{flex:1;min-width:0;width:0!important}
+.ed-table input:not([type=checkbox]),.ed-table select{min-height:38px;border:1px solid var(--separator);border-radius:var(--radius-s);padding:8px;color:var(--label);background:var(--bg-inset);font:inherit}
+.ed-table td{vertical-align:middle}
+.fire-select-menu{position:fixed;inset:auto;margin:0;padding:5px;overflow:auto;overscroll-behavior:contain;max-width:calc(100vw - 16px);background:var(--bg-elevated);color:var(--label);border:1px solid var(--separator);border-radius:12px;box-shadow:var(--shadow-3);font:13px/1.45 var(--font-text);z-index:150;animation:selectIn .12s ease-out}
+.fire-select-option{position:relative;padding:8px 12px 8px 30px;border-radius:7px;cursor:default;overflow-wrap:anywhere}
+.fire-select-option[aria-selected=true]::before{content:'✓';position:absolute;left:10px}
+.fire-select-option.active{background:var(--tint);color:var(--on-tint)}
+.fire-select-option[aria-disabled=true]{opacity:.45}
+.fire-select-group{padding:8px 12px 4px;color:var(--label-2);font-size:11px;font-weight:600}
+select[aria-expanded=true]{outline:2px solid var(--tint);outline-offset:2px}
+@keyframes selectIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:700px){
+  .topbar-inner{padding:9px 16px;gap:8px}
+  .tb-right{gap:8px;margin-left:0;width:100%}
+  .topbar-title{display:none}
+  .steps-mini{display:none}
+  .precision-wrap{padding:32px 16px 56px}
+  .gs-row{grid-template-columns:1fr;gap:8px}
+  .gs-row .hint{grid-column:auto}
+  .gs-row select,.gs-range{width:100%}
+  .feedback-actions{display:grid;grid-template-columns:1fr;padding:16px;gap:10px}
+  .feedback-actions .save-hint{margin:0}
+  .feedback-actions button{width:100%;white-space:normal}
+  .modal{padding:16px}
+  #v-results .concl-card,#v-results .callout{padding-left:16px;padding-right:16px}
+}
+@media(prefers-reduced-motion:reduce){.fire-select-menu{animation:none}}
+
+@media(max-width:820px){
+  .ed-table,.ed-table tbody{display:block;width:100%}
+  .ed-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .ed-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0;padding:16px;border:1px solid var(--separator);border-radius:var(--radius-m);background:var(--bg-elevated)}
+  .ed-table td{display:flex;flex-direction:column;justify-content:flex-end;gap:6px;min-width:0;padding:0;border:0}
+  .ed-table td::before{content:attr(data-label);font-size:12px;line-height:1.4;color:var(--label-2)}
+  .ed-table td:last-child{grid-column:1/-1;align-items:flex-end}
+  .ed-table td:last-child::before{display:none}
+  .ed-table td input:not([type=checkbox]),.ed-table td select{width:100%!important;min-width:0}
+  .ed-table td input[type=checkbox]{align-self:flex-start;width:20px;height:38px}
+}
