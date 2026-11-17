@@ -176,8 +176,8 @@ for confirmation. Then double-clicking works normally.
   the rule pack with its vintage. The year-by-year tax solver iterates until it
   converges instead of scoring an unfinished year as running out of money.
   One-off bills -- your own long-term care, a parent's care, life events --
-  are paid from every account in the declared order, and a bill the accounts
-  cannot pay fails the plan instead of being dropped. Contribution limits and
+  are paid from every account in the declared order, and a care bill the
+  accounts cannot pay fails the plan instead of being recorded as paid. Contribution limits and
   working-year costs follow each path's own inflation, the working years grow
   at the stock/bond mix you state, and the first retirement withdrawal is made
   at that year's prices. Social Security spousal benefits (household mode) and
@@ -201,8 +201,8 @@ on from the v3.0 snapshot and four on from v10.0.
 **Unlike the earlier candidates, this one changes the numbers of existing
 plans, on purpose.** A model audit found places where the model did not do what
 its inputs said -- the retirement spending you typed did not reach the
-retirement, simulations stopped a fixed number of years after FIRE, bills the
-accounts could not pay were dropped -- and the fixes move results. A plan saved
+retirement, simulations stopped a fixed number of years after FIRE, care bills
+the accounts could not pay were recorded as paid -- and the fixes move results. A plan saved
 under candidate 2 will give different numbers here. A saved plan that carries a
 figure the new model no longer accepts (a separate non-medical spending figure
 that contradicts the retirement budget, or a second inflation figure) is
@@ -384,7 +384,7 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
   每条模拟的人生都跑到同一个终点年龄（起始年龄 + 工作年数 + 退休期年数），死亡率改用
   SSA 2023 期间生命表，连同版本一起放在规则包里。逐年真实税表的求解器会迭代到收敛，
   不再把没算完的一年判为钱用完了。一次性的账单 —— 你自己的长期护理、父母的护理、人生事件 ——
-  按声明的顺序从所有账户支付，账户付不起的账单会让计划判为失败，而不是被悄悄丢掉。
+  按声明的顺序从所有账户支付；账户付不起的护理费会让计划判为失败，而不是记成已付。
   缴款上限与工作期开销跟随每条路径自己的通胀，工作期的组合按你填的股债比例增长，
   退休第一笔提取按当年的价格水平。社保的配偶福利（家庭模式）与 65 岁以上、2025–2028 年的
   老年标准扣除（真实税表）现在都会计入。
@@ -400,7 +400,7 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 相对 v10.0 过了四个。
 
 **和之前的候选不同，这一版有意改变了已有计划的数字。** 一次模型审计发现了模型没有照输入去做的地方
-—— 你填的退休支出没有传到退休期、模拟在 FIRE 之后固定年数就停、账户付不起的账单被丢掉 ——
+—— 你填的退休支出没有传到退休期、模拟在 FIRE 之后固定年数就停、账户付不起的护理费被记成已付 ——
 修复会移动结果。在 candidate 2 下保存的计划，在这里会得到不同的数字。旧存档里如果带着新模型不再接受的数
 （与退休预算矛盾的单独「非医疗支出」，或第二个通胀数），会被拒绝，并点名要改的字段，而不是猜着运行。
 
