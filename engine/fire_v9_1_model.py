@@ -99,7 +99,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Sequence, Optional
 from enum import Enum
 
-from fire_rule_pack import ACA_MARKETPLACE_RULES
+from fire_rule_pack import ACA_MARKETPLACE_RULES, SSA_PERIOD_LIFE_TABLE
 from fire_v6_model import (
     State, AccountStack, TaxParams, RelocationParams,
     INITIAL_STACK, STATE, TAX_US,
@@ -154,12 +154,25 @@ class MortalityParams:
     cap_age: int = 110          # forced death at this age
     sex_label: str = "unisex"
     enabled: bool = True        # if False, no mortality (deterministic horizon)
+    #: MODEL_AUDIT_2026-11-15 A10. When set, q(x) is READ from this sequence
+    #: (index = exact age; ages past its end use its last value) and the
+    #: Gompertz pair above is not consulted. `None` keeps the historical curve,
+    #: which every engine generation before v9.8 still uses unchanged.
+    table: Optional[tuple] = None
 
 
 # Preset parameter sets fit to SSA-like data
 MORTALITY_MALE   = MortalityParams(alpha=0.000104, beta=0.083, sex_label="male")
 MORTALITY_FEMALE = MortalityParams(alpha=0.000060, beta=0.085, sex_label="female")
 MORTALITY_UNISEX = MortalityParams(alpha=0.000080, beta=0.084, sex_label="unisex")
+
+#: The SSA period life table, by sex (MODEL_AUDIT_2026-11-15 A10). The curves
+#: above are kept verbatim for the engine generations that pinned them; v9.8
+#: and the app use these.
+MORTALITY_MALE_SSA = MortalityParams(
+    sex_label="male", table=tuple(SSA_PERIOD_LIFE_TABLE["male_q"]))
+MORTALITY_FEMALE_SSA = MortalityParams(
+    sex_label="female", table=tuple(SSA_PERIOD_LIFE_TABLE["female_q"]))
 
 
 def annual_mortality_rate(age: int, params: MortalityParams) -> float:
@@ -168,6 +181,9 @@ def annual_mortality_rate(age: int, params: MortalityParams) -> float:
         return 0.0
     if age >= params.cap_age:
         return 1.0
+    table = getattr(params, "table", None)
+    if table:
+        return float(table[min(max(int(age), 0), len(table) - 1)])
     mu = params.alpha * np.exp(params.beta * age)
     return float(1.0 - np.exp(-mu))
 

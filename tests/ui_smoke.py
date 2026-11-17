@@ -1892,21 +1892,74 @@ def drive(window):
             window,
             '(document.getElementById("rulePackStatus")||{}).textContent || ""') or ""
         pack_id_match = re.search(r"us-offline-[0-9a-f]{16}", overview_pack)
-        check("headline result binds a current offline pack",
-              "离线规则仍在应用维护窗口内" in overview_pack
-              and pack_id_match is not None,
-              overview_pack[:240])
+        # The receipt's banner has three legal titles, and WHICH one is right
+        # is a function of the pack's own review dates and today's date.
+        # These checks used to accept only the first ("within the review
+        # window") and so went red on the calendar: once the earliest
+        # component came within 90 days the page correctly switched to the
+        # advance notice, and three checks reported a defect that was the
+        # product working (OPEN_ITEMS E68). The expected state is derived
+        # here from the same file the server reads, so the checks follow the
+        # dates instead of going red on them -- and so the advance notice,
+        # which had no real-page check at all, has one whenever it can show.
+        import datetime as _dt
+        with open(os.path.join(ROOT, "engine", "rule_pack_us_offline.json"),
+                  encoding="utf-8") as _handle:
+            _pack_file = json.load(_handle)
+        _due = {c["id"]: _dt.date.fromisoformat(c["maintenance_due_on"])
+                for c in _pack_file["components"]
+                if c.get("id") and c.get("maintenance_due_on")}
+        _today = _dt.date.today()
+        # The federal tax tables apply to every US run and fall due with the
+        # main batch, so their date decides which title a default run shows.
+        _federal_days = (_due["us_federal_tax"] - _today).days
+        _WINDOW = "离线规则仍在应用维护窗口内"
+        _STALE = "离线规则已过应用维护期"
+        _notice = re.search(r"离线规则将在 (\d+) 天内到复核期", overview_pack)
+        if _federal_days < 0:
+            pack_state_ok = _STALE in overview_pack
+            expected_title = _STALE
+        elif _federal_days <= 90:
+            pack_state_ok = _notice is not None
+            expected_title = "离线规则将在 N 天内到复核期"
+        else:
+            pack_state_ok = _WINDOW in overview_pack and _notice is None
+            expected_title = _WINDOW
+        check("headline result binds the offline pack in the state its dates imply",
+              pack_state_ok and pack_id_match is not None,
+              "expected %r (us_federal_tax due in %d days); got %s"
+              % (expected_title, _federal_days, overview_pack[:200]))
         check("overview shows the exact result-bound pack receipt",
-              pack_id_match is not None
-              and "离线规则仍在应用维护窗口内" in overview_pack,
+              pack_id_match is not None and pack_state_ok,
               overview_pack[:240])
+        if _notice is not None:
+            # The notice names its earliest component and a day count. Both
+            # are checked against the pack file rather than against each
+            # other: the count the reader sees has to be that component's own
+            # due date minus today.
+            _named = re.search(r"最早的是\s*([a-z0-9_]+)（(\d+) 天后）", overview_pack)
+            check("the advance notice agrees with the pack's own dates",
+                  _named is not None
+                  and _named.group(1) in _due
+                  and (_due[_named.group(1)] - _today).days == int(_named.group(2))
+                  and int(_notice.group(1)) == int(_named.group(2))
+                  and 0 <= int(_named.group(2)) <= 90,
+                  overview_pack[:240])
+        else:
+            check("the advance notice agrees with the pack's own dates",
+                  _federal_days > 90 or _federal_days < 0,
+                  "no notice is showing although us_federal_tax is due in "
+                  "%d days" % _federal_days)
         js(window, '([...document.querySelectorAll(".rtab")].find(b=>b.dataset.p==="concl")||{click(){}}).click()')
         conclusion_pack = js(
             window,
             '(document.getElementById("rulePackConclusionStatus")||{}).textContent || ""') or ""
-        check("conclusions repeat the same current receipt",
+        check("conclusions repeat the same receipt in the same state",
               pack_id_match is not None and pack_id_match.group(0) in conclusion_pack
-              and "离线规则仍在应用维护窗口内" in conclusion_pack,
+              and (_STALE in conclusion_pack if _federal_days < 0
+                   else re.search(r"离线规则将在 \d+ 天内到复核期", conclusion_pack) is not None
+                   if _federal_days <= 90
+                   else _WINDOW in conclusion_pack),
               conclusion_pack[:240])
 
         # A real WKWebView mutation corpus for the result-bound validator. The

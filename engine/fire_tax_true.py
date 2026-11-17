@@ -24,6 +24,7 @@ from dataclasses import dataclass
 import math
 
 from fire_rule_pack import (IRMAA_RULES, RULE_PACK_ID, US_FEDERAL_RULES,
+                            US_SENIOR_STANDARD_DEDUCTION,
                             US_STATE_ARCHETYPES)
 
 
@@ -32,6 +33,13 @@ from fire_rule_pack import (IRMAA_RULES, RULE_PACK_ID, US_FEDERAL_RULES,
 class TrueTaxParams:
     enabled: bool = False
     filing_jointly: bool = False          # adapter sets from household.enabled
+    #: MODEL_AUDIT B12. A care bill or a life event paid from a pre-tax
+    #: account is ordinary income in the year it is paid; sold from the taxable
+    #: account it realises a gain. Off, those draws are grossed up at the flat
+    #: rates and never reach this year's brackets, MAGI, ACA or IRMAA. On,
+    #: they are drawn untaxed and their income joins this year's solve, which
+    #: then pays the tax with the rest of the year's bill.
+    mandatory_outflows_taxed_enabled: bool = False
     rmd_enabled: bool = True
     rmd_age: int = 75                     # SECURE 2.0: 75 for those born ≥1960
     irmaa_enabled: bool = True
@@ -388,6 +396,20 @@ def dividend_drag_rate_real(dividend_real: float, qualified_fraction: float,
 
 
 # --------------------------------------------------------------- year solver
+#: Upper bound on fixed-point passes in `solve_retirement_year`. Not a tuning
+#: knob: the loop leaves as soon as two successive bills agree to within a
+#: dollar, which takes two or three passes at a 12% marginal rate and a few
+#: dozen at 60%. This is the ceiling for the pathological case, and hitting it
+#: with money still undrawn raises rather than returning a number.
+MAX_TAX_ITERATIONS = 1000
+
+#: MODEL_AUDIT B7. 26 U.S.C. 223(f)(4): a non-medical HSA distribution is
+#: income plus a 20% additional tax, which stops at 65 (and on disability or
+#: death, which this engine does not track for the plan holder's HSA).
+HSA_NON_MEDICAL_PENALTY_RATE = 0.20
+HSA_NON_MEDICAL_PENALTY_AGE = 65
+
+
 def _schema_types(withdrawal_order=None):
     """The declared account types, in the order this plan draws them.
 
@@ -415,9 +437,30 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
                           rmd_bases_prior_year_end: dict = None,
                           gain_fraction: float = None,
                           withdrawal_order=None, meta_out: dict = None,
-                          rmd_age: int = None) -> dict:
+                          rmd_age: int = None, persons_65_plus: int = 0,
+                          hsa_qualified_allowance: float = None,
+                          extra_ltcg_nominal: float = 0.0) -> dict:
     """Withdraw in the DECLARED order so that after REAL taxes the year's need
-    is met. Fixed-point on the tax bill (≤8 iters).
+    is met. Fixed-point on the tax bill, iterated until it actually converges.
+
+    MODEL_AUDIT_2026-11-15 A2. The loop used to stop after eight passes whether
+    or not it had converged. Starting from a guess of zero the error shrinks by
+    the marginal rate each pass, so eight is plenty at 12% and nowhere near
+    enough once the marginal rate clears about 25% -- an early withdrawal
+    (22% + the 10% penalty), a state rate, the Social Security torpedo. The
+    function then returned a `shortfall` of a few dollars with millions still
+    in the accounts, the caller read any shortfall over $1 as insolvency, and
+    the path was declared broke: on the shipped default plan, turning the
+    true-tax engine on took lifetime success from 1.000 to 0.865, and every
+    one of the 54 "broke" paths had more than $100,000 left (median $4.7M).
+
+    Two changes, and the second is the one that keeps it fixed. The loop runs
+    to convergence (the break condition is unchanged, so every solve that used
+    to converge inside eight passes returns the same floats it always did).
+    And the result now says WHY it fell short: `exhausted` is true only when
+    every reachable dollar was drawn and the need still was not met. One
+    number, `shortfall`, had been carrying both "the arithmetic stopped early"
+    and "the money ran out", which is how the first hid inside the second.
 
     Roadmap 10.0 Phase 2, OPEN_ITEMS E36. This used to name four buckets by
     hand -- ten direct references and thirty-nine counting the local aliases,
@@ -472,7 +515,13 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     # not a dead knob, it is the opening balance of a quantity that now moves.
     gain_frac = (p.taxable_gain_fraction if gain_fraction is None
                  else max(0.0, min(1.0, float(gain_fraction))))
-    std_ded_nom = (STD_DED_MFJ if mfj else STD_DED_SINGLE) * cpi
+    # MODEL_AUDIT B5: the section 63(f) additional deduction for each filer
+    # aged 65 or over -- ,650 each when married, ,050 when not. Zero
+    # persons (every caller that does not say) is the historical deduction.
+    std_ded_nom = ((STD_DED_MFJ if mfj else STD_DED_SINGLE)
+                   + int(persons_65_plus) * float(
+                       US_SENIOR_STANDARD_DEDUCTION["per_person_married"] if mfj
+                       else US_SENIOR_STANDARD_DEDUCTION["unmarried"])) * cpi
     order, SCHEMA = _schema_types(withdrawal_order)
     reinvest = SCHEMA.reinvestment_type(withdrawal_order)
     held = accounts.balances()
@@ -508,7 +557,11 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
     tax_guess = 0.0
     took = {a.field: 0.0 for a in order}
     ss_taxable = ordinary_nom = ltcg_nom = penalty = 0.0
-    for _ in range(8):
+    converged = False
+    exhausted = False
+    iterations = 0
+    for _ in range(MAX_TAX_ITERATIONS):
+        iterations += 1
         cash_target = max(0.0, need_after_tax_nominal + tax_guess - ss_gross_nominal)
         rem = cash_target
         for a in order:
@@ -519,15 +572,32 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
             # `max(0.0, ...)` because a forced draw can exceed what was still
             # needed; for every other account `take <= rem` already.
             rem = max(0.0, rem - take)
+        # Anything still owed after every account has been offered the whole
+        # of it means every reachable balance was taken: `take` is
+        # `min(rem, avail)`, so a positive remainder can only survive an
+        # account that had less than was asked of it. Measured on the pass
+        # whose draws are the ones returned.
+        exhausted = rem > 0.0
 
         ordinary_nom = conversions_nominal
         ltcg_nom = 0.0
+        # MODEL_AUDIT B7: an HSA draw beyond this year's qualified medical
+        # costs is ordinary income. `None` = every HSA dollar qualified, the
+        # historical treatment.
+        hsa_excess = (max(0.0, took.get("hsa", 0.0)
+                          - max(0.0, float(hsa_qualified_allowance)))
+                      if hsa_qualified_allowance is not None else 0.0)
+        ordinary_nom += hsa_excess
         for a in order:
             if a.tax_character == SCHEMA.CHARACTER_ORDINARY:
                 ordinary_nom += took[a.field]
             elif a.tax_character == SCHEMA.CHARACTER_CAPITAL_GAIN:
                 ltcg_nom += took[a.field]
         ltcg_nom *= gain_frac
+        # MODEL_AUDIT B12: gains already realised this year outside this
+        # solve (a bill paid from the taxable account). Zero for every caller
+        # that does not say otherwise.
+        ltcg_nom += float(extra_ltcg_nominal)
         ss_taxable = ss_taxable_amount(ss_gross_nominal,
                                        ordinary_nom + ltcg_nom, mfj)
         ordinary_before_ded_nom = ordinary_nom + ss_taxable
@@ -567,6 +637,8 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
             if (a.early_penalty_age is not None
                     and age < a.early_penalty_age):
                 penalty += a.early_penalty_rate * took[a.field]
+        if hsa_excess and age < HSA_NON_MEDICAL_PENALTY_AGE:
+            penalty += HSA_NON_MEDICAL_PENALTY_RATE * hsa_excess
         # State tax. The flat rate is the default and stays exactly as it
         # was; an archetype replaces it with a shape rather than adding to it.
         if p.state_archetype:
@@ -585,8 +657,20 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
         tax_total = fed + state + penalty
         if abs(tax_total - tax_guess) < 1.0:
             tax_guess = tax_total
+            converged = True
             break
         tax_guess = tax_total
+    if not converged and not exhausted:
+        # Reaching here means the bill kept moving by more than a dollar for
+        # MAX_TAX_ITERATIONS passes with money still undrawn -- a combined
+        # marginal rate at or above 100%, which no shipped rule produces. It
+        # is refused rather than returned: a result from an unconverged solve
+        # is what this function used to hand back, and it read as bankruptcy.
+        raise ArithmeticError(
+            "the retirement-year tax solve did not converge in %d passes "
+            "(need %.2f, last tax %.2f, age %s). A combined marginal rate at "
+            "or above 100%% does this; check tax_true.state_rate."
+            % (MAX_TAX_ITERATIONS, need_after_tax_nominal, tax_guess, age))
 
     gross = 0.0
     for a in order:
@@ -634,4 +718,8 @@ def solve_retirement_year(accounts, need_after_tax_nominal: float,
                 ss_taxable=ss_taxable, magi_agi_nominal=magi_agi,
                 magi_aca_nominal=ordinary_nom + ltcg_nom + ss_gross_nominal,
                 delivered=delivered, deposit_back=deposit_back,
-                gross_wd=gross, flow_err=flow_err, shortfall=shortfall)
+                gross_wd=gross, flow_err=flow_err, shortfall=shortfall,
+                # Why a shortfall happened, and how hard the solve worked.
+                # `exhausted` is the only one of the two that means the money
+                # ran out; see the docstring.
+                exhausted=exhausted, iterations=iterations)

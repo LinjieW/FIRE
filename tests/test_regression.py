@@ -114,9 +114,36 @@ SEED = 96_000
 # contribution from the shipped default. These were re-measured on the same
 # 800-path/seed-96000 protocol; the direction is expected (cash remains in
 # taxable rather than being credited to an HSA nobody established).
-GOLDEN_TERMINAL = 2_588_805.679528568          # 2026 pack · 800 paths · seed 96000
+#
+# ---- MODEL_AUDIT_2026-11-15, re-recorded 2026-11-16 ----
+#
+#   GOLDEN_TERMINAL         2_588_805.679528568 -> 3_068_658.581907532  (+18.5%)
+#   GOLDEN_LEGACY_TERMINAL  2_537_724.427904837 -> 3_086_328.5584862255 (+21.6%)
+#
+# Peeled one slice at a time on the same 800-path/seed-96000 protocol (the
+# default plan's median terminal, rounded):
+#
+#   2,588,806  before
+#   2,819,393  A1   the typed spending is the whole budget, medical included.
+#                   The default's $42,000 now covers its $12,000 medical
+#                   basket (routine 3,000 + ACA 8,000 + out-of-pocket 1,000),
+#                   leaving $30,000 of non-medical life; the shipped leaf was
+#                   a separate $34,440 that ignored the figure. Median
+#                   first-year consumption 52,935 -> 49,858.
+#   3,061,586  A9/A10/A11  the plan runs to its own end age (a plan that
+#                   reaches FI early used to stop retire_horizon years after
+#                   FIRE); SSA period life table; the first retirement
+#                   payment is at that year's price level.
+#   3,068,659  A3-A7, A12, B-class switches off.  A7 alone moves it:
+#                   contribution limits follow the path CPI instead of a
+#                   second fixed 3%.
+#
+# Fire age p50 is unchanged at 38. The terminal rises mostly because the
+# default plan's retirement spending fell at A1 and because A9 measures the
+# terminal at the plan's end age rather than at a FIRE-relative one.
+GOLDEN_TERMINAL = 3_068_658.581907532          # 2026 pack · 800 paths · seed 96000
 GOLDEN_FIRE_P50 = 38.0
-GOLDEN_LEGACY_TERMINAL = 2_537_724.427904837   # 2026 pack · annual_spending_now=40440
+GOLDEN_LEGACY_TERMINAL = 3_086_328.5584862255  # 2026 pack · annual_spending_now=40440
 
 
 def cfg0():
@@ -333,7 +360,9 @@ class TestDirectionality(unittest.TestCase):
         m = ENG.build_kwargs(cfg0(), False)["mortality"]
         c = cfg0(); c["mortality"]["sex"] = "female"
         f = ENG.build_kwargs(c, False)["mortality"]
-        self.assertNotEqual((m.alpha, m.beta), (f.alpha, f.beta))
+        # MODEL_AUDIT A10: the sex selects an SSA table, not a Gompertz pair.
+        self.assertNotEqual(m.table, f.table)
+        self.assertIsNotNone(m.table)
 
 
 class TestMortalityAndMandatoryEvents(unittest.TestCase):
@@ -403,7 +432,11 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
         def run_case(start_age, spouse_age_offset, mortality_enabled=True):
             c = self._never_fi()
             c["state"].update({"start_age": start_age, "accum_years": 3,
-                               "retire_horizon": 1, "inflation": 0.0})
+                               "retire_horizon": 1})
+            # MODEL_AUDIT A7: inflation is one input. Zero, and deterministic,
+            # is what "inflation": 0.0 in state used to give the limits.
+            c["returns"].update({"inflation_mu": 0.0,
+                                 "stochastic_inflation": False})
             c["contributions"].update({
                 "pretax_401k_limit_y1": 100.0,
                 "roth_ira_limit_y1": 0.0,
@@ -683,8 +716,15 @@ class TestMortalityAndMandatoryEvents(unittest.TestCase):
             "retire_horizon": 1,
             "expenses_y0": 1_000.0,
             "swr_pref": 0.05,
-            "inflation": 0.0,
         })
+        # MODEL_AUDIT A7: inflation is one input (`returns.inflation_mu`).
+        c["returns"].update({"inflation_mu": 0.0,
+                             "stochastic_inflation": False})
+        # MODEL_AUDIT A1: $1,000 of spending has to cover the medical basket
+        # now. A token basket keeps the fixture's FI target exactly where it
+        # was ($1,000 / 5%); the bridge quote must stay positive.
+        c["medical"].update({"routine_y0": 0.0, "oop_y0": 0.0,
+                             "premium_aca": 1.0})
         c["contributions"].update({
             "pretax_401k_limit_y1": 20_000.0,
             "roth_ira_limit_y1": 0.0,
@@ -871,8 +911,10 @@ class TestMemberIncomeStreams(unittest.TestCase):
             "accum_years": 3,
             "retire_horizon": 1,
             "expenses_y0": 1_000_000_000.0,
-            "inflation": 0.0,
         })
+        # MODEL_AUDIT A7: inflation is one input (`returns.inflation_mu`).
+        c["returns"].update({"inflation_mu": 0.0,
+                             "stochastic_inflation": False})
         c["initial"] = {k: 0.0 for k in c["initial"]}
         c["contributions"].update({
             "base_salary_pre": 0.0,
@@ -923,8 +965,10 @@ class TestMemberIncomeStreams(unittest.TestCase):
                 "accum_years": 3,
                 "retire_horizon": 1,
                 "expenses_y0": 1_000_000_000.0,
-                "inflation": 0.0,
             })
+            # MODEL_AUDIT A7: inflation is one input (`returns.inflation_mu`).
+            c["returns"].update({"inflation_mu": 0.0,
+                                 "stochastic_inflation": False})
             c["initial"] = {k: 0.0 for k in c["initial"]}
             c["contributions"].update({
                 "base_salary_pre": 0.0,
@@ -2030,8 +2074,10 @@ class TestMemberIncomeStreams(unittest.TestCase):
             "accum_years": 2,
             "retire_horizon": 1,
             "expenses_y0": 1_000_000_000.0,
-            "inflation": 0.0,
         })
+        # MODEL_AUDIT A7: inflation is one input (`returns.inflation_mu`).
+        c["returns"].update({"inflation_mu": 0.0,
+                             "stochastic_inflation": False})
         c["initial"] = {k: 0.0 for k in c["initial"]}
         c["contributions"].update({
             "base_salary_pre": 0.0,
@@ -2833,30 +2879,43 @@ class TestTrueTaxEngine(unittest.TestCase):
         # claim it actually wanted: somewhere in a plausible range, moving
         # this input has to move the answer. It still fails loudly if the
         # input is dropped on the floor -- then nothing in the range moves it.
-        c = cfg0(); c["tax_true"]["enabled"] = True
-        a = ENG.summary(c, 600, SEED, False)
-        # The conditional pre-tax terminal P50 excludes failed/nonpositive
-        # paths and may coincide when the successful population changes. The
-        # RMD mechanism is instead pinned to tax and after-tax wealth effects.
+        #
+        # MODEL_AUDIT_2026-11-15 A2 found what it had actually been searching.
+        # On the shipped default plan the Roth ladder converts the pre-tax
+        # bucket away decades before any RMD age, so `rmd_required` returns
+        # zero on every call and the input CANNOT move that plan. The scan
+        # nevertheless kept finding "movement", and recorded that it was
+        # `terminal_real_p50` and only that. It was the tax solver's
+        # unconverged fixed point: a different RMD age perturbed which years
+        # failed to converge, each was scored as bankruptcy, and the median
+        # shifted. With the solver converging, the default plan is unmoved at
+        # every age in the range -- which is the right answer, and is why this
+        # now runs on a plan that still HOLDS pre-tax money at 73: the same
+        # default with the conversion ladder switched off.
+        def plan(rmd_age=None):
+            c = cfg0(); c["tax_true"]["enabled"] = True
+            c["roth_ladder"]["enabled"] = False
+            if rmd_age is not None:
+                c["tax_true"]["rmd_age"] = rmd_age
+            return c
+
+        a = ENG.summary(plan(), 600, SEED, False)
         numeric = sorted(k for k, v in a.items() if isinstance(v, (int, float)))
         scan = {}
         for rmd_age in (68, 72, 76, 80, 84, 88):
-            c2 = cfg0(); c2["tax_true"]["enabled"] = True
-            c2["tax_true"]["rmd_age"] = rmd_age
-            b = ENG.summary(c2, 600, SEED, False)
+            b = ENG.summary(plan(rmd_age), 600, SEED, False)
             moved = [k for k in numeric if b[k] != a[k]]
             if moved:
                 scan[rmd_age] = moved
         self.assertTrue(scan,
                         "no RMD age in 68..88 moved ANY summary metric, so "
                         "the input is not reaching the run at all")
-        # Measured 2026-08-23: what it moves is `terminal_real_p50`, and only
-        # that. The median true-tax and median after-tax wealth are no longer
-        # sensitive -- under the schedule the median path's pre-tax balance
-        # does not reach the RMD, because the withdrawal order draws the
-        # (now larger) taxable bucket first. Asserting those two specifically
-        # is what rotted twice; asserting "something moves, and say what" is
-        # the claim that survives a change of account mix.
+        # And it has to move the thing an RMD is: a forced, taxed withdrawal.
+        # "Something moved" alone is the claim that let solver noise pass for
+        # a mechanism.
+        self.assertTrue(
+            any("true_tax_p50" in moved for moved in scan.values()),
+            "the RMD age moved %s but never the tax paid" % (scan,))
 
         from fire_tax_true import TrueTaxParams, solve_retirement_year
         from fire_v6_model import AccountStack
@@ -2986,6 +3045,10 @@ class TestTrueTaxEngine(unittest.TestCase):
                 "taxable_wd": 0.0,
                 "gain_fraction_used": 0.0,
                 "ordinary_taxable_real": 0.0,
+                # MODEL_AUDIT A2 keys, for the same reason: the loop reads
+                # `exhausted` every year to decide whether a gap is insolvency.
+                "exhausted": False,
+                "iterations": 1,
             }
 
         def fake_irmaa(magi_real, mfj, persons):
@@ -3492,15 +3555,21 @@ class TestHousing(unittest.TestCase):
         self.assertEqual(result["fire_age"], 30)
         shortfalls = [s for s in result["event_shortfalls"]
                       if s["phase"] == "retirement"]
-        self.assertEqual(len(shortfalls), 1)
-        self.assertEqual(shortfalls[0]["age"], 32)
-        # age 32 housing event = 10,000 carrying + 3,333.333... mortgage;
-        # the two positive components must not be reported as separate events.
+        # MODEL_AUDIT A9: a plan that reaches FI in its first year now runs to
+        # its own end age (30 + 1 + 2 = 33), not two years past FIRE, so the
+        # housing bill falls short at 32 AND at 33. Still ONE event per age:
+        # the carrying cost and the mortgage are not reported separately.
+        self.assertEqual([s["age"] for s in shortfalls], [32, 33])
+        # age 32 housing event = 10,000 carrying + 3,333.333... mortgage.
         self.assertAlmostEqual(
             shortfalls[0]["mandatory_outflow_real"], 13_333.333333333334,
             places=8)
+        # MODEL_AUDIT A1: the plan's $1 of spending is now spent (the fixture
+        # used to zero the non-medical leaf), so $1 less is left at 32.
         self.assertAlmostEqual(shortfalls[0]["shortfall_real"],
-                               8_333.333333333334, places=8)
+                               8_334.333333333334, places=8)
+        self.assertAlmostEqual(shortfalls[1]["shortfall_real"],
+                               13_333.333333333334, places=8)
 
     def test_event_compilation(self):
         import housing as H

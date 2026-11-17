@@ -129,6 +129,7 @@ def withdraw_with_seasoning_v94(
     gain_fraction: "Optional[float]" = None,
     meta_out: "Optional[dict]" = None,
     jurisdiction: str = "US",
+    hsa_qualified_allowance: "Optional[float]" = None,
 ) -> tuple[AccountStack, float, float]:
     """
     v9.4 patched withdrawal. Adds 10% IRS early withdrawal penalty when
@@ -189,6 +190,36 @@ def withdraw_with_seasoning_v94(
             balance = max(0.0, balance - roth_locked_amount)
             if balance <= 0:
                 continue
+
+        if hsa_qualified_allowance is not None and account.field == "hsa":
+            # MODEL_AUDIT B7. Up to this year's qualified medical costs the
+            # HSA pays tax-free; beyond it a draw is ordinary income, plus
+            # the 20% additional tax before 65. `None` = all of it qualified,
+            # which is the branch every other caller takes.
+            qualified = min(remaining, balance,
+                            max(0.0, float(hsa_qualified_allowance)))
+            excess_rate = float(getattr(tax, "withdrawal_tax_traditional", 0.0))
+            if current_age < 65:
+                excess_rate += 0.20
+            excess = 0.0
+            if remaining - qualified > 0 and balance - qualified > 0:
+                excess = min((remaining - qualified)
+                             / max(1 - excess_rate, 0.001),
+                             balance - qualified)
+            gross_take = qualified + excess
+            setattr(accounts, account.field,
+                    getattr(accounts, account.field) - gross_take)
+            if gross_take > 0.0:
+                withdrawals_by_account.append({
+                    "account_type": account.key,
+                    "field": account.field,
+                    "gross_nominal": float(gross_take),
+                })
+            remaining -= qualified + excess * (1 - excess_rate)
+            tax_and_penalty += excess * excess_rate
+            if current_age < 65:
+                total_penalty += excess * 0.20
+            continue
 
         rate = 0.0
         if account.withdrawal_rate is not None:

@@ -659,6 +659,9 @@ REGISTRY = {entry.path: entry for entry in (
        note_cn="精度出卖了它：40,440 是某个家庭的实际年支出，不是一个圆整默认值。",
        note_en="The precision gives it away -- 40,440 is one household's "
                "actual spending, not a round default."),
+    # MODEL_AUDIT A7: no longer a config input. The engine field is set from
+    # `returns.inflation_mu` (the basic page's "Inflation"), so this entry
+    # describes that one number; the default and its gap are unchanged.
     _a("state.inflation", SOURCEABLE, EXPLAINED_UNCITED,
        code_ref="engine/fire_v6_model.py:State", current_default=0.030,
        evidence_gap="a long-run CPI assumption stated without a window or a "

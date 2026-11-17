@@ -154,6 +154,12 @@ class RothLadderParams:
     federal_tax_rate: float = 0.12            # effective rate on conversion
     seasoning_years: int = 5                  # IRS 5-year rule
     senior_age_threshold: int = 60            # at this age, all Roth penalty-free
+    #: MODEL_AUDIT B6. Before 59.5 only Roth CONTRIBUTIONS (and seasoned
+    #: conversions) come out tax- and penalty-free; earnings do not. Off, the
+    #: whole unseasoned-conversion-free balance is reachable, as before. On,
+    #: the user's contribution basis today is required.
+    earnings_lock_enabled: bool = False
+    contribution_basis: Optional[float] = None
 
 
 @dataclass

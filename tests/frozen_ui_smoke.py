@@ -249,20 +249,15 @@ def _drive_frozen_api_discriminators(base_url, capability, base_config):
           status == 200 and correlation is not None and not missing,
           "status=%s missing=%s disclosure=%s" % (status, missing, text[:500]))
 
-    cfg = json.loads(json.dumps(base_config))
-    cfg["state"].update({
-        "start_age": 75, "accum_years": 1, "retire_horizon": 30,
-        "expenses_y0": 25_000, "swr_pref": 0.04,
-    })
-    cfg["initial"] = {
-        "pretax_401k": 500_000, "roth_ira": 0, "hsa": 0,
-        "taxable": 0,
-    }
-    cfg["social_security"]["enabled"] = False
-    cfg["roth_ladder"]["enabled"] = False
+    # Shared with tests/test_execution_simplification.py, which the gate runs.
+    # A private copy here kept the pre-MODEL_AUDIT numbers and refused the
+    # v14.0-installed-47 promotion, 41/42 (lesson 23b).
+    import execution_simplification_fixture as FIXTURE   # noqa: PLC0415
+    cfg = FIXTURE.stress_config(json.loads(json.dumps(base_config)))
     status, result = _job_result(
         base_url, capability, "/api/execution_simplification/start",
-        {"config": cfg, "paths": 8, "seed": 15}, timeout=180)
+        {"config": cfg, "paths": FIXTURE.PATHS, "seed": FIXTURE.SEED},
+        timeout=180)
     deltas = result.get("deltas") if isinstance(result, dict) else None
     policy = result.get("policy") if isinstance(result, dict) else None
     numeric_deltas = (isinstance(deltas, dict) and bool(deltas)
@@ -272,10 +267,11 @@ def _drive_frozen_api_discriminators(base_url, capability, base_config):
     check("the frozen B4 route returns the path-isolated seed-15 receipt",
           status == 200 and result.get("pairing_protocol")
           == "path_indexed_substreams"
-          and result.get("exposed_paths") == 3
-          and (result.get("baseline") or {}).get("lifetime_success") == 1.0
+          and result.get("exposed_paths") == FIXTURE.EXPOSED_PATHS
+          and (result.get("baseline") or {}).get("lifetime_success")
+          == FIXTURE.BASELINE_SUCCESS
           and abs((result.get("simplified") or {}).get("lifetime_success", -1)
-                  - (2 / 3)) < 1e-12
+                  - FIXTURE.SIMPLIFIED_SUCCESS) < 1e-12
           and numeric_deltas and result.get("categorical_verdict") is None
           and (policy or {}).get("relocation") == "base_location_only"
           and (policy or {}).get("implicit_rebalancing_remains") is True,

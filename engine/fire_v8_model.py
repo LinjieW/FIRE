@@ -818,6 +818,12 @@ class V8ContributionParams:
     # they say a savings rate out loud, and because a net-based rate would
     # move whenever the tax assumption moved.
     savings_mode: str = "residual"
+    #: MODEL_AUDIT B3. Wages grow at the stated rate in nominal terms whatever
+    #: the path's inflation does. On, the realised inflation surprise passes
+    #: through to pay: a path with 2 points more inflation than the mean pays
+    #: 2 points more, so the stated growth is read as growth above the plan's
+    #: mean inflation.
+    wage_inflation_passthrough_enabled: bool = False
     #: Share of GROSS saved when `savings_mode == "savings_rate"`. Ignored in
     #: residual mode, so its value cannot affect an untouched plan.
     savings_rate: float = 0.0
@@ -1223,6 +1229,8 @@ def compute_contributions_for_year(
     espp_ordinary_income_nominal: float = 0.0,
     espp_ltcg_nominal: float = 0.0,
     spouse_layoff_income_fraction: Optional[float] = None,
+    price_index: Optional[float] = None,
+    wage_inflation_factor: float = 1.0,
 ) -> AccountStack:
     """
     Compute account-level contributions for a given year, accounting for
@@ -1505,6 +1513,8 @@ def compute_contributions_for_year(
     if (_SPOUSE_WAGE_FACTORS is not None
             and 0 <= year - 1 < len(_SPOUSE_WAGE_FACTORS)):
         _spouse_wf = float(_SPOUSE_WAGE_FACTORS[year - 1])
+    if wage_inflation_factor != 1.0:
+        _spouse_wf *= float(wage_inflation_factor)    # MODEL_AUDIT B3
     _spouse_sal = ((1 + _hh.spouse_salary_growth_pre) ** (year - 1) * _spouse_wf
                    if _joint else 0.0)
     _spouse_base = _hh.spouse_base_salary_pre * _spouse_sal if _joint else 0.0
@@ -1679,7 +1689,17 @@ def compute_contributions_for_year(
     _spend0 = (contrib_params.annual_spending_now
                if contrib_params.annual_spending_now is not None
                else STATE.expenses_y0)
-    expenses = _spend0 * (1 + STATE.inflation) ** (year - 1)
+    # MODEL_AUDIT_2026-11-15 A7. The living cost a working year must cover was
+    # grown at the MODULE default `STATE.inflation` -- 3%, whatever the plan
+    # or the path said -- while the FI target beside it grew at the path's
+    # realised CPI. On a high-inflation path the household was charged 3% for
+    # its living and the savings it reported were money it could not have had.
+    # `price_index` is that path's CPI through the previous year, the same
+    # `(1 + i) ** (year - 1)` convention; callers that do not pass one keep the
+    # historical formula.
+    _px = (float(price_index) if price_index is not None
+           else (1 + STATE.inflation) ** (year - 1))
+    expenses = _spend0 * _px
     if (contrib_params.savings_mode != "savings_rate"
             and student_debt_payment_nominal is not None):
         # The user-confirmed Phase 4 contract says today's working expense
@@ -1689,7 +1709,7 @@ def compute_contributions_for_year(
         # twice; leaving the embedded line after payoff would make the freed
         # cash disappear instead of becoming residual saving.
         _embedded = (float(student_debt_embedded_payment_nominal)
-                     * (1 + STATE.inflation) ** (year - 1))
+                     * _px)
         # Lifestyle creep applies to lifestyle, not to a fixed nominal debt
         # contract. Subtract the embedded loan line first, raise only the
         # residual living cost, then restore the schedule's actual payment.
@@ -1703,10 +1723,10 @@ def compute_contributions_for_year(
                       contrib_params.commuting_schedule_real):
         if _schedule and 0 <= year - 1 < len(_schedule):
             _temporary_real += float(_schedule[year - 1])
-    expenses += _temporary_real * (1 + STATE.inflation) ** (year - 1)
+    expenses += _temporary_real * _px
     if 0 <= year - 1 < len(_ACCUMULATION_HOUSING_ADJUSTMENTS_REAL):
         expenses += (float(_ACCUMULATION_HOUSING_ADJUSTMENTS_REAL[year - 1])
-                     * (1 + STATE.inflation) ** (year - 1))
+                     * _px)
         expenses = max(0.0, expenses)
     if disability_active:
         # This is the EXTRA premium after losing working-age employer cover,
@@ -2255,9 +2275,16 @@ def project_stratified_v8(
     alive_by_year: Optional[Sequence[tuple[bool, bool]]] = None,
     capture_ss_earnings: bool = False,
     student_debt=None,
+    growth_returns: Optional[Sequence[float]] = None,
 ) -> list[dict]:
     """
     Accumulation phase with time-varying contributions due to promotion event.
+
+    `growth_returns` (MODEL_AUDIT A3) is what the accounts earn each year --
+    the plan's equity/bond blend. `returns` stays the EQUITY market's year,
+    because that is what a layoff's "bad market year" test is about. Omitted,
+    the accounts earn the equity return, which is what this function did
+    before a blend could reach it.
     """
     initial = initial or INITIAL_STACK
     contrib_params = contrib_params or V8ContributionParams()
@@ -2296,7 +2323,7 @@ def project_stratified_v8(
         path[0]['disability_event_year'] = _disability.event_year
 
     for i, (r, inf) in enumerate(zip(returns, inflations)):
-        r_eff = r - friction
+        r_eff = (growth_returns[i] if growth_returns is not None else r) - friction
         # Every account the stack holds, not four names (OPEN_ITEMS E37). The
         # accumulation half of the same defect: a fifth account would be
         # contributed to and then never compound.
@@ -2314,6 +2341,13 @@ def project_stratified_v8(
         _wf = 1.0
         if _WAGE_FACTORS is not None and 0 <= year - 1 < len(_WAGE_FACTORS):
             _wf = float(_WAGE_FACTORS[year - 1])
+        # MODEL_AUDIT B3: the path's inflation surprise reaches pay. 1.0
+        # exactly when the switch is off, so nothing below moves.
+        _wage_infl = 1.0
+        if getattr(contrib_params, "wage_inflation_passthrough_enabled", False):
+            _wage_infl = (cumulative_inf_factor
+                          / (1 + state.inflation) ** (year - 1))
+            _wf *= _wage_infl
         # Roadmap 9.0 (B10). Off => `_brk_mult` stays None and every line from
         # here down runs exactly the code it ran before this module existed.
         _brk = _CAREER_BREAK
@@ -2329,7 +2363,9 @@ def project_stratified_v8(
                 or (_SPOUSE_LAYOFF is not None
                     and getattr(_SPOUSE_LAYOFF, "enabled", False))):
             _cb_meta = {}
-        _disability_index = (1 + state.inflation) ** (year - 1)
+        # MODEL_AUDIT A7: the path's own CPI through last year, not the plan's
+        # mean compounded -- the same index the FI target uses.
+        _disability_index = cumulative_inf_factor
         # Roadmap 10.0 Phase 7 (U35 / A1). The user's vest schedule is in
         # today's dollars, converted here with the SAME price index every
         # other real amount in this loop uses. Past the end of the schedule
@@ -2491,6 +2527,8 @@ def project_stratified_v8(
             espp_sale_proceeds_nominal=_espp_sale_nominal,
             espp_ordinary_income_nominal=_espp_ordinary_nominal,
             espp_ltcg_nominal=_espp_ltcg_nominal,
+            price_index=cumulative_inf_factor,
+            wage_inflation_factor=_wage_infl,
         )
         if _brk is not None:
             # The paired counterfactual, computed on THIS path rather than in
@@ -2530,6 +2568,8 @@ def project_stratified_v8(
                 espp_sale_proceeds_nominal=_espp_sale_nominal,
                 espp_ordinary_income_nominal=_espp_ordinary_nominal,
                 espp_ltcg_nominal=_espp_ltcg_nominal,
+                price_index=cumulative_inf_factor,
+                wage_inflation_factor=_wage_infl,
             )
             _cb_meta["earned_gross_without_break"] = _cf_meta["earned_gross"]
             _cb_meta["employee_deferrals_without_break"] = (

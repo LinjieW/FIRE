@@ -121,6 +121,24 @@ class V7Config:
     friction_accum: float = 0.000              # 0 bps in accumulation
     friction_retire: float = 0.005             # 50 bps in retirement
 
+    # ----- MODEL_AUDIT B1: inflation persistence in the default sampler -----
+    #: AR(1) coefficient on the path's inflation deviation from its mean. It
+    #: always reached the Markov sampler, and still does whatever the switch
+    #: below says. The page labelled it "Markov only" until MODEL_AUDIT, so a
+    #: saved iid plan may carry a non-zero value that meant nothing; reading
+    #: it in the iid sampler without a switch would move those plans.
+    inflation_ar1: float = 0.0
+    #: MODEL_AUDIT B1: apply `inflation_ar1` in the default iid sampler too.
+    inflation_persistence_enabled: bool = False
+
+    # ----- MODEL_AUDIT B10: a bound on the fat tail -----
+    #: Student-t with 6 degrees of freedom produced single-year draws of -95%
+    #: and +1,051% in two million samples. When on, the standardised equity
+    #: shock is clipped at +/- `tail_clip_sigma`. Off by default, and off it
+    #: takes no branch at all.
+    tail_clip_enabled: bool = False
+    tail_clip_sigma: float = 5.0
+
     # ----- MC settings -----
     n_paths: int = 10_000
     seed: int = 42
@@ -134,6 +152,7 @@ def sample_joint_return_inflation(
     mu_inf: float, sigma_inf: float,
     rho: float, df: float, distribution: str,
     rng: np.random.Generator,
+    clip_sigma: Optional[float] = None,
 ) -> tuple[float, float]:
     """
     Sample (equity_return, inflation) jointly from bivariate distribution.
@@ -156,6 +175,11 @@ def sample_joint_return_inflation(
         scale = np.sqrt(max(df - 2.0, 1e-10) / max(chi2, 1e-10))
         z1 *= scale
         z2 *= scale
+
+    if clip_sigma is not None:
+        # MODEL_AUDIT B10: bound the equity shock only; inflation has its own
+        # floor and ceiling below.
+        z1 = max(-float(clip_sigma), min(float(clip_sigma), z1))
 
     # Step 3: equity (lognormal mapping preserves r > -1)
     sigma_log = np.sqrt(np.log(1 + sigma * sigma / (1 + mu_arith) ** 2))
@@ -198,6 +222,9 @@ def sample_lifetime_v7(
             config.inflation_equity_corr,
             config.return_df, config.return_distribution,
             rng,
+            clip_sigma=(float(config.tail_clip_sigma)
+                        if getattr(config, "tail_clip_enabled", False)
+                        else None),
         )
         # Cap inflation to plausible range
         inf = max(config.inflation_floor, min(config.inflation_ceiling, inf))

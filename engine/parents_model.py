@@ -147,6 +147,12 @@ class ParentsParams:
     #: left to someone else, or gone to care in a country this model does not
     #: cover.
     assume_zero_bequest: bool = False
+    #: MODEL_AUDIT B9. Off, a parent's care and estate are modelled only once
+    #: the plan holder has retired. On, the same draw covers the whole plan:
+    #: care during the working years is a mandatory outflow from the taxable
+    #: account, and an estate received then is an inflow, both before FIRE is
+    #: judged.
+    include_working_years_enabled: bool = False
     rng: object = None
 
 

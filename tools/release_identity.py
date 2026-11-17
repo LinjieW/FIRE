@@ -70,6 +70,7 @@ ROOT_FILES: dict[str, str] = {
     "ROADMAP_12_CLOSEOUT.md": "documentation",
     "DECISIONS_PENDING_2026-09-05.md": "documentation",
     "INPUT_SURFACE_2026-09-10.md": "documentation",
+    "MODEL_AUDIT_2026-11-15.md": "documentation",
     "ROADMAP_13_CLOSEOUT.md": "documentation",
     "ROADMAP_14_CLOSEOUT.md": "documentation",
     "ROADMAP_11.0.md": "documentation",
