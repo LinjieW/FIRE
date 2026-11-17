@@ -162,7 +162,7 @@ def _run_path(cfg: dict, scenario: Scenario, choices: Sequence[str],
     glide = _ChoiceGlide(kw["glide_path"], controller)
     eq, bd, inf = _paths(scenario, seed, sample_index)
     mortality = dataclasses.replace(kw["mortality"], enabled=False)
-    with (ENG._ENGINE_LOCK, ENG.match_excludes_bonus(),
+    with (ENG._ENGINE_LOCK,
           ENG._household_ctx(cfg), ENG._tax_posture_ctx(cfg)):
         result = ENG.simulate_retirement_v98(
             starting_accounts=starting, starting_age=starting_age,

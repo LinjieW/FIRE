@@ -124,7 +124,7 @@ from fire_v8_model import (
     PromotionParams, V8ContributionParams, sample_promotion_event,
 )
 from fire_v9_1_model import (
-    MortalityParams, MORTALITY_MALE, MORTALITY_FEMALE,
+    MortalityParams, MORTALITY_MALE_SSA, MORTALITY_FEMALE_SSA,
     annual_mortality_rate,
     MedicalParams, DEFAULT_MEDICAL, compute_medical_components,
     MedicalHousehold,
@@ -132,6 +132,12 @@ from fire_v9_1_model import (
     estimate_magi_proxy, compute_aca_premium_paid,
     WithdrawalRule, FixedRealRule, GuytonKlingerRule,
 )
+# MODEL_AUDIT_2026-11-15 A10. Every use of these two names in this generation
+# -- the plan holder's default, the spouse, each parent -- now reads the SSA
+# period life table. Rebound here rather than renamed at each use so the module
+# keeps exporting the names the adapter and the tests already import.
+MORTALITY_MALE = MORTALITY_MALE_SSA
+MORTALITY_FEMALE = MORTALITY_FEMALE_SSA
 from fire_v9_2_model import (
     RothLadderParams,
     update_seasoning_queue, execute_roth_conversion,
@@ -468,7 +474,8 @@ def _apply_life_events_accum_v98(accum_path, events_by_age, returns, state,
         step = accum_path[i]
         r_tax = 1.0 + returns[i - 1] - friction - drag_taxable
         delta *= r_tax
-        cpi_i = float(step["expenses"]) / exp0
+        cpi_i = (float(step["cpi"]) if "lifestyle_creep_multiplier" in step
+                 else float(step["expenses"]) / exp0)
         for amt_real in events_by_age.get(int(step["age"]), ()):  
             if amt_real > 0:
                 delta -= (amt_real * cpi_i) / max(1.0 - wd_taxable, 1e-3)
@@ -543,7 +550,8 @@ def _apply_income_streams_accum_v98(
         age = int(step["age"])
         r_tax = 1.0 + returns[i - 1] - friction - drag_taxable
         delta *= r_tax
-        cpi_i = float(step["expenses"]) / exp0
+        cpi_i = (float(step["cpi"]) if "lifestyle_creep_multiplier" in step
+                 else float(step["expenses"]) / exp0)
         if alive_by_year is not None:
             primary_alive, spouse_alive = alive_by_year[i - 1]
         else:
@@ -627,7 +635,8 @@ def _apply_events_and_income_accum_v98(
         age = int(step["age"])
         r_tax = 1.0 + returns[i - 1] - friction - drag_taxable
         delta *= r_tax
-        cpi_i = float(step["expenses"]) / exp0
+        cpi_i = (float(step["cpi"]) if "lifestyle_creep_multiplier" in step
+                 else float(step["expenses"]) / exp0)
 
         # Preserve the generic event channel's existing within-year behavior.
         for amount_real in events_by_age.get(age, ()):
@@ -1139,47 +1148,59 @@ def fund_shock_or_purchase_v98(
     tax_us: TaxParams,
     current_age: float,
     roth_locked: float,
+    gain_fraction: Optional[float] = None,
+    meta_out: Optional[dict] = None,
 ) -> tuple[AccountStack, float, float]:
-    """v9.4 fund_shock_or_purchase + taxable-leg tax gross-up (F-13)."""
-    accounts = accounts.copy()
-    remaining = cost_nominal
-    penalty = 0.0
+    """Fund a mandatory one-off outflow from the account stack.
 
-    # Taxable — grossed up for cap-gains withdrawal tax (F-13)
-    if remaining > 0 and accounts.taxable > 0:
-        rate = tax_us.withdrawal_tax_taxable
-        gross_needed = remaining / max(1 - rate, 0.001)
-        gross_take = min(gross_needed, accounts.taxable)
-        accounts.taxable -= gross_take
-        remaining -= gross_take * (1 - rate)
+    MODEL_AUDIT_2026-11-15 A4. This used to name three buckets by hand --
+    taxable, then the pre-tax 401(k), then the Roth -- so a balance held in an
+    HSA or a governmental 457(b) could never pay a life event, a parent's or
+    one's own care, a student-loan payment or a destination home purchase.
+    Measured: $1,005,000 held, $60,000 owed, $4,800 paid. It was the fourth
+    call site of the shape OPEN_ITEMS E34/E36/E37 removed from the others: a
+    balance counted in net worth that could not be spent.
 
-    # 401k with potential early-withdrawal penalty
-    if remaining > 0 and accounts.pretax_401k > 0:
-        base_rate = tax_us.withdrawal_tax_traditional
-        effective_rate = (base_rate + EARLY_WD_PENALTY_RATE
-                          if current_age < EARLY_WD_PENALTY_AGE else base_rate)
-        gross_needed = remaining / max(1 - effective_rate, 0.001)
-        gross_take = min(gross_needed, accounts.pretax_401k)
-        accounts.pretax_401k -= gross_take
-        remaining -= gross_take * (1 - effective_rate)
-        if current_age < EARLY_WD_PENALTY_AGE:
-            penalty += gross_take * EARLY_WD_PENALTY_RATE
+    It is now the regular withdrawal, in the declared order, with each type's
+    own rate and penalty. For a stack with no HSA or 457(b) balance that is
+    the same arithmetic step for step -- taxable grossed up at its rate (F-13),
+    the 401(k) at its rate plus the early-withdrawal penalty, then the
+    reachable Roth -- so plans that never held those two accounts reproduce.
 
-    # Roth (last resort, unlocked portion)
-    if remaining > 0:
-        accessible_roth = max(0.0, accounts.roth_ira - roth_locked)
-        if accessible_roth > 0:
-            take = min(remaining, accessible_roth)
-            accounts.roth_ira -= take
-            remaining -= take
-
-    paid = cost_nominal - max(remaining, 0)
-    return accounts, paid, penalty
+    `gain_fraction` is the measured `(value - basis) / value` of the taxable
+    bucket (MODEL_AUDIT A12); `None` keeps the historical "all of it is gain".
+    `meta_out` receives what `withdraw_with_seasoning_v94` reports, including
+    the capital-gain withdrawal a caller needs to retire basis.
+    """
+    return withdraw_with_seasoning_v94(
+        accounts, cost_nominal, tax_us, roth_locked, current_age,
+        gain_fraction=gain_fraction, meta_out=meta_out)
 
 
 # ============================================================
 # v9.8 RETIREMENT SIMULATOR (F-1A + F-2 + F-3 + F-14)
 # ============================================================
+def _spousal_reduction(claim_age: int, fra_age: int) -> float:
+    """SSA spousal reduction for claiming before FRA; 1.0 at or after it."""
+    months = max(0, (int(fra_age) - int(claim_age)) * 12)
+    first = min(months, 36)
+    rest = max(0, months - 36)
+    return max(0.0, 1.0 - first * (25.0 / 36.0) / 100.0
+               - rest * (5.0 / 12.0) / 100.0)
+
+
+def _spousal_benefit(own, other, own_age, other_age, cpi_now) -> float:
+    """Half the other earner's PIA, reduced for an early claim, payable once
+    both have claimed (MODEL_AUDIT B4). Nominal, CPI-indexed like the rest."""
+    if not (own.enabled and other.enabled):
+        return 0.0
+    if own_age < own.claim_age or other_age < other.claim_age:
+        return 0.0
+    return (0.5 * float(other.pia_monthly_y0) * 12.0
+            * _spousal_reduction(own.claim_age, own.fra_age)
+            * float(cpi_now))
+
+
 def compose_annual_medical_target(target_nominal: float,
                                   initial_nonmedical_share: float,
                                   components: dict,
@@ -1267,6 +1288,7 @@ def simulate_retirement_v98(
     execution_policy: Optional[ExecutionSimplificationPolicy] = None,
     student_debt=None,
     health_chain_path: Optional["HEALTH_CHAIN.HealthChainPath"] = None,
+    roth_contribution_basis_at_start: Optional[float] = None,
 ) -> dict:
     state = state or STATE
     tax_us = tax_us or TAX_US
@@ -1361,10 +1383,33 @@ def simulate_retirement_v98(
             if initial_total_expenses > 0 else 0.0)
 
     initial_swr = initial_total_expenses / max(starting_accounts.total, 1.0)
+    # MODEL_AUDIT_2026-11-15 A11. `initial_total_expenses` is priced at the
+    # FIRE year, but the first payment is made a year later, after that year's
+    # inflation has already been applied to the CPI index and to the
+    # portfolio. Every rule whose year 0 returns its initial amount verbatim
+    # therefore paid last year's dollars, and every later year compounded from
+    # there: the whole retirement ran 1/(1 + first-year inflation) below the
+    # budget -- about 3% on every path, measured 0.9709 at a flat 3%.
+    #
+    # The fix re-expresses the initialisation at the FIRST PAYMENT'S price
+    # level: amount, portfolio and CPI anchor all move by the same factor, so
+    # every real quantity a rule reads (GK's freeze basis, the floor of
+    # floor-and-upside, ABW's bequest target, the initial SWR) is unchanged,
+    # and only the first nominal payment rises to what the budget buys.
+    if len(inflations):
+        _first_year_inflation = (
+            ((state.inflation_cn if relocation.use_cn_inflation
+              else state.inflation) if starts_in_china
+             else float(inflations[0])))
+    else:
+        _first_year_inflation = 0.0
+    _first_payment_factor = 1.0 + _first_year_inflation
+    first_payment_nominal = initial_total_expenses * _first_payment_factor
     # FIX F-4 activation: pass the true CPI at rule initialization.
-    rule_state = _init_rule(rule, starting_accounts.total,
-                            initial_total_expenses, initial_swr,
-                            fire_year_cpi_cumulative)
+    rule_state = _init_rule(rule,
+                            starting_accounts.total * _first_payment_factor,
+                            first_payment_nominal, initial_swr,
+                            fire_year_cpi_cumulative * _first_payment_factor)
 
     in_china = starts_in_china
     fx_rate = relocation.fx_initial
@@ -1440,6 +1485,8 @@ def simulate_retirement_v98(
     # never simulated; the LTC channel beside it already used None correctly.
     eldercare_on = eldercare_events is not None
     eldercare_total_real = 0.0 if eldercare_on else None
+    # MODEL_AUDIT A5: what was billed and what was paid are two numbers.
+    eldercare_paid_real = 0.0 if eldercare_on else None
     eldercare_count = 0 if eldercare_on else None
     inheritance_received_real = 0.0
     sh_property_purchased_nominal = 0.0
@@ -1458,6 +1505,7 @@ def simulate_retirement_v98(
     for age, amt in (ltc_events or []):
         ltc_by_age.setdefault(int(age), []).append(float(amt))
     ltc_total_real = 0.0 if ltc_on else None
+    ltc_paid_real = 0.0 if ltc_on else None
     ltc_years_paid = 0 if ltc_on else None
 
     # Parent lifecycle. `None` means the module never ran, and the totals stay
@@ -1471,6 +1519,7 @@ def simulate_retirement_v98(
     for age, amt in (parent_bequests or []):
         parent_bequest_by_age.setdefault(int(age), []).append(float(amt))
     parent_care_total_real = 0.0 if parents_on else None
+    parent_care_paid_real = 0.0 if parents_on else None
     parent_bequests_received_real = 0.0 if parents_on else None
 
     # v9.8+ opt-in life events (None/empty => zero ops). Outflows use the same
@@ -1547,6 +1596,87 @@ def simulate_retirement_v98(
     # `None` when unpriced or when nothing can die; `0` once armed means the
     # sampler ran and this path produced no death inside the horizon, which is
     # a measurement rather than an absence.
+    # MODEL_AUDIT A4/A12/A5. Every mandatory one-off outflow goes through this:
+    # the declared withdrawal order over every account held, the taxable leg
+    # taxed on its MEASURED gain rather than on principal, and the basis
+    # retired in proportion to what was sold -- exactly as the regular
+    # withdrawal below already does. Returns what was actually paid; callers
+    # that bill a cost compare it with the bill.
+    # MODEL_AUDIT B6. Before 59.5 only Roth contributions -- and conversions
+    # that have seasoned -- come out free; growth on them does not. `None`
+    # (the switch off, or no basis stated) leaves the historical rule: only
+    # unseasoned conversions are locked.
+    _roth_basis = (float(roth_contribution_basis_at_start)
+                   if (roth_contribution_basis_at_start is not None
+                       and getattr(roth_ladder, "earnings_lock_enabled", False))
+                   else None)
+
+    def _roth_lock():
+        if _roth_basis is None or current_age >= EARLY_WD_PENALTY_AGE:
+            return roth_locked
+        reachable = max(0.0, _roth_basis - roth_locked)
+        return max(roth_locked, accounts.roth_ira - reachable)
+
+    def _roth_spent(before):
+        nonlocal _roth_basis
+        if _roth_basis is not None:
+            _roth_basis = max(0.0, _roth_basis - max(0.0, before - accounts.roth_ira))
+
+    # MODEL_AUDIT B12, when the true-tax engine is on: what this year's
+    # mandatory draws add to this year's ordinary income and realised gains.
+    _mandatory_taxed = bool(
+        _tt_on and getattr(tax_true, "mandatory_outflows_taxed_enabled", False))
+    _tax_untaxed = (replace(tax_us, withdrawal_tax_taxable=0.0,
+                            withdrawal_tax_traditional=0.0)
+                    if _mandatory_taxed else None)
+    _mandatory_income = {"ordinary": 0.0, "ltcg": 0.0}
+
+    def _fund_mandatory(cost_nominal):
+        nonlocal accounts, taxable_basis, total_early_wd_penalty
+        before = max(0.0, accounts.taxable)
+        gain = (0.0 if before <= 0.0 else
+                max(0.0, min(1.0, (before - taxable_basis) / before)))
+        meta: dict = {}
+        _roth_before = accounts.roth_ira
+        _through_solver = _mandatory_taxed and not in_china
+        accounts, paid, penalty = fund_shock_or_purchase_v98(
+            accounts, cost_nominal,
+            _tax_untaxed if _through_solver else tax_us,
+            current_age, _roth_lock(),
+            gain_fraction=gain, meta_out=meta)
+        if _through_solver:
+            for _row in meta.get("withdrawals_by_account", []):
+                if _row["field"] in ("pretax_401k", "gov_457b"):
+                    _mandatory_income["ordinary"] += _row["gross_nominal"]
+                elif _row["field"] == "taxable":
+                    _mandatory_income["ltcg"] += _row["gross_nominal"] * gain
+        _roth_spent(_roth_before)
+        taken = float(meta.get("capital_gain_withdrawal", 0.0))
+        if before > 0.0 and taken > 0.0:
+            taxable_basis -= taxable_basis * min(1.0, taken / before)
+        taxable_basis = min(max(0.0, taxable_basis),
+                            max(0.0, accounts.taxable))
+        total_early_wd_penalty += penalty
+        return paid
+
+    def _care_shortfall(source, billed_real, billed_nominal, paid_nominal):
+        """MODEL_AUDIT A5: a care bill that could not be paid is a failure,
+        recorded the way an unpaid life event is -- not a cost reported as
+        paid while the money never left."""
+        nonlocal shortfall_age
+        if paid_nominal >= billed_nominal - 1.0:
+            return
+        life_event_shortfalls.append({
+            "age": current_age,
+            "phase": "retirement",
+            "source": source,
+            "mandatory_outflow_real": billed_real,
+            "shortfall_real": max(0.0, billed_nominal - paid_nominal)
+            / max(cpi_cumulative, 1e-9),
+        })
+        if shortfall_age is None:
+            shortfall_age = current_age
+
     _eol_peak_real = getattr(medical, "eol_peak_real", None)
     eol_armed = _eol_peak_real is not None and mortality.enabled
     eol_peaks_charged = 0 if eol_armed else None
@@ -1604,6 +1734,8 @@ def simulate_retirement_v98(
             roth_ladder.senior_age_threshold, roth_ladder.seasoning_years,
         )
 
+        _mandatory_income["ordinary"] = 0.0
+        _mandatory_income["ltcg"] = 0.0
         deaths_this_year = 0
         if household_on:
             spouse_age = current_age + _hh.spouse_age_offset
@@ -1661,10 +1793,7 @@ def simulate_retirement_v98(
 
             if sh_property.enabled:
                 purchase_nominal = sh_property.purchase_amount_y0 * cpi_cumulative
-                accounts, paid, penalty = fund_shock_or_purchase_v98(
-                    accounts, purchase_nominal, tax_us, current_age, roth_locked,
-                )
-                total_early_wd_penalty += penalty
+                paid = _fund_mandatory(purchase_nominal)
                 sh_property_purchased_nominal = paid
                 if paid >= purchase_nominal - 1.0:
                     col_effective = max(
@@ -1689,6 +1818,10 @@ def simulate_retirement_v98(
             inh_age, inh_amount_y0 = inheritance_event
             if current_age == inh_age:
                 accounts.taxable += inh_amount_y0 * cpi_cumulative
+                # Cash arriving is basis, not gain (MODEL_AUDIT A12): an
+                # inheritance is stepped up, and taxing it as gain when it is
+                # later sold taxes money nobody earned.
+                taxable_basis += inh_amount_y0 * cpi_cumulative
                 inheritance_received_real += inh_amount_y0
 
         # A parent's bequest, credited the same way and in the same place, so
@@ -1699,17 +1832,17 @@ def simulate_retirement_v98(
         if current_age in parent_bequest_by_age:
             for amt_y0 in parent_bequest_by_age[current_age]:
                 accounts.taxable += amt_y0 * cpi_cumulative
+                taxable_basis += amt_y0 * cpi_cumulative
                 parent_bequests_received_real += amt_y0
 
         if current_age in eldercare_by_age:
             for amt_y0 in eldercare_by_age[current_age]:
                 shock_nominal = amt_y0 * cpi_cumulative
-                accounts, paid, penalty = fund_shock_or_purchase_v98(
-                    accounts, shock_nominal, tax_us, current_age, roth_locked,
-                )
-                total_early_wd_penalty += penalty
+                paid = _fund_mandatory(shock_nominal)
                 eldercare_total_real += amt_y0
+                eldercare_paid_real += paid / cpi_cumulative
                 eldercare_count += 1
+                _care_shortfall("eldercare", amt_y0, shock_nominal, paid)
 
         # The plan's share of a parent's care, funded through the very same
         # call as the eldercare shock above — it is the same event, arriving
@@ -1718,11 +1851,10 @@ def simulate_retirement_v98(
         if current_age in parent_care_by_age:
             for amt_y0 in parent_care_by_age[current_age]:
                 care_nominal = amt_y0 * cpi_cumulative
-                accounts, paid, penalty = fund_shock_or_purchase_v98(
-                    accounts, care_nominal, tax_us, current_age, roth_locked,
-                )
-                total_early_wd_penalty += penalty
+                paid = _fund_mandatory(care_nominal)
                 parent_care_total_real += amt_y0
+                parent_care_paid_real += paid / cpi_cumulative
+                _care_shortfall("parent_care", amt_y0, care_nominal, paid)
 
         # Long-term care, funded exactly as the eldercare shock is: a mandatory
         # outflow met from the account stack, outside the consumption identity,
@@ -1730,12 +1862,11 @@ def simulate_retirement_v98(
         if current_age in ltc_by_age:
             for amt_y0 in ltc_by_age[current_age]:
                 care_nominal = amt_y0 * cpi_cumulative
-                accounts, paid, penalty = fund_shock_or_purchase_v98(
-                    accounts, care_nominal, tax_us, current_age, roth_locked,
-                )
-                total_early_wd_penalty += penalty
+                paid = _fund_mandatory(care_nominal)
                 ltc_total_real += amt_y0
+                ltc_paid_real += paid / cpi_cumulative
                 ltc_years_paid += 1
+                _care_shortfall("ltc", amt_y0, care_nominal, paid)
 
         if student_debt is not None:
             # Schedule year 0 is the first accumulation year.  A retirement
@@ -1745,10 +1876,7 @@ def simulate_retirement_v98(
             _debt_due = float(student_debt.payment_for_year(_debt_year))
             _debt_paid = 0.0
             if _debt_due > 0.0:
-                accounts, _debt_paid, penalty = fund_shock_or_purchase_v98(
-                    accounts, _debt_due, tax_us, current_age, roth_locked,
-                )
-                total_early_wd_penalty += penalty
+                _debt_paid = _fund_mandatory(_debt_due)
                 student_debt_total_scheduled_nominal += _debt_due
                 student_debt_total_paid_nominal += _debt_paid
                 if _debt_paid < _debt_due - 1.0:
@@ -1772,10 +1900,7 @@ def simulate_retirement_v98(
             for amt_y0 in life_by_age[current_age]:
                 ev_nominal = amt_y0 * cpi_cumulative
                 if ev_nominal > 0:
-                    accounts, paid, penalty = fund_shock_or_purchase_v98(
-                        accounts, ev_nominal, tax_us, current_age, roth_locked,
-                    )
-                    total_early_wd_penalty += penalty
+                    paid = _fund_mandatory(ev_nominal)
                     life_event_out_real += amt_y0
                     if paid < ev_nominal - 1.0:
                         life_event_shortfalls.append({
@@ -1789,6 +1914,7 @@ def simulate_retirement_v98(
                             shortfall_age = current_age
                 else:
                     accounts.taxable += -ev_nominal
+                    taxable_basis += -ev_nominal
                     life_event_in_real += -amt_y0
 
         # Structured income is evaluated after mandatory events so it cannot
@@ -1845,6 +1971,18 @@ def simulate_retirement_v98(
             conversion_by_age.append((int(current_age),
                                       float(conversion_this_year)))
         roth_locked += conversion_this_year
+        if _roth_basis is not None:
+            # A conversion is basis once it seasons; until then it is also
+            # locked by the seasoning queue, so counting it now is safe.
+            _roth_basis += conversion_this_year
+        # MODEL_AUDIT B5: who can claim the 65+ standard deduction this year.
+        _persons_65 = (
+            (int(primary_alive and current_age >= 65)
+             + int(spouse_alive and (current_age + _hh.spouse_age_offset) >= 65))
+            if household_on else int(current_age >= 65))
+        # MODEL_AUDIT B7: this year's qualified medical costs, the HSA's
+        # tax-free allowance. `None` when the switch is off.
+        _hsa_allowance = None
         if _tt_on and not in_china and conversion_this_year > 0:
             # refund the ladder's flat tax — the true engine taxes the
             # conversion inside the real brackets below instead. In China the
@@ -1866,6 +2004,8 @@ def simulate_retirement_v98(
         aca_priced_premium = components['premium_aca_portion']
         current_medical_gross = (
             components['routine'] + full_premium + components['oop'])
+        if getattr(tax_us, "hsa_qualified_only_enabled", False) and not in_china:
+            _hsa_allowance = current_medical_gross
 
         # ---- FIX F-1A · target computation ----
         _trajectory_relocation_year = False
@@ -1936,7 +2076,7 @@ def simulate_retirement_v98(
             _execution_exposed = True
             if _execution_fixed_target_nominal is None:
                 if year_idx == 0 or _previous_rule_target_nominal is None:
-                    _execution_fixed_target_nominal = initial_total_expenses
+                    _execution_fixed_target_nominal = first_payment_nominal
                 else:
                     _execution_fixed_target_nominal = (
                         _previous_rule_target_nominal * (1.0 + inf))
@@ -2004,6 +2144,17 @@ def simulate_retirement_v98(
             b_s = compute_ss_annual_income(
                 spouse_age, cpi_at_spouse_ss_claim or cpi_cumulative,
                 cpi_cumulative, spouse_ss)
+            if primary_alive and spouse_alive:
+                # MODEL_AUDIT B4: the spousal benefit. While both are alive and
+                # the other has claimed, each receives the higher of their own
+                # benefit and half the other's PIA -- reduced for claiming
+                # before full retirement age (25/36 of 1% a month for the first
+                # 36 months, 5/12 of 1% after), with no delayed credits. Deemed
+                # filing makes it one benefit, the larger, not two added.
+                b_p = max(b_p, _spousal_benefit(
+                    ss, spouse_ss, current_age, spouse_age, cpi_cumulative))
+                b_s = max(b_s, _spousal_benefit(
+                    spouse_ss, ss, spouse_age, current_age, cpi_cumulative))
             ss_income_gross = ((b_p + b_s) if (primary_alive and spouse_alive)
                                else max(b_p, b_s))
         else:
@@ -2097,16 +2248,19 @@ def simulate_retirement_v98(
             # second solve re-runs from this same `accounts`, so taking the
             # fraction after the first would price the re-solve off a bucket
             # that was never actually drawn down.
+            _roth_before_year = accounts.roth_ira
             _tax_before = max(0.0, accounts.taxable)
             _gain_frac = (0.0 if _tax_before <= 0.0 else
                           max(0.0, min(1.0,
                                        (_tax_before - taxable_basis)
                                        / _tax_before)))
             res_tt = solve_retirement_year(
-                accounts, need1, ss_income, conversion_this_year,
-                roth_locked, current_age, cpi_cumulative, tax_true_year,
+                accounts, need1, ss_income, conversion_this_year + _mandatory_income["ordinary"],
+                _roth_lock(), current_age, cpi_cumulative, tax_true_year,
                 rmd_bases_prior_year_end=prior_year_end_balances,
-                gain_fraction=_gain_frac)
+                gain_fraction=_gain_frac, persons_65_plus=_persons_65,
+                hsa_qualified_allowance=_hsa_allowance,
+                extra_ltcg_nominal=_mandatory_income["ltcg"])
             if current_age < medical.medicare_age:
                 # ACA: re-derive the subsidy from TRUE MAGI (one extra pass)
                 aca_paid_true = compute_aca_premium_paid(
@@ -2144,10 +2298,12 @@ def simulate_retirement_v98(
             need2 = max(0.0, need2_total - income_applied)
             if abs(need2 - need1) > 1.0:
                 res_tt = solve_retirement_year(
-                    accounts, need2, ss_income, conversion_this_year,
-                    roth_locked, current_age, cpi_cumulative, tax_true_year,
+                    accounts, need2, ss_income, conversion_this_year + _mandatory_income["ordinary"],
+                    _roth_lock(), current_age, cpi_cumulative, tax_true_year,
                     rmd_bases_prior_year_end=prior_year_end_balances,
-                    gain_fraction=_gain_frac)
+                    gain_fraction=_gain_frac, persons_65_plus=_persons_65,
+                    hsa_qualified_allowance=_hsa_allowance,
+                    extra_ltcg_nominal=_mandatory_income["ltcg"])
             # Store the final result, after any ACA/IRMAA-driven re-solve, so
             # the exact t−2 record carries both its final MAGI and tax-year
             # filing status into a future premium year.
@@ -2158,14 +2314,23 @@ def simulate_retirement_v98(
             # ACA/IRMAA can move the final need by <=$1 without triggering a
             # second solve. Judge material insolvency against that final need,
             # not the preliminary solver's now-stale ``shortfall``.
+            #
+            # And only when the solver says the accounts were EXHAUSTED
+            # (MODEL_AUDIT_2026-11-15 A2). A gap with money still undrawn is
+            # arithmetic, not insolvency: the sub-dollar ACA/IRMAA drift just
+            # described can add to the solver's own sub-dollar tolerance and
+            # clear $1 on a path with millions left, and before the solver
+            # iterated to convergence it routinely did so by tens of dollars.
             material_true_tax_shortfall = (
-                max(0.0, need2 - res_tt["delivered"]) > 1.0
+                bool(res_tt["exhausted"])
+                and max(0.0, need2 - res_tt["delivered"]) > 1.0
             )
             strict_cash_year = (
                 income_cash_this_year or material_true_tax_shortfall
             )
             adjusted_target = need2_total
             accounts = res_tt["accounts"]
+            _roth_spent(_roth_before_year)
             # Retire basis in the same proportion as the shares sold, then
             # credit what came back in. `deposit_back` is RMD/SS money that has
             # already been taxed as ordinary income, and `income_surplus` is
@@ -2251,11 +2416,14 @@ def simulate_retirement_v98(
                              (_tax_before_simple - taxable_basis)
                              / _tax_before_simple)))
             _wd_meta: dict = {}
+            _roth_before_year = accounts.roth_ira
             accounts, received, penalty_this_yr = withdraw_with_seasoning_v94(
-                accounts, portfolio_withdrawal_needed, tax_to_use, roth_locked,
+                accounts, portfolio_withdrawal_needed, tax_to_use, _roth_lock(),
                 current_age, gain_fraction=_gain_frac_simple,
                 meta_out=_wd_meta,
+                hsa_qualified_allowance=_hsa_allowance,
             )
+            _roth_spent(_roth_before_year)
             # Retire basis in the same proportion as the shares sold. Read
             # from the function rather than from the balance difference: the
             # balance also moved for deposits above, so the difference is not
@@ -2295,8 +2463,15 @@ def simulate_retirement_v98(
                 income_surplus_by_kind[kind] = (
                     income_surplus_by_kind.get(kind, 0.0) + amount)
 
-        if (material_true_tax_shortfall
-                or received < portfolio_withdrawal_needed - 1.0):
+        # On the true-tax path `received - portfolio_withdrawal_needed` IS
+        # `delivered - need2`, so the generic comparison below would re-admit
+        # exactly the unexhausted sub-dollar gaps the line above just ruled
+        # out. That path's verdict is `material_true_tax_shortfall` alone; the
+        # flat path, which has no solver and no `exhausted`, keeps its own.
+        _flat_withdrawal_short = (
+            not (_tt_on and not in_china)
+            and received < portfolio_withdrawal_needed - 1.0)
+        if material_true_tax_shortfall or _flat_withdrawal_short:
             survived_financially = False
             shortfall_age = current_age
             portfolio_path.append(accounts.total)
@@ -2378,6 +2553,12 @@ def simulate_retirement_v98(
         # initialised: an unmeasured zero and a measured zero must not print
         # the same.
         'ltc_total_real': ltc_total_real,
+        # Billed above, PAID here (MODEL_AUDIT A5). They differ exactly when
+        # the stack could not cover the bill, which is now also a recorded
+        # shortfall and a failed path.
+        'ltc_paid_real': ltc_paid_real,
+        'eldercare_paid_real': eldercare_paid_real,
+        'parent_care_paid_real': parent_care_paid_real,
         'ltc_years_paid': ltc_years_paid,
         # Same rule, same reason: None until the parent module actually ran.
         'parent_care_total_real': parent_care_total_real,
@@ -2790,6 +2971,8 @@ def simulate_lifecycle_v98(
     rng = rng or np.random.default_rng()
 
     total_years = state.accum_years + state.retire_horizon
+    #: The last age any path is simulated to (MODEL_AUDIT A9).
+    plan_end_age = int(state.start_age) + int(total_years)
 
     if health_chain_path is not None:
         _health_household = fire_v8_model._HOUSEHOLD
@@ -2852,6 +3035,36 @@ def simulate_lifecycle_v98(
             total_years, rng, config, regimes=regimes,
         )
         all_bond_returns = sample_bond_returns(all_equity_returns, bond_params, rng)
+        # MODEL_AUDIT B1. Persistence for the default sampler: the drawn
+        # deviations are re-expressed as an AR(1) around the same mean with the
+        # same unconditional spread, using no new draw, so 0.0 is literal
+        # identity and the equity/inflation correlation of each year's draw is
+        # kept. US CPI's own lag-1 autocorrelation over 1928-2024 is 0.71
+        # (measured on this engine's historical table); the default iid draw
+        # is -0.02.
+        _phi = float(getattr(config, "inflation_ar1", 0.0) or 0.0)
+        if (_phi and config.stochastic_inflation
+                and getattr(config, "inflation_persistence_enabled", False)):
+            _mu = float(config.inflation_mu)
+            _keep = float(np.sqrt(max(0.0, 1.0 - _phi * _phi)))
+            _prev = _mu
+            _persistent = []
+            for _x in all_inflations:
+                _y = _mu + _phi * (_prev - _mu) + _keep * (float(_x) - _mu)
+                _y = max(config.inflation_floor,
+                         min(config.inflation_ceiling, _y))
+                _persistent.append(_y)
+                _prev = _y
+            all_inflations = _persistent
+        # MODEL_AUDIT B11. Bonds that lose when inflation surprises upward.
+        # The sensitivity is the USER'S figure -- roughly the duration of what
+        # they hold -- and is required when this is on; nothing is defaulted.
+        if getattr(bond_params, "inflation_linked_enabled", False):
+            _beta = float(bond_params.inflation_beta)
+            _mu = float(config.inflation_mu)
+            all_bond_returns = [
+                float(_b) - _beta * (float(_i) - _mu)
+                for _b, _i in zip(all_bond_returns, all_inflations)]
 
     income_streams = _anchor_non_cola_pensions(
         tuple(income_streams or ()), state, all_inflations)
@@ -2864,6 +3077,39 @@ def simulate_lifecycle_v98(
     resolved_housing_events = resolve_housing_mortgage_events(
         housing_mortgage, state.start_age, all_inflations)
     effective_life_events = list(life_events or ())
+
+    # Each parent on their own table, resolved by their stated sex, with the
+    # plan's own `enabled` and `cap_age` still governing: a plan that has
+    # switched mortality off is not a plan where other people stop dying, but
+    # it IS one where this engine models nobody dying, and the parents module
+    # must not quietly reintroduce it. (Defined here rather than after FIRE so
+    # MODEL_AUDIT B9 can sample the whole plan before FIRE is judged.)
+    def _parent_death_rate(sex):
+        if not mortality.enabled:
+            return lambda age: 0.0
+        # No fallback: the adapter refuses a sex this engine has no table for,
+        # so reaching here with one would mean that check was removed. A quiet
+        # default would run somebody's mother on the plan holder's lifespan.
+        table = {"male": MORTALITY_MALE, "female": MORTALITY_FEMALE}[str(sex)]
+        return lambda age: annual_mortality_rate(age, table)
+
+    # MODEL_AUDIT B9. With the switch on, the parents are drawn ONCE over the
+    # whole plan, here, so care paid while still working comes out of the
+    # taxable account and an estate received then goes into it -- both before
+    # the FIRE test reads the balance. What falls after FIRE goes to the
+    # parent channel exactly as before. Off, nothing here runs.
+    _parents_whole_plan = bool(
+        parents is not None and getattr(parents, "mode", PARENTS.OFF) != PARENTS.OFF
+        and getattr(parents, "include_working_years_enabled", False))
+    _parent_life_events = []
+    if _parents_whole_plan:
+        _pw_care, _pw_bequests, _pw_meta = PARENTS.sample_parents(
+            parents, _parent_death_rate,
+            first_age=int(state.start_age) + 1, last_age=plan_end_age,
+            anchor_age=state.start_age, cap_age=int(mortality.cap_age))
+        _parent_life_events = ([(int(a), float(amt)) for a, amt in _pw_care]
+                               + [(int(a), -float(amt))
+                                  for a, amt in _pw_bequests])
 
     # ---- the house's own price path, when this plan asked for one ----
     # Placed here because this is where per-path event resolution already
@@ -2918,6 +3164,13 @@ def simulate_lifecycle_v98(
     if resolved_housing_events:
         effective_life_events.extend(resolved_housing_events)
         effective_life_events.sort(key=lambda item: (int(item[0]), float(item[1])))
+    # Everything retirement should still see as a LIFE event: the parent
+    # rows travel by their own channel after FIRE (MODEL_AUDIT B9).
+    _non_parent_life_events = list(effective_life_events)
+    if _parent_life_events:
+        effective_life_events = sorted(
+            effective_life_events + _parent_life_events,
+            key=lambda item: (int(item[0]), float(item[1])))
     life_events = effective_life_events or None
 
     if already_fired.enabled:
@@ -2925,6 +3178,18 @@ def simulate_lifecycle_v98(
     else:
         promo_year, bonus_pcts = sample_promotion_event(promo_params, rng)
     accum_returns = all_equity_returns[:state.accum_years]
+    # MODEL_AUDIT_2026-11-15 A3. The working years earned the EQUITY return
+    # whatever allocation the plan stated: "equity share now" reached only the
+    # retirement loop, and a 40/60 saver was simulated as 100/0 -- FIRE too
+    # early, drawdowns understated. The accounts now earn the same blend the
+    # retirement loop uses, at the same age convention (the year ending at
+    # age start + i + 1). At 100% equity `blended_return` returns the equity
+    # figure itself, so an all-equity plan is unchanged to the bit.
+    accum_growth = [
+        blended_return(eq_r, bd_r,
+                       glide_path.equity_pct(int(state.start_age) + i + 1))
+        for i, (eq_r, bd_r) in enumerate(
+            zip(accum_returns, all_bond_returns[:state.accum_years]))]
     accum_inflations = all_inflations[:state.accum_years]
     _hh_accum = fire_v8_model._HOUSEHOLD
     _household_accum = (
@@ -3014,6 +3279,7 @@ def simulate_lifecycle_v98(
             alive_by_year=alive_by_year,
             capture_ss_earnings=ssa_pia_resolver is not None,
             student_debt=student_debt,
+            growth_returns=accum_growth,
         )
     finally:
         fire_v8_model._WAGE_FACTORS = _wage_prev
@@ -3047,7 +3313,7 @@ def simulate_lifecycle_v98(
             _ev_meta,
             _income_accum_meta,
         ) = _apply_events_and_income_accum_v98(
-            accum_path, _ev_by_age, income_streams, accum_returns, state,
+            accum_path, _ev_by_age, income_streams, accum_growth, state,
             config.friction_accum, _tx.drag_taxable,
             _tx.withdrawal_tax_taxable,
             household_on=_household_accum,
@@ -3055,20 +3321,37 @@ def simulate_lifecycle_v98(
         )
     elif life_events:
         accum_path, _ev_meta = _apply_life_events_accum_v98(
-            accum_path, _ev_by_age, accum_returns, state,
+            accum_path, _ev_by_age, accum_growth, state,
             config.friction_accum, _tx.drag_taxable,
             _tx.withdrawal_tax_taxable,
         )
     elif income_streams:
         accum_path, _income_accum_meta = _apply_income_streams_accum_v98(
-            accum_path, income_streams, accum_returns, state,
+            accum_path, income_streams, accum_growth, state,
             config.friction_accum, _tx.drag_taxable,
             household_on=_household_accum,
             alive_by_year=alive_by_year,
         )
 
-    fire_step = (accum_path[0] if already_fired.enabled
-                 else find_fire_crossing(accum_path, fire_swr))
+    if already_fired.enabled:
+        fire_step = accum_path[0]
+    elif getattr(state, "fi_target_after_tax_enabled", False):
+        # MODEL_AUDIT B8. Part of a pre-tax balance belongs to the IRS. With
+        # this on, the FI test counts the tax-deferred accounts net of the
+        # plan's own ordinary withdrawal rate -- the same haircut the bequest
+        # figure applies -- instead of at face value.
+        _ord = float(getattr(tax_us or TAX_US, "withdrawal_tax_traditional", 0.0))
+        fire_step = None
+        for _step in accum_path:
+            _acc = _step["accounts"]
+            _deferred = _acc.balance("pretax_401k") + _acc.balance("gov_457b")
+            _liability = max(0.0, float(_step.get("fire_liability_nominal", 0.0)))
+            if (_step["total"] - _deferred * _ord
+                    >= _step["expenses"] / fire_swr + _liability):
+                fire_step = _step
+                break
+    else:
+        fire_step = find_fire_crossing(accum_path, fire_swr)
     fire_age = fire_step['age'] if fire_step is not None else None
     fire_year_idx = ((fire_age - state.start_age) if fire_age is not None
                      else max(0, len(accum_path) - 1))
@@ -3136,7 +3419,24 @@ def simulate_lifecycle_v98(
                 _income_accum_meta, censor_age)
         return result
 
-    cpi_cum_at_fire = fire_step['expenses'] / state.expenses_y0
+    # MODEL_AUDIT A6. The price level at FIRE used to be recovered as
+    # `expenses / expenses_y0`, and with lifestyle creep on `expenses` carries
+    # the creep factor as well -- so a 15% permanent step was read as 15% more
+    # inflation, and every CPI-indexed amount in retirement (Social Security,
+    # brackets, events, the "today's dollars" deflator) moved with it. The
+    # accumulation step has always carried the true index under 'cpi'. It is
+    # read whenever creep is on; with it off the historical expression stays,
+    # because it equals 'cpi' only to the last bit or two.
+    _creep_at_fire = fire_step.get('lifestyle_creep_multiplier')
+    if _creep_at_fire is not None:
+        cpi_cum_at_fire = float(fire_step['cpi'])
+        # The creep is a step in LIFESTYLE: it raises the non-medical budget
+        # the retirement spends, explicitly, instead of arriving disguised as
+        # inflation.
+        medical = replace(medical, non_medical_y0=(
+            medical.non_medical_y0 * float(_creep_at_fire)))
+    else:
+        cpi_cum_at_fire = fire_step['expenses'] / state.expenses_y0
 
     _ssa_income_path = None
     if ssa_pia_resolver is not None:
@@ -3149,7 +3449,7 @@ def simulate_lifecycle_v98(
             _ssa_income_path['pia_monthly_y0']))
 
     eldercare_events = sample_eldercare_events(
-        rng, eldercare, fire_age, fire_age + state.retire_horizon,
+        rng, eldercare, fire_age, plan_end_age,
     )
     inheritance_event = sample_inheritance(rng, inheritance)
 
@@ -3161,7 +3461,7 @@ def simulate_lifecycle_v98(
     # first modelled year is fire_age + 1, so an onset drawn at fire_age itself
     # would lose its first year of cost without saying so.
     ltc_events, ltc_meta = LTC.sample_ltc_events(
-        ltc, fire_age + 1, fire_age + state.retire_horizon,
+        ltc, fire_age + 1, plan_end_age,
         anchor_age=state.start_age,
         draw_at=(health_chain_path.ltc_draw
                  if health_chain_path is not None else None),
@@ -3191,23 +3491,47 @@ def simulate_lifecycle_v98(
     # switched mortality off is not a plan where other people stop dying, but
     # it IS one where this engine models nobody dying, and the parents module
     # must not quietly reintroduce it.
-    def _parent_death_rate(sex):
-        if not mortality.enabled:
-            return lambda age: 0.0
-        # No fallback: the adapter refuses a sex this engine has no table for,
-        # so reaching here with one would mean that check was removed. A quiet
-        # default would run somebody's mother on the plan holder's lifespan.
-        table = {"male": MORTALITY_MALE, "female": MORTALITY_FEMALE}[str(sex)]
-        return lambda age: annual_mortality_rate(age, table)
+    if _parents_whole_plan:
+        parent_care_events = [(a, amt) for a, amt in _pw_care if a > fire_age]
+        parent_bequests = [(a, amt) for a, amt in _pw_bequests if a > fire_age]
+        parents_meta = dict(_pw_meta)
+        parents_meta["working_years_care_real"] = float(sum(
+            amt for a, amt in _pw_care if a <= fire_age))
+        parents_meta["working_years_bequests_real"] = float(sum(
+            amt for a, amt in _pw_bequests if a <= fire_age))
+    else:
+        parent_care_events, parent_bequests, parents_meta = PARENTS.sample_parents(
+            parents, _parent_death_rate,
+            first_age=fire_age + 1, last_age=plan_end_age,
+            anchor_age=state.start_age, cap_age=int(mortality.cap_age))
 
-    parent_care_events, parent_bequests, parents_meta = PARENTS.sample_parents(
-        parents, _parent_death_rate,
-        first_age=fire_age + 1, last_age=fire_age + state.retire_horizon,
-        anchor_age=state.start_age, cap_age=int(mortality.cap_age))
+    # MODEL_AUDIT B6: the Roth contribution basis at FIRE -- the user's stated
+    # basis today plus every Roth contribution of the working years. Those are
+    # recovered from the path itself (balance this year less last year's grown
+    # at this year's return), so the step shape the archive reads is untouched.
+    _roth_basis_at_fire = None
+    if (getattr(roth_ladder, "earnings_lock_enabled", False)
+            and getattr(roth_ladder, "contribution_basis", None) is not None):
+        _roth_basis_at_fire = float(roth_ladder.contribution_basis)
+        for _k in range(1, fire_year_idx + 1):
+            _prev_roth = accum_path[_k - 1]["accounts"].roth_ira
+            _now_roth = accum_path[_k]["accounts"].roth_ira
+            _grown = _prev_roth * (1 + accum_growth[_k - 1]
+                                   - config.friction_accum)
+            _roth_basis_at_fire += max(0.0, _now_roth - _grown)
 
-    wd_equity = all_equity_returns[fire_year_idx:fire_year_idx + state.retire_horizon]
-    wd_bond = all_bond_returns[fire_year_idx:fire_year_idx + state.retire_horizon]
-    wd_inflations = all_inflations[fire_year_idx:fire_year_idx + state.retire_horizon]
+    # MODEL_AUDIT_2026-11-15 A9. Retirement runs to the plan's END AGE, the
+    # same one every other module already used (health chain, student debt,
+    # guaranteed income, the page's own purchase-age check): start age +
+    # working years + retirement years. It used to stop `retire_horizon` years
+    # after the FIRE age instead, so the earlier someone retired the younger
+    # they were when the simulation ended -- 13.5% of the default plan's
+    # retirees were still alive when it stopped at 86-90, and were counted as
+    # successes. The sampled market path was always long enough; only the
+    # slice was short.
+    wd_equity = all_equity_returns[fire_year_idx:]
+    wd_bond = all_bond_returns[fire_year_idx:]
+    wd_inflations = all_inflations[fire_year_idx:]
 
     # Whichever accumulation overlay ran recorded the first-payment price
     # level for every non-COLA stream it paid. Handing it forward keeps ONE
@@ -3240,8 +3564,11 @@ def simulate_lifecycle_v98(
         state=state, tax_us=tax_us, tax_cn=tax_cn,
         friction=config.friction_retire, rng=rng,
         china_healthcare=china_healthcare, ss_nra=ss_nra,
-        life_events=([(a, amt) for (a, amt) in life_events if a > fire_age]
+        life_events=([(a, amt) for (a, amt) in
+                      (_non_parent_life_events if _parents_whole_plan
+                       else life_events) if a > fire_age]
                      if life_events else None),
+        roth_contribution_basis_at_start=_roth_basis_at_fire,
         income_streams=income_streams or None,
         tax_true=tax_true,
         primary_alive_at_start=primary_alive_accum,

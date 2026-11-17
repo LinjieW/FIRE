@@ -102,6 +102,10 @@ _RULE_PACK_COMPONENT_IDS = frozenset({
     # Roadmap 10.0 Phase 2, U38=C: the section 423 annual grant-date FMV
     # ceiling and the 85%-of-FMV purchase floor read as a max discount.
     "espp_section_423",
+    # MODEL_AUDIT_2026-11-15 A10: the SSA period life table.
+    "ssa_period_life_table",
+    # MODEL_AUDIT B5.
+    "us_senior_standard_deduction",
 })
 _RULE_PACK_STATUSES = frozenset({"current", "stale", "review_required"})
 _RULE_PACK_COMPONENT_STATUSES = _RULE_PACK_STATUSES | {"not_used_at_run"}
@@ -145,6 +149,9 @@ _RULE_PACK_SOURCE_BY_COMPONENT = {
     "self_employment_tax": frozenset({"pack"}),
     "plan_shape_limits": frozenset({"pack"}),
     "espp_section_423": frozenset({"pack"}),
+    # A published table: read from the pack or not at all.
+    "ssa_period_life_table": frozenset({"pack"}),
+    "us_senior_standard_deduction": frozenset({"pack"}),
 }
 _RULE_PACK_EVALUATION_BASIS = "config_applicability_not_path_instrumentation"
 

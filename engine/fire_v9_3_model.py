@@ -121,6 +121,11 @@ class BondParams:
     sigma: float = 0.055
     correlation_with_equity: float = 0.15   # mild positive in normal regimes
     drag: float = 0.001        # implementation drag (expense ratio)
+    #: MODEL_AUDIT B11: bond returns that respond to inflation surprises.
+    #: `inflation_beta` is the user's own sensitivity (about the duration of
+    #: the bonds held) and is required when this is on.
+    inflation_linked_enabled: bool = False
+    inflation_beta: Optional[float] = None
 
 
 DEFAULT_BOND_PARAMS = BondParams()
@@ -399,10 +404,11 @@ def project_stratified_v93(
     alive_by_year: Optional[Sequence[tuple[bool, bool]]] = None,
     capture_ss_earnings: bool = False,
     student_debt=None,
+    growth_returns: Optional[Sequence[float]] = None,
 ) -> list[dict]:
     """
     Wraps project_stratified_v8 and adds OBBBA boost to taxable account
-    at each step.
+    at each step. `growth_returns`: see `project_stratified_v8` (A3).
     """
     state = state or STATE
     tax = tax or TAX_US
@@ -414,6 +420,7 @@ def project_stratified_v93(
         alive_by_year=alive_by_year,
         capture_ss_earnings=capture_ss_earnings,
         student_debt=student_debt,
+        growth_returns=growth_returns,
     )
 
     if obbba.mode == OBBBAMode.OFF:
@@ -421,7 +428,8 @@ def project_stratified_v93(
 
     # Compute OBBBA boost path (parallel to base_path)
     boost_path = compute_obbba_boost_path(
-        returns, inflations, state, obbba,
+        growth_returns if growth_returns is not None else returns,
+        inflations, state, obbba,
         drag_taxable=tax.drag_taxable,
         primary_alive_by_year=(
             [primary_alive for primary_alive, _ in alive_by_year]

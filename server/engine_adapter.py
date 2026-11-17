@@ -14,7 +14,8 @@ DESIGN
   * The full v9.8 parameter surface is exposed as a plain (JSON) config dict,
     grouped 1:1 with the engine's dataclasses. `default_config()` is built from
     the dataclass defaults, so it always equals the official baseline
-    (class defaults + INITIAL_STACK_ACTUAL + match_excludes_bonus).
+    (class defaults + INITIAL_STACK_ACTUAL; the match excludes the bonus by
+    the dataclass default, not by a wrapper -- MODEL_AUDIT A13).
   * `build_kwargs()` maps that config back into the dataclass params.
   * `run_scenarios()`, `lifecycle_sample()`, `summary()`, `backtest()` emit
     exactly the JSON shapes the existing frontend (web/app.js, web/charts.js)
@@ -60,7 +61,12 @@ from fire_v8_model import (PromotionParams, V8ContributionParams, HouseholdParam
                            DisabilityParams, sample_ssdi_entitlement)
 from fire_v9_1_model import (
     MedicalParams, ACAParams, ACAScenario,
-    MortalityParams, MORTALITY_MALE, MORTALITY_FEMALE,
+    MortalityParams,
+    # MODEL_AUDIT A10: the SSA period life table, under the names this module
+    # has always used. The Gompertz curves of the same names stay in v9.1 for
+    # the generations that pinned them.
+    MORTALITY_MALE_SSA as MORTALITY_MALE,
+    MORTALITY_FEMALE_SSA as MORTALITY_FEMALE,
     FixedRealRule,
 )
 from fire_rules_x import STRATEGY_LIBRARY
@@ -239,6 +245,61 @@ def normalize_legacy_keys(cfg: dict) -> dict:
     return cfg if out is None else out
 
 
+def _validate_glide(cfg: dict) -> None:
+    """MODEL_AUDIT A3: the glide now drives the working years as well, so a
+    nonsensical one is refused by name rather than run."""
+    glide = cfg.get("glide") or {}
+    for name in ("equity_start", "equity_end"):
+        value = glide.get(name, 1.0)
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value))
+                or not 0.0 <= float(value) <= 1.0):
+            raise ConfigIncomplete(
+                "glide.%s must be a share between 0%% and 100%%" % name,
+                field="glide.%s" % name, code="config_invalid")
+    ages = {}
+    for name in ("start_age", "end_age"):
+        value = glide.get(name, getattr(GlidePath(), name))
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or not 0 <= value <= 120:
+            raise ConfigIncomplete(
+                "glide.%s must be a whole age from 0 to 120" % name,
+                field="glide.%s" % name, code="config_invalid")
+        ages[name] = value
+    if ages["start_age"] >= ages["end_age"]:
+        raise ConfigIncomplete(
+            "glide.start_age must be earlier than glide.end_age",
+            field="glide.end_age", code="config_invalid")
+
+
+def _validate_model_audit_switches(cfg: dict) -> None:
+    """The parameters the MODEL_AUDIT B-class switches need, refused by name
+    when a switch is on and its number is missing or meaningless. Off, none
+    of them is read, so none of them is checked."""
+    def number(path, lo, hi, *, low_open=False):
+        group, name = path.split(".")
+        value = (cfg.get(group) or {}).get(name)
+        ok = (not isinstance(value, bool) and isinstance(value, numbers.Real)
+              and math.isfinite(float(value))
+              and (float(value) > lo if low_open else float(value) >= lo)
+              and float(value) <= hi)
+        if not ok:
+            raise ConfigIncomplete(
+                "%s must be a number %s %g and at most %g when its switch is "
+                "on" % (path, "above" if low_open else "of at least", lo, hi),
+                field=path, code="config_invalid")
+    returns = cfg.get("returns") or {}
+    if returns.get("inflation_persistence_enabled"):
+        # On with a zero coefficient would be a switch that does nothing.
+        number("returns.inflation_ar1", 0.0, 0.95, low_open=True)
+    if returns.get("tail_clip_enabled"):
+        number("returns.tail_clip_sigma", 1.0, 20.0)
+    if (cfg.get("bonds") or {}).get("inflation_linked_enabled"):
+        number("bonds.inflation_beta", 0.0, 30.0)
+    if (cfg.get("roth_ladder") or {}).get("earnings_lock_enabled"):
+        number("roth_ladder.contribution_basis", 0.0, 1e12)
+
+
 def check_config(cfg: dict) -> None:
     """Raise what a run of `cfg` would raise, before the run exists.
 
@@ -259,6 +320,8 @@ def check_config(cfg: dict) -> None:
     validate_already_fired(cfg)
     _validate_medical_premium_anchor(cfg)
     _validate_annual_medical_trajectory(cfg)
+    _validate_glide(cfg)
+    _validate_model_audit_switches(cfg)
     _validate_eol_peak(cfg)
     _validate_ss_trust_fund(cfg)
     _validate_dividend_drag(cfg)
@@ -1873,7 +1936,10 @@ def _validate_annual_medical_trajectory(cfg: dict) -> None:
                 code="config_invalid",
             )
 
-    for name in ("non_medical_y0", "routine_y0", "oop_y0"):
+    # `non_medical_y0` is no longer an input (MODEL_AUDIT A1): it is derived
+    # from the spending figure in `retirement_medical_d`, which owns its
+    # refusals.
+    for name in ("routine_y0", "oop_y0"):
         finite_number(name)
     finite_number("premium_medicare", positive=True)
     for name in ("cpi_delta_routine", "cpi_delta_premium", "cpi_delta_oop"):
@@ -1889,7 +1955,8 @@ def _validate_annual_medical_trajectory(cfg: dict) -> None:
                 code="config_invalid",
             )
     ages = {}
-    for name in ("aca_start_age", "medicare_age"):
+    # `aca_start_age` left this check in MODEL_AUDIT A8: nothing used it.
+    for name in ("medicare_age",):
         value = medical_d.get(name)
         if isinstance(value, bool) or not isinstance(value, int) or not (18 <= value <= 120):
             raise ConfigIncomplete(
@@ -1899,12 +1966,6 @@ def _validate_annual_medical_trajectory(cfg: dict) -> None:
                 code="config_invalid",
             )
         ages[name] = value
-    if ages["aca_start_age"] >= ages["medicare_age"]:
-        raise ConfigIncomplete(
-            "medical.aca_start_age must be earlier than medical.medicare_age",
-            field="medical.aca_start_age",
-            code="config_invalid",
-        )
     _validate_aca_age_rating_anchor(cfg, medical_d, ages["medicare_age"])
     _validate_medical_household_split(cfg, medical_d)
 
@@ -2040,6 +2101,36 @@ _BASELINE_STACK = dict(
 # ============================================================
 # CONFIG SCHEMA (JSON) <-> dataclass params
 # ============================================================
+#: What `medical.non_medical_y0` shipped as, from the first release until the
+#: leaf was retired. A plan saved with this value never STATED a non-medical
+#: figure -- it carried the default -- so it is read as silence, not as a
+#: contradiction of the spending it does state.
+LEGACY_NON_MEDICAL_DEFAULT = 34_440.0
+
+#: Two medical leaves retired by A1. `non_medical_y0` is now derived (below);
+#: `premium_working` was never read by the retirement engine at all -- it lives
+#: in a branch of `compute_medical_components` that v9.8 never calls -- so it
+#: was a control that changed nothing (MODEL_AUDIT A8).
+RETIRED_MEDICAL_LEAVES = ("non_medical_y0", "premium_working")
+
+#: MODEL_AUDIT A10. Overwritten by the adapter whenever a sex is stated, so
+#: inert on every plan the page can produce.
+RETIRED_MORTALITY_LEAVES = ("alpha", "beta", "sex_label")
+
+#: MODEL_AUDIT A8: two leaves nothing read. `state.swr_low` was defined and
+#: never consulted; `medical.aca_start_age` was only ever checked against the
+#: Medicare age, never used -- early retirees buy on the exchange at any age.
+RETIRED_DEAD_LEAVES = {"state": ("swr_low",), "medical": ("aca_start_age",)}
+
+#: MODEL_AUDIT A7. Inflation is ONE number: `returns.inflation_mu`, the mean
+#: every price path is drawn around. `state.inflation` -- the "Inflation"
+#: control on the basic page -- reached only a disability index and a
+#: relocation fallback, so typing 6% there changed nothing measurable while a
+#: second control in Advanced drove the paths. Its shipped value, read as
+#: silence on an old plan rather than as a contradiction:
+LEGACY_STATE_INFLATION_DEFAULT = 0.030
+
+
 def _gd(cls, drop=()) -> dict:
     """Group defaults: {field: json_default} for a dataclass, enums -> .value."""
     out = {}
@@ -2069,7 +2160,8 @@ def default_config() -> dict:
         # state/contributions: dataclass defaults carry the real calibration
         # baseline, so the identifying scalars are overridden here (audit P0-1).
         "state": _to_config_names(
-            {**_gd(State), "start_age": 30, "expenses_y0": 42_000}, "state"),
+            {**_gd(State, drop=RETIRED_DEAD_LEAVES["state"] + ("inflation",)),
+             "start_age": 30, "expenses_y0": 42_000}, "state"),
         "initial": dict(_BASELINE_STACK),
         "contributions": {**_gd(V8ContributionParams),
                           "base_salary_pre": 125_000, "ot_income_pre": 20_000,
@@ -2215,9 +2307,20 @@ def default_config() -> dict:
         # than shown against a guess.
         "estate": {"exemption_real": None},
         "glide": _gd(GlidePath),
-        "medical": _gd(MedicalParams),
+        # Two leaves retired by MODEL_AUDIT A1/A8: the non-medical share is
+        # derived from `state.expenses_y0`, and the working premium was never
+        # read by the retirement engine. See `retirement_medical_d`.
+        "medical": _gd(MedicalParams, drop=RETIRED_MEDICAL_LEAVES
+                       + RETIRED_DEAD_LEAVES["medical"]),
         "aca": _gd(ACAParams),
-        "mortality": {**_gd(MortalityParams), "sex": "male"},
+        # MODEL_AUDIT A10: the Gompertz pair and its label are retired from
+        # the config. With a sex stated -- which this default does -- the
+        # adapter overwrote all three, so they were leaves that moved nothing
+        # (MODEL_AUDIT A8 measured `alpha` and `beta` inert). `table` is
+        # selected by `sex` and is never an input.
+        "mortality": {**_gd(MortalityParams,
+                            drop=RETIRED_MORTALITY_LEAVES + ("table",)),
+                      "sex": "male"},
         "household": {**_gd(HouseholdParams),
                       "spouse_catchup_403b_15yr_schedule_nominal": []},
         "roth_ladder": _gd(RothLadderParams),
@@ -3053,6 +3156,108 @@ def plan_relocation_age(cfg: dict) -> Optional[int]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# MODEL_AUDIT_2026-11-15 A1 · retirement spending is ONE number.
+# ---------------------------------------------------------------------------
+
+
+def _spending_field(cfg: dict) -> str:
+    return ("already_fired.annual_spending_real"
+            if (cfg.get("already_fired") or {}).get("enabled")
+            else "state.expenses_y0")
+
+
+def retirement_medical_d(cfg: dict) -> dict:
+    """The `medical` block the engine receives, with non-medical DERIVED.
+
+    MODEL_AUDIT_2026-11-15 A1, user ruling 2026-11-15. The page asks for
+    "retirement spend (today $)" and used that figure for exactly one thing,
+    the FI target. What a retiree then SPENT each year was
+    `medical.non_medical_y0` plus the medical basket -- a field nothing tied
+    to the spending figure, shipped at 34,440 and changed by nobody. Measured
+    on the FatFIRE preset: entering $120,000 a year moved the FIRE age eight
+    years later and the retirement it paid for spent about $65,000. The
+    already-FIRE'd entry produced bit-identical results at $60,000 and
+    $150,000.
+
+    The ruling: the entered figure IS the whole first-year budget at today's
+    prices, medical included. So the non-medical share is what is left of it
+    after the medical basket the person buys at the plan's start age --
+    routine care, out-of-pocket, and the full premium for the stage of cover
+    they are in (the unsubsidised ACA quote before the Medicare age; the
+    subsidy is applied by the engine each year, as before).
+
+    The basket then grows at its own configured spreads above CPI, so in real
+    terms the budget drifts up after today. That is the medical-inflation
+    assumption doing its job, not a second spending input, and it is
+    disclosed.
+
+    Refusals, both named on the control the user can actually see:
+
+    * spending below the medical basket -- there is no non-medical life left
+      to fund, and a negative share would be a number nobody stated;
+    * a saved plan that still carries a non-medical figure which neither
+      equals the old shipped default nor agrees with its spending. Those two
+      numbers used to drive two different things; under one-number spending
+      they contradict, and choosing either silently would change what the
+      plan means without saying so. The message gives both readings.
+    """
+    medical_d = dict(cfg.get("medical") or {})
+    legacy = medical_d.pop("non_medical_y0", None)
+    medical_d.pop("premium_working", None)
+    defaults = MedicalParams()
+    field = _spending_field(cfg)
+
+    def number(name):
+        value = medical_d.get(name, getattr(defaults, name))
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value))):
+            raise ConfigIncomplete(
+                "medical.%s must be a finite number" % name,
+                field="medical.%s" % name, code="config_invalid")
+        return float(value)
+
+    spending = float(_expenses_y0(cfg))
+    start_age = int((cfg.get("state") or {}).get("start_age", State().start_age))
+    medicare_age = int(medical_d.get("medicare_age", defaults.medicare_age))
+    premium_name = ("premium_aca" if start_age < medicare_age
+                    else "premium_medicare")
+    basket = number("routine_y0") + number("oop_y0") + number(premium_name)
+    non_medical = spending - basket
+    if non_medical < 0.0:
+        raise ConfigIncomplete(
+            "%s is the whole retirement budget, medical included, and %s is "
+            "less than the medical basket it has to cover (%s: routine care, "
+            "out-of-pocket and the full %s premium at age %d). Raise the "
+            "spending figure or lower the medical inputs."
+            % (field, _money(spending), _money(basket),
+               "ACA" if premium_name == "premium_aca" else "Medicare",
+               start_age),
+            field=field, code="config_invalid")
+    if legacy is not None:
+        if (isinstance(legacy, bool) or not isinstance(legacy, numbers.Real)
+                or not math.isfinite(float(legacy))):
+            raise ConfigIncomplete(
+                "medical.non_medical_y0 is a retired field and its saved "
+                "value is not a number",
+                field=field, code="config_invalid")
+        legacy = float(legacy)
+        if (legacy != LEGACY_NON_MEDICAL_DEFAULT
+                and abs(legacy - non_medical) > 1.0):
+            raise ConfigIncomplete(
+                "This plan was saved when retirement spending came from a "
+                "separate non-medical figure (%s). Retirement spending is now "
+                "the single number in %s, medical included. To keep the "
+                "retirement this plan used to model, set it to %s; to keep "
+                "its FI target, leave it at %s. Either way, editing it "
+                "clears the old figure."
+                % (_money(legacy), field, _money(legacy + basket),
+                   _money(spending)),
+                field=field, code="config_invalid")
+    medical_d["non_medical_y0"] = non_medical
+    return medical_d
+
+
 def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     """Map the JSON config into the v9.8 param objects. Returns a kwargs dict for
     run_lifecycle_mc_v98 (the V7Config lands under 'config')."""
@@ -3062,6 +3267,25 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     g = lambda k: cfg.get(k, {}) or {}
     _already_fired_on = bool(g("already_fired").get("enabled", False))
     _effective_state_d = dict(g("state"))
+    # MODEL_AUDIT A7: the plan's inflation is the returns model's mean, and the
+    # engine's `State.inflation` -- read by the disability index and the
+    # relocation fallback -- is set from it rather than from a second input.
+    _inflation_mu = (g("returns").get("inflation_mu")
+                     if g("returns").get("inflation_mu") is not None
+                     else V7Config().inflation_mu)
+    _legacy_inflation = _effective_state_d.pop("inflation", None)
+    if (_legacy_inflation is not None
+            and float(_legacy_inflation) != LEGACY_STATE_INFLATION_DEFAULT
+            and abs(float(_legacy_inflation) - float(_inflation_mu)) > 1e-12):
+        raise ConfigIncomplete(
+            "This plan was saved with two inflation figures: %.2f%% in the "
+            "basic-page field, which only priced disability benefits, and "
+            "%.2f%% in the returns model, which drove every price path. They "
+            "are one number now -- returns.inflation_mu, shown on the basic "
+            "page. Set it to the one you mean; editing it clears the other."
+            % (float(_legacy_inflation) * 100, float(_inflation_mu) * 100),
+            field="returns.inflation_mu", code="config_invalid")
+    _effective_state_d["inflation"] = float(_inflation_mu)
     if _already_fired_on:
         _effective_state_d["accum_years"] = 0
         _effective_state_d["expenses_y0"] = float(
@@ -3069,7 +3293,7 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
 
     _validate_succession(cfg)
     _validate_ss_residency(cfg, relocation_on)
-    medical_d = g("medical")
+    medical_d = retirement_medical_d(cfg)
 
     rl = dict(g("relocation"))
     if not relocation_on or not rl.get("enabled"):
@@ -3125,11 +3349,18 @@ def build_kwargs(cfg: dict, relocation_on: bool) -> dict:
     # works today, which is why the refusal below names the field instead.
     mort_d = dict(g("mortality"))
     _sex = mort_d.pop("sex", None)
+    # MODEL_AUDIT A10: a stated sex now selects the SSA period life table.
+    # The retired Gompertz leaves are dropped if an old plan still carries
+    # them: with a sex stated they were overwritten here and never reached the
+    # engine, so dropping them changes nothing that ever ran.
+    for _retired in RETIRED_MORTALITY_LEAVES:
+        if _sex in ("male", "female"):
+            mort_d.pop(_retired, None)
     if _sex == "female":
-        mort_d["alpha"], mort_d["beta"] = MORTALITY_FEMALE.alpha, MORTALITY_FEMALE.beta
+        mort_d["table"] = MORTALITY_FEMALE.table
         mort_d["sex_label"] = MORTALITY_FEMALE.sex_label
     elif _sex == "male":
-        mort_d["alpha"], mort_d["beta"] = MORTALITY_MALE.alpha, MORTALITY_MALE.beta
+        mort_d["table"] = MORTALITY_MALE.table
         mort_d["sex_label"] = MORTALITY_MALE.sex_label
     # The label travels with the table it names. Before this, `default_config()`
     # stated `sex: "male"` and `sex_label: "unisex"` separately, so the object
@@ -3663,8 +3894,8 @@ def _shifted_regimes(shift: float) -> list:
 
 
 # Serializes all engine runs: the engine chain communicates opt-in settings
-# through module-level globals (fire_v8_model._HOUSEHOLD, match_excludes_bonus),
-# which are process-wide. See audit P1-1.
+# through module-level globals (fire_v8_model._HOUSEHOLD and the other
+# `_*_ctx` hooks), which are process-wide. See audit P1-1.
 _ENGINE_LOCK = threading.Lock()
 
 
@@ -3902,7 +4133,7 @@ def _spouse_career_break_ctx(cfg: dict):
 def _household_ctx(cfg: dict):
     """Set the module-level household hook (read by compute_contributions_for_year
     and simulate_retirement_v98) for the duration of a run, then restore it.
-    Mirrors the match_excludes_bonus() pattern. Off => single-person, unchanged."""
+    Off => single-person, unchanged."""
     hh = _mk(HouseholdParams, (cfg.get("household") or {}))
     prev = fire_v8_model._HOUSEHOLD
     fire_v8_model._HOUSEHOLD = hh if hh.enabled else None
@@ -4026,7 +4257,7 @@ def estimate_first_year_savings(cfg: dict) -> dict:
     # assertion that keeps that true is in
     # `tests/test_savings_estimate.py`, so the day the branches diverge this
     # stops being safe out loud rather than silently.
-    with (_ENGINE_LOCK, match_excludes_bonus(), _household_ctx(cfg),
+    with (_ENGINE_LOCK, _household_ctx(cfg),
           _housing_accumulation_ctx(cfg), _career_break_ctx(cfg),
           _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg)):
         stack = fire_v8_model.compute_contributions_for_year(
@@ -4121,7 +4352,7 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
     n = int(n)
     out = []
     step = max(1, n // 40)
-    # _ENGINE_LOCK: match_excludes_bonus/_household_ctx set process-wide globals
+    # _ENGINE_LOCK: _household_ctx and the other hooks set process-wide globals
     # in the engine chain; the HTTP server is threaded (background job + on-demand
     # sweep/sensitivity/backtest requests), so engine runs must be serialized or
     # concurrent runs with different settings silently corrupt each other (audit P1-1).
@@ -4129,7 +4360,7 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
         # Keep this branch structurally identical to the official runner.  B4
         # opting in must not silently migrate headline/replay RNG semantics.
         rng = np.random.default_rng(int(seed))
-        with (_ENGINE_LOCK, match_excludes_bonus(), _household_ctx(cfg),
+        with (_ENGINE_LOCK, _household_ctx(cfg),
               _housing_accumulation_ctx(cfg), _career_break_ctx(cfg),
               _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg),
               _layoff_ctx(cfg, seed), _spouse_layoff_ctx(cfg, seed),
@@ -4154,7 +4385,7 @@ def _run(cfg: dict, n: int, seed: int, relocation_on: bool,
                     cb(i / n)
         return out
 
-    with (_ENGINE_LOCK, match_excludes_bonus(), _household_ctx(cfg),
+    with (_ENGINE_LOCK, _household_ctx(cfg),
           _housing_accumulation_ctx(cfg), _career_break_ctx(cfg),
           _spouse_career_break_ctx(cfg), _tax_posture_ctx(cfg),
           _event_meta_ctx()):
@@ -4299,7 +4530,11 @@ def _annotate_result(r: dict, cfg: dict, life_events) -> dict:
     wd = r.get("withdrawal") or {}
     shortfalls.extend(dict(s) for s in (wd.get("life_event_shortfalls") or []))
 
-    shortfalls = sorted({(s["age"], s["phase"]): s for s in shortfalls}.values(),
+    # Keyed on the source as well (MODEL_AUDIT A5): a care bill and a life
+    # event unpaid in the same year are two shortfalls, not one. Entries that
+    # carry no source dedupe exactly as before.
+    shortfalls = sorted({(s["age"], s["phase"], s.get("source")): s
+                         for s in shortfalls}.values(),
                         key=lambda s: (s["age"], s["phase"]))
     r["event_shortfalls"] = shortfalls
     r["event_shortfall_count"] = len(shortfalls)
@@ -4324,7 +4559,10 @@ def _annotate_result(r: dict, cfg: dict, life_events) -> dict:
             last = path[-1]
         accounts = last.get("accounts")
         exp0 = _expenses_y0(cfg)
-        cpi = float(last.get("expenses") or exp0) / exp0
+        # MODEL_AUDIT A6: with lifestyle creep on, `expenses` carries the creep
+        # factor as well as inflation; the step's own index is the price level.
+        cpi = (float(last["cpi"]) if "lifestyle_creep_multiplier" in last
+               else float(last.get("expenses") or exp0) / exp0)
     _wd = r.get("withdrawal") or {}
     _bequest, _liquidated = _terminal_values(
         accounts, _mk_tax_us(cfg.get("tax_us") or {}),
@@ -5775,8 +6013,11 @@ def backtest(cfg: dict, retire_age, seed: int) -> dict:
     exp0 = _expenses_y0(cfg)
     swr = float((cfg.get("state") or {}).get("swr_pref", 0.0333)) or 0.0333
     debt = kw.get("student_debt")
-    horizon = int(state.retire_horizon)
     ra = int(retire_age) if retire_age else int(state.start_age + 15)
+    # MODEL_AUDIT A9: the stress sequences run to the plan's end age, like the
+    # forward simulation, not `retire_horizon` years after this synthetic FIRE.
+    horizon = max(1, int(state.start_age) + int(state.accum_years)
+                  + int(state.retire_horizon) - ra)
     # The stress runner starts at a synthetic FIRE boundary and therefore has
     # no accumulation path from which to read the permanent lifestyle step.
     # Resolve the same independent substream directly and apply it when its

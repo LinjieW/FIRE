@@ -71,6 +71,9 @@ class State:
     # decays ~1%/yr through retirement, floored at spending_decline_floor. ---
     spending_decline: float = 0.0
     spending_decline_floor: float = 0.55
+    #: MODEL_AUDIT B8: judge FI on balances net of the tax a pre-tax account
+    #: owes on the way out. Off = face value, the historical test.
+    fi_target_after_tax_enabled: bool = False
 
 
 # ============================================================
@@ -426,6 +429,11 @@ class TaxParams:
     # becomes a size-aware effective ordinary rate (brackets + std deduction). ---
     progressive: bool = False
     state_rate: float = 0.0            # flat state add-on to the federal effective rate
+    #: MODEL_AUDIT B7. An HSA pays tax-free only for qualified medical costs.
+    #: When on, each year's HSA draw beyond that year's medical basket is
+    #: ordinary income, plus the 20% additional tax before 65. Off = every HSA
+    #: dollar tax-free, the historical treatment.
+    hsa_qualified_only_enabled: bool = False
     std_deduction: float = US_FEDERAL_RULES["std_deduction_single"]
 
 

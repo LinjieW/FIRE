@@ -12,9 +12,9 @@ history, workstream logs, prompts, or internal audit archive.
 
 The current public candidate is:
 
-`v14.0-public-candidate-2`
+`v14.0-public-candidate-3`
 
-Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-2):
+Download the universal2 bundle from the [GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-3):
 
 `FIRE-Modeling-14.0-macOS-universal2.zip` (47 MB compressed, ~166 MB unpacked)
 
@@ -32,7 +32,7 @@ shasum -a 256 FIRE-Modeling-14.0-macOS-universal2.zip
 It should print:
 
 ```
-2d2ac3783d882c9a8df8ee5f4247265834025da00737a69c2f4e460ad3e8fdce
+5e5882db9c051524fd7e79ae12eed0a1d695090fd396947fdd51f156f2e10587
 ```
 
 `SHA256SUMS.txt` on the same release covers the app zip and the source archive.
@@ -70,8 +70,8 @@ for confirmation. Then double-clicking works normally.
 - **Transparent assumptions.** The UI includes limitations and provenance for
   tax, healthcare, Social Security, housing, and return assumptions.
 - **Honest tails, switched off by default.** Several modules exist to puncture
-  optimistic defaults, and every one of them ships OFF so an existing plan
-  reproduces exactly: lumpy spending that does not arrive on a smooth line, a
+  optimistic defaults, and every one of them ships OFF, so none of them moves a
+  plan until you turn it on: lumpy spending that does not arrive on a smooth line, a
   Social Security trust-fund depletion path drawn from the Trustees Report's
   own alternatives, a stochastic house price with sale discount and downsizing,
   a career with permanent and transitory wage shocks, and a dial for how much
@@ -169,6 +169,27 @@ for confirmation. Then double-clicking works normally.
   focus when the page re-renders around it. Dialogs open in 200 milliseconds
   and stay sharp throughout, and on a narrow window tables fold into labelled
   groups instead of scrolling sideways.
+- **A model audit, and the fixes it called for.** The retirement spending you
+  type is now the whole retirement budget, medical included; every simulated
+  life runs to the same end age (start age + working years + retirement
+  years), and mortality comes from the SSA 2023 period life table, carried in
+  the rule pack with its vintage. The year-by-year tax solver iterates until it
+  converges instead of scoring an unfinished year as running out of money.
+  One-off bills -- your own long-term care, a parent's care, life events --
+  are paid from every account in the declared order, and a bill the accounts
+  cannot pay fails the plan instead of being dropped. Contribution limits and
+  working-year costs follow each path's own inflation, the working years grow
+  at the stock/bond mix you state, and the first retirement withdrawal is made
+  at that year's prices. Social Security spousal benefits (household mode) and
+  the 65+ and 2025-2028 senior standard deductions (true-tax engine) are now
+  applied.
+- **New switches, every one off by default.** Persistent inflation in the
+  default return sampler, pay that follows realised inflation, a Roth earnings
+  lock before 59 1/2, HSA withdrawals tax-free only for medical costs, an
+  after-tax financial-independence test, parents' care and estate during your
+  working years, a cap on extreme return years, bonds that lose when inflation
+  surprises, and one-off bills priced inside the year's true tax. A switch that
+  needs a number of yours asks for it in the wizard before the run.
 
 ## What this release is (and is not)
 
@@ -177,12 +198,22 @@ advice, investment advice, or a GA/enterprise release. It is the frozen
 universal2 candidate built from the private `main`, eleven development versions
 on from the v3.0 snapshot and four on from v10.0.
 
-Every module added since then that changes what a plan predicts ships **off by
-default**, so a plan saved under an earlier build reproduces its numbers after
-upgrading. What those modules add is the ability to ask harder questions --
-lumpy spending, a Social Security trust-fund cut, a house price that is not a
-smooth line, a career that does not grow at a constant rate -- not a quiet
-change to the answers you already have.
+**Unlike the earlier candidates, this one changes the numbers of existing
+plans, on purpose.** A model audit found places where the model did not do what
+its inputs said -- the retirement spending you typed did not reach the
+retirement, simulations stopped a fixed number of years after FIRE, bills the
+accounts could not pay were dropped -- and the fixes move results. A plan saved
+under candidate 2 will give different numbers here. A saved plan that carries a
+figure the new model no longer accepts (a separate non-medical spending figure
+that contradicts the retirement budget, or a second inflation figure) is
+refused with a message naming the field to correct, rather than run on a
+guess.
+
+Every module beyond those fixes still ships **off by default**. What those
+modules add is the ability to ask harder questions -- lumpy spending, a Social
+Security trust-fund cut, a house price that is not a smooth line, a career that
+does not grow at a constant rate -- not a quiet change to the answers you
+already have.
 
 The model remains an approximation. Tax, ACA/IRMAA, Social Security, mortality,
 housing, China/US relocation, and return assumptions have explicit limits in
@@ -205,7 +236,7 @@ The public source contains the runtime and build inputs used by the candidate:
 The public file set is computed from the built candidate's runtime manifest --
 the exact files the application loads, ninety-nine of them in this candidate --
 rather than from a hand-maintained list, plus a small set of regression,
-JavaScript, frozen-bundle and UI smoke checks and the helper they share. Internal development history and operational documents (workstream
+JavaScript, frozen-bundle and UI smoke checks and the two helpers they share. Internal development history and operational documents (workstream
 logs, handoffs, roadmaps, audits, prompts) remain outside this public
 repository.
 
@@ -243,8 +274,8 @@ FIRE Modeling 是一个离线运行的 macOS 桌面应用，用蒙特卡洛分�
 
 ### 下载
 
-当前公开候选版本是 `v14.0-public-candidate-2`。请从
-[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-2)
+当前公开候选版本是 `v14.0-public-candidate-3`。请从
+[GitHub Release](https://github.com/LinjieW/FIRE/releases/tag/v14.0-public-candidate-3)
 下载通用 universal2 App：
 
 `FIRE-Modeling-14.0-macOS-universal2.zip`（压缩后 47 MB，解压后约 166 MB）
@@ -263,7 +294,7 @@ shasum -a 256 FIRE-Modeling-14.0-macOS-universal2.zip
 应当输出：
 
 ```
-2d2ac3783d882c9a8df8ee5f4247265834025da00737a69c2f4e460ad3e8fdce
+5e5882db9c051524fd7e79ae12eed0a1d695090fd396947fdd51f156f2e10587
 ```
 
 同一个 Release 里的 `SHA256SUMS.txt` 同时覆盖 App 压缩包与源码归档。
@@ -288,7 +319,7 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 - **本地数据导入。** 可选的券商 CSV 和 SSA XML 导入路径不会把源数据上传到云端。
 - **假设透明。** 界面提供税务、医疗、社保、住房和收益率假设的限制与来源说明。
 - **诚实的尾部，且默认全部关闭。** 有几个模块专门用来戳破乐观的默认值，
-  而它们**一律默认关闭**，所以已有的计划升级后逐位复现：块状支出（真实支出不是一条平线）、
+  而它们**一律默认关闭**，不打开就不会改变你的计划：块状支出（真实支出不是一条平线）、
   社保信托基金枯竭（用 Trustees Report 自己的三套方案）、随机房价与卖房折价/换小房、
   带持久与暂时冲击的职业路径，以及「护栏触发后你实际砍得下去多少」这个拨盘。
 - **把「什么和什么一起动」写成账。** 19 个随机模块逐条列出立场：3 条建模了相关性、
@@ -349,6 +380,18 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 - **能用键盘操作的控件，和不会散架的页面。** 下拉菜单用方向键连续浏览、不会中途提交，
   回车或空格确认，Esc 恢复原值；页面在周围重建时，输入框保持焦点。弹窗 200 毫秒打开、
   全程清晰不模糊；窄窗口下表格折成带标签的分组，而不是横向滚动。
+- **一次模型审计，以及它要求的修复。** 你填的「退休年支出」现在就是退休期的总预算，已包含医疗；
+  每条模拟的人生都跑到同一个终点年龄（起始年龄 + 工作年数 + 退休期年数），死亡率改用
+  SSA 2023 期间生命表，连同版本一起放在规则包里。逐年真实税表的求解器会迭代到收敛，
+  不再把没算完的一年判为钱用完了。一次性的账单 —— 你自己的长期护理、父母的护理、人生事件 ——
+  按声明的顺序从所有账户支付，账户付不起的账单会让计划判为失败，而不是被悄悄丢掉。
+  缴款上限与工作期开销跟随每条路径自己的通胀，工作期的组合按你填的股债比例增长，
+  退休第一笔提取按当年的价格水平。社保的配偶福利（家庭模式）与 65 岁以上、2025–2028 年的
+  老年标准扣除（真实税表）现在都会计入。
+- **新的开关，一律默认关闭。** 默认收益抽样下的通胀惯性、工资随实际通胀浮动、59.5 岁前锁定
+  Roth 收益、HSA 只在付医疗费时免税、按税后价值判断财务独立、工作期间也计入父母的护理与遗产、
+  截断极端收益年份、债券受通胀冲击、一次性支出并入当年的真实税表。需要你自己的数字的开关，
+  会在向导里、运行之前就要求你填上。
 
 ### 这次发布是什么（以及不是什么）
 
@@ -356,8 +399,12 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 它是从私有 `main` 构建的冻结 universal2 候选，相对 v3.0 快照已经过了十一个开发版本，
 相对 v10.0 过了四个。
 
-自那以后新增的、会改变计划预测的模块**一律默认关闭** —— 所以在旧版本下保存的计划，
-升级后数字逐位复现。这些模块带来的是**问更难的问题的能力**：块状支出、社保削减、
+**和之前的候选不同，这一版有意改变了已有计划的数字。** 一次模型审计发现了模型没有照输入去做的地方
+—— 你填的退休支出没有传到退休期、模拟在 FIRE 之后固定年数就停、账户付不起的账单被丢掉 ——
+修复会移动结果。在 candidate 2 下保存的计划，在这里会得到不同的数字。旧存档里如果带着新模型不再接受的数
+（与退休预算矛盾的单独「非医疗支出」，或第二个通胀数），会被拒绝，并点名要改的字段，而不是猜着运行。
+
+这些修复以外的模块仍然**一律默认关闭**。它们带来的是**问更难的问题的能力**：块状支出、社保削减、
 不是一条平滑曲线的房价、不按固定速率增长的职业收入、一年的间隔期、一次失业、一次伤残、
 一份 ESPP —— 而不是悄悄改变你已有的答案。
 
@@ -378,7 +425,7 @@ App 使用 ad-hoc 签名，适合小规模本地分享，并未使用 Developer 
 
 公开文件集由构建出来的候选包自己的 runtime manifest 算出 —— 也就是 App 真正加载的那些文件，
 本次候选是 99 个 —— 而不是靠一份手工维护的清单；再加上少量回归、JavaScript、冻结包与 UI 烟测，
-以及它们共用的那个辅助模块。私有开发历史与运维文档（工作日志、交接、路线图、审计、提示词）
+以及它们共用的两个辅助模块。私有开发历史与运维文档（工作日志、交接、路线图、审计、提示词）
 不在此仓库中。
 
 ### 从源码构建（维护者向）

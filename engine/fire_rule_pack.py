@@ -170,6 +170,19 @@ SSA_RULES = {
 #: under a rule component's freshness.
 SSA_TRUST_FUND = dict(_component("ssa_trust_fund")["values"])
 
+#: The SSA period life table (MODEL_AUDIT_2026-11-15 A10). The engine used a
+#: two-parameter Gompertz curve said to fit the SSA 2020 table; it did not --
+#: e(65) came out 15.1 years for men and 18.2 for women against a table that
+#: says 16.94 and 19.66 -- and a model in which dying with money left counts as
+#: success is flattered by every year of life it leaves out. A table is a
+#: table: it carries a vintage and goes stale on the same schedule as every
+#: other annual figure here, which a curve with two constants never did.
+SSA_PERIOD_LIFE_TABLE = dict(_component("ssa_period_life_table")["values"])
+
+#: MODEL_AUDIT B5: the section 63(f) additional standard deduction at 65+.
+US_SENIOR_STANDARD_DEDUCTION = dict(
+    _component("us_senior_standard_deduction")["values"])
+
 
 def _as_date(value: str | _dt.date) -> _dt.date:
     if isinstance(value, _dt.datetime):
@@ -255,6 +268,9 @@ def _component_applicability(config: Mapping[str, Any]) -> dict[str, bool]:
         "ssa_benefit_rules": bool(ss.get("enabled", True)),
         "ssa_statement_import": False,
         "espp_section_423": bool(contributions.get("espp_enabled")),
+        "ssa_period_life_table": bool(
+            _group(config, "mortality").get("enabled", True)),
+        "us_senior_standard_deduction": bool(true_tax.get("enabled")),
     }
 
 

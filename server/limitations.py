@@ -833,17 +833,119 @@ RULES = [
          "modelled, but the survivor floor check is a separate question — a "
          "success rate does not tell you whether the survivor stays covered "
          "when either spouse dies first."),
+    Rule("inflation_persistence", ("returns.inflation_persistence_enabled",),
+         # The switch acts on the default sampler only; Markov reads phi
+         # whatever the switch says and has its own disclosure.
+         lambda cfg: bool(_leaf(cfg, "returns.inflation_persistence_enabled"))
+         and (_leaf(cfg, "returns.model") or "iid") == "iid",
+         "通胀惯性已开启：每条路径的通胀偏离按 AR(1) 在年份之间延续（φ 是你填的数）。"
+         "默认 iid 模式下它只**重新排列**同一组随机偏离，不改变每年的离散程度，"
+         "也不改变通胀与股票收益当年的相关性；长期累计通胀的分布会因此变宽。"
+         "它不建模利率，也不建模央行的反应。",
+         "Inflation persistence is on: each path's inflation deviation carries "
+         "from year to year as an AR(1) with the phi you set. In the default iid "
+         "mode it RE-ORDERS the same random deviations, so each year's spread and "
+         "that year's correlation with equity returns are unchanged; the spread "
+         "of long-run cumulative inflation widens. Interest rates and any "
+         "central-bank reaction are not modelled."),
+    Rule("tail_clip", ("returns.tail_clip_enabled",),
+         _on("returns.tail_clip_enabled"),
+         "极端收益截断已开启：Student-t 的标准化股票冲击被截在 ± 你设定的标准差倍数以内。"
+         "截断会**略微降低**最坏年份的严重程度，因此对序列风险的估计偏乐观一点；"
+         "截断位置是你的判断，不是校准出来的数字。",
+         "Return-tail clipping is on: the standardised Student-t equity shock is "
+         "clipped at plus or minus the multiple you set. It SLIGHTLY softens the "
+         "worst years, so sequence risk reads a little more optimistic; where to "
+         "clip is your judgement, not a calibrated figure."),
+    Rule("bonds_inflation_linked", ("bonds.inflation_linked_enabled",),
+         _on("bonds.inflation_linked_enabled"),
+         "债券通胀联动已开启：通胀每超出均值一个百分点，债券当年收益按你填的敏感度"
+         "（约等于久期）减少。这是**一阶近似**：不建模利率曲线、再投资收益随利率上升，"
+         "也不区分 TIPS 与名义债。",
+         "Bond-inflation linkage is on: each point of inflation above its mean "
+         "takes your stated sensitivity (about the duration) off that year's bond "
+         "return. It is a FIRST-ORDER approximation: no yield curve, no higher "
+         "reinvestment yields after rates rise, and no distinction between TIPS "
+         "and nominal bonds."),
+    Rule("roth_earnings_lock", ("roth_ladder.earnings_lock_enabled",),
+         _on("roth_ladder.earnings_lock_enabled"),
+         "Roth 收益锁定已开启：59.5 岁以前，只有供款本金与转换额能从 Roth 取出，"
+         "收益部分不能。工作期新增供款由模型从余额变化里推回，转换额在转换当年计入本金"
+         "（其 5 年锁定期仍由转换梯单独管）。**不建模**合格分配的 5 年开户规则，"
+         "也不建模提前取收益时的税与罚金 —— 收益在 59.5 岁前直接视为取不出。",
+         "The Roth earnings lock is on: before 59 1/2 only contributions and "
+         "conversions can come out of the Roth, not growth. Working-year "
+         "contributions are recovered from the balance path; a conversion joins "
+         "the basis in the year it is made (its five-year lock is still kept by "
+         "the ladder). The five-year account-opening rule for qualified "
+         "distributions is NOT modelled, nor the tax and penalty on taking growth "
+         "early -- growth is simply treated as unreachable before 59 1/2."),
+    Rule("wage_inflation_passthrough",
+         ("contributions.wage_inflation_passthrough_enabled",),
+         _on("contributions.wage_inflation_passthrough_enabled"),
+         "工资随通胀已开启：每条路径的工资乘以「该路径实际累计 CPI / 按均值通胀的累计 CPI」，"
+         "所以工资增长率被理解为高于平均通胀的部分。它是**完全、即时**的传导；"
+         "现实中工资对通胀有滞后，也可能跟不上。",
+         "Pay follows inflation: each path's pay is scaled by that path's realised "
+         "cumulative CPI over the cumulative CPI at mean inflation, so the stated "
+         "growth reads as growth above mean inflation. The pass-through is FULL "
+         "and IMMEDIATE; in reality pay lags inflation and may not keep up."),
+    Rule("parents_working_years", ("parents.include_working_years_enabled",),
+         _on("parents.include_working_years_enabled"),
+         "父母工作期覆盖已开启：父母的护理与遗产在整个计划期内只抽一次，你退休前发生的"
+         "护理费从应税账户支付（与人生事件相同，不动退休账户），付不起记为缺口并判负；"
+         "退休前收到的遗产进入应税账户。两者都在判断财务独立之前生效。仅在父母模块开启时有效。",
+         "Parents across the working years: care and estates are drawn once over "
+         "the whole plan; care before you retire is paid from the taxable account "
+         "(as a life event is, without touching retirement accounts) and an unpaid "
+         "bill is a recorded shortfall that fails the path; an estate received "
+         "before retirement lands in the taxable account. Both act before "
+         "financial independence is judged. Applies only when the parent module "
+         "is on."),
+    Rule("hsa_qualified_only", ("tax_us.hsa_qualified_only_enabled",),
+         _on("tax_us.hsa_qualified_only_enabled"),
+         "HSA 合规限制已开启：每年 HSA 免税取出的额度是当年的医疗篮子（常规医疗 + 全价保费 + 自付，"
+         "取全价是偏宽的近似）；超出部分按普通收入计税，65 岁前另加 20% 附加税。"
+         "一次性支出（护理、人生事件）从 HSA 支付时仍按免税处理。搬迁后不适用。",
+         "HSA qualified-use limit is on: each year the HSA pays tax-free up to "
+         "that year's medical basket (routine + full premium + out-of-pocket; the "
+         "full premium is a generous approximation); beyond it a draw is ordinary "
+         "income plus the 20% additional tax before 65. One-off outflows (care, "
+         "life events) paid from the HSA are still treated as tax-free. Not "
+         "applied after relocation."),
+    Rule("mandatory_outflows_taxed", ("tax_true.mandatory_outflows_taxed_enabled",),
+         _on("tax_true.mandatory_outflows_taxed_enabled"),
+         "一次性支出进入真实税表：开启真实逐年税表时，护理费、人生事件、学贷与购房从税前账户支付的部分"
+         "计入当年普通收入，从应税账户支付的部分按实测利得占比计入资本利得，与当年其他收入一起算税档、"
+         "MAGI、ACA 补贴与 IRMAA；税款随当年的提取一并支付。搬迁后、或真实逐年税表关闭时不适用。",
+         "One-off outflows in the true tax: with true year-by-year taxes on, the "
+         "part of a care bill, life event, student-loan payment or home purchase "
+         "paid from a pre-tax account is that year's ordinary income, and the "
+         "part paid from the taxable account realises its measured gain; both "
+         "join the year's brackets, MAGI, ACA subsidy and IRMAA, and the tax is "
+         "paid with the year's own withdrawal. Not applied after relocation or "
+         "with the true-tax engine off."),
+    Rule("fi_after_tax", ("state.fi_target_after_tax_enabled",),
+         _on("state.fi_target_after_tax_enabled"),
+         "税后 FI 判定已开启：判断是否达到财务独立时，税前账户按（1 − 你的税前提取税率）计。"
+         "这是平率近似，不是逐档税负；Roth、HSA 与应税账户仍按账面计。",
+         "After-tax FI test is on: pre-tax accounts count at (1 - your pre-tax "
+         "withdrawal rate) when judging financial independence. It is a flat-rate "
+         "approximation, not a bracket calculation; Roth, HSA and taxable "
+         "accounts still count at face value."),
     Rule("mortality", ("mortality.enabled",), _on("mortality.enabled"),
-         "死亡抽样已开启：用的**不是逐岁查表**，而是一条两参数 Gompertz 风险曲线"
-         "（α·exp(β·年龄)），其参数是对 SSA 2020 期间生命表的**近似拟合**，只分男/女/不分。"
-         "**不按你的健康状况、收入或出生队列调整**，也不含逐年的死亡率改善。"
+         "死亡抽样已开启：每一岁的死亡概率**逐岁查 SSA 2023 期间生命表**（2026 受托人报告口径），"
+         "分男/女；配偶与父母按各自的性别查同一张表。它是**期间表** —— 把 2023 年的死亡率"
+         "原样用于以后每一年，**不含逐年的死亡率改善**，所以对今天年轻的人寿命偏短；"
+         "**也不按你的健康状况或收入调整**。"
          "「没花完就去世」在结果里算成功，这与「钱够花」是两个不同的问题。",
-         "Mortality sampling is on: it is NOT a year-by-year table lookup but a "
-         "two-parameter Gompertz hazard (alpha times exp(beta x age)) whose "
-         "parameters are an approximate fit to the SSA 2020 period life table, "
-         "with only male/female/unisex variants. It is NOT adjusted for your "
-         "health, income or birth cohort, and carries no year-over-year "
-         "mortality improvement. Dying with money left counts as success here, "
+         "Mortality sampling is on: each age's probability of death is READ "
+         "from the SSA 2023 period life table (as used in the 2026 Trustees "
+         "Report), by sex; a spouse and each parent read the same table by "
+         "their own sex. It is a PERIOD table -- 2023's death rates applied to "
+         "every later year -- with no projected mortality improvement, so for "
+         "someone young today it understates lifespan; it is also NOT adjusted "
+         "for your health or income. Dying with money left counts as success here, "
          "which is a different question from whether the money would have "
          "lasted."),
     Rule("layoff", ("layoff.enabled",), _on("layoff.enabled"),
